@@ -8,7 +8,7 @@ from time import monotonic
 
 
 class Zone(str, Enum):
-    VERY_NEAR = "very_near"
+    VERY_NEAR = "close"
     NEAR = "near"
     MID = "mid"
     FAR = "far"
@@ -17,7 +17,7 @@ class Zone(str, Enum):
 ZONE_ORDER = [Zone.VERY_NEAR, Zone.NEAR, Zone.MID, Zone.FAR]
 
 ZONE_LABELS = {
-    Zone.VERY_NEAR: "very near",
+    Zone.VERY_NEAR: "close",
     Zone.NEAR: "near",
     Zone.MID: "mid",
     Zone.FAR: "far",
@@ -65,6 +65,8 @@ def parse_zone(value: str) -> Zone:
         "very": Zone.VERY_NEAR,
         "verynear": Zone.VERY_NEAR,
         "very_near": Zone.VERY_NEAR,
+        "close": Zone.VERY_NEAR,
+        "c": Zone.VERY_NEAR,
         "vn": Zone.VERY_NEAR,
         "near": Zone.NEAR,
         "n": Zone.NEAR,
@@ -90,6 +92,10 @@ def zone_from_rssi(rssi: float) -> Zone:
     return Zone.FAR
 
 
+def zone_from_ble_rssi(rssi: float) -> Zone:
+    return zone_from_rssi(rssi)
+
+
 def zone_from_signal_level(level_db: float) -> Zone:
     if level_db >= -42:
         return Zone.VERY_NEAR
@@ -98,6 +104,25 @@ def zone_from_signal_level(level_db: float) -> Zone:
     if level_db >= -68:
         return Zone.MID
     return Zone.FAR
+
+
+def zone_from_score(score: float) -> Zone:
+    if score >= 0.58:
+        return Zone.VERY_NEAR
+    if score >= 0.42:
+        return Zone.NEAR
+    if score >= 0.25:
+        return Zone.MID
+    return Zone.FAR
+
+
+def zone_score(zone: Zone) -> float:
+    return {
+        Zone.VERY_NEAR: 0.88,
+        Zone.NEAR: 0.64,
+        Zone.MID: 0.38,
+        Zone.FAR: 0.10,
+    }[zone]
 
 
 @dataclass
@@ -263,18 +288,38 @@ def content_for_zone(zone: Zone, reveal_zone: Zone) -> dict[str, str | bool]:
 def content_for_audio_zone(
     zone: Zone | None, reveal_zone: Zone, confidence: float, mic_active: bool
 ) -> dict[str, str | bool]:
-    if not mic_active:
+    return content_for_sensor_zone(
+        zone=zone,
+        reveal_zone=reveal_zone,
+        confidence=confidence,
+        active=mic_active,
+        inactive_title="Microphone not active",
+        inactive_body="Start microphone sensing so the phone can estimate distance from the laptop beacon.",
+        no_lock_body="The receiver hears the room, but the beacon is below the lock threshold.",
+    )
+
+
+def content_for_sensor_zone(
+    zone: Zone | None,
+    reveal_zone: Zone,
+    confidence: float,
+    active: bool,
+    inactive_title: str,
+    inactive_body: str,
+    no_lock_body: str,
+) -> dict[str, str | bool]:
+    if not active:
         return {
             "kind": "inactive",
-            "title": "Microphone not active",
-            "body": "Start microphone sensing so the phone can estimate distance from the laptop beacon.",
+            "title": inactive_title,
+            "body": inactive_body,
             "revealed": False,
         }
     if zone is None or confidence < 0.18:
         return {
             "kind": "dead",
             "title": "No stable beacon",
-            "body": "The receiver hears the room, but the beacon is below the lock threshold.",
+            "body": no_lock_body,
             "revealed": False,
         }
     if zone == reveal_zone:
@@ -285,6 +330,88 @@ def content_for_audio_zone(
         "title": copy["title"],
         "body": copy["body"],
         "revealed": False,
+    }
+
+
+def snapshot_for_ble_observation(
+    source_id: str,
+    zone: Zone | None,
+    raw_rssi: float | None,
+    smoothed_rssi: float | None,
+    confidence: float,
+    ble_active: bool,
+    reveal_zone: Zone,
+) -> dict[str, object]:
+    return {
+        "mode": "ble",
+        "sourceId": source_id if ble_active else None,
+        "zone": zone.value if zone is not None else None,
+        "zoneLabel": ZONE_LABELS[zone] if zone is not None else "no lock",
+        "revealZone": reveal_zone.value,
+        "revealZoneLabel": ZONE_LABELS[reveal_zone],
+        "rawRssi": None if raw_rssi is None else round(raw_rssi, 1),
+        "smoothedRssi": None if smoothed_rssi is None else round(smoothed_rssi, 1),
+        "signalLevelDb": None,
+        "smoothedSignalLevelDb": None,
+        "confidence": round(max(0.0, min(1.0, confidence)), 2),
+        "bleConfidence": round(max(0.0, min(1.0, confidence)), 2),
+        "audioConfidence": 0.0,
+        "bleActive": ble_active,
+        "micActive": False,
+        "content": content_for_sensor_zone(
+            zone=zone,
+            reveal_zone=reveal_zone,
+            confidence=confidence,
+            active=ble_active,
+            inactive_title="BLE scan not active",
+            inactive_body="Start BLE-only mode so the phone can read laptop advertisements and RSSI.",
+            no_lock_body="The phone is scanning, but the laptop advertisement is not stable enough yet.",
+        ),
+    }
+
+
+def snapshot_for_fused_observation(
+    source_id: str,
+    zone: Zone | None,
+    confidence: float,
+    reveal_zone: Zone,
+    ble_active: bool,
+    mic_active: bool,
+    raw_rssi: float | None,
+    smoothed_rssi: float | None,
+    signal_level_db: float | None,
+    smoothed_signal_level_db: float | None,
+    ble_confidence: float,
+    audio_confidence: float,
+) -> dict[str, object]:
+    active = ble_active or mic_active
+    return {
+        "mode": "ble_audio",
+        "sourceId": source_id if active else None,
+        "zone": zone.value if zone is not None else None,
+        "zoneLabel": ZONE_LABELS[zone] if zone is not None else "no lock",
+        "revealZone": reveal_zone.value,
+        "revealZoneLabel": ZONE_LABELS[reveal_zone],
+        "rawRssi": None if raw_rssi is None else round(raw_rssi, 1),
+        "smoothedRssi": None if smoothed_rssi is None else round(smoothed_rssi, 1),
+        "signalLevelDb": None if signal_level_db is None else round(signal_level_db, 1),
+        "smoothedSignalLevelDb": None
+        if smoothed_signal_level_db is None
+        else round(smoothed_signal_level_db, 1),
+        "confidence": round(max(0.0, min(1.0, confidence)), 2),
+        "bleConfidence": round(max(0.0, min(1.0, ble_confidence)), 2),
+        "audioConfidence": round(max(0.0, min(1.0, audio_confidence)), 2),
+        "bleActive": ble_active,
+        "micActive": mic_active,
+        "content": content_for_sensor_zone(
+            zone=zone,
+            reveal_zone=reveal_zone,
+            confidence=confidence,
+            active=active,
+            inactive_title="Sensors not active",
+            inactive_body="Start BLE + audio mode so the phone can combine RSSI and microphone signal.",
+            no_lock_body="The receiver is active, but neither BLE nor audio is stable enough for a lock.",
+        ),
     }
 
 
@@ -311,6 +438,11 @@ def snapshot_for_audio_observation(
         if smoothed_signal_level_db is None
         else round(smoothed_signal_level_db, 1),
         "confidence": round(max(0.0, min(1.0, confidence)), 2),
+        "audioConfidence": round(max(0.0, min(1.0, confidence)), 2),
+        "bleConfidence": 0.0,
+        "rawRssi": None,
+        "smoothedRssi": None,
+        "bleActive": False,
         "micActive": mic_active,
         "content": content_for_audio_zone(zone, reveal_zone, confidence, mic_active),
     }
