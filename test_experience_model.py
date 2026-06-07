@@ -2,9 +2,12 @@ from experience_model import (
     SourceObservation,
     SourceSelector,
     Zone,
+    content_for_audio_zone,
     content_for_zone,
     parse_zone,
+    snapshot_for_audio_observation,
     snapshot_for_source,
+    zone_from_signal_level,
     zone_from_rssi,
 )
 
@@ -14,6 +17,13 @@ def test_rssi_zone_thresholds():
     assert zone_from_rssi(-58) == Zone.NEAR
     assert zone_from_rssi(-72) == Zone.MID
     assert zone_from_rssi(-88) == Zone.FAR
+
+
+def test_audio_signal_zone_thresholds():
+    assert zone_from_signal_level(-34) == Zone.VERY_NEAR
+    assert zone_from_signal_level(-48) == Zone.NEAR
+    assert zone_from_signal_level(-62) == Zone.MID
+    assert zone_from_signal_level(-76) == Zone.FAR
 
 
 def test_zone_parser_accepts_demo_shortcuts():
@@ -45,12 +55,34 @@ def test_reveal_is_controlled_by_source_zone_mapping():
     assert fragment["revealed"] is False
 
 
+def test_audio_snapshot_reveals_only_when_heard_zone_matches():
+    snapshot = snapshot_for_audio_observation(
+        source_id="ALIVE-T480",
+        zone=Zone.NEAR,
+        signal_level_db=-47.2,
+        smoothed_signal_level_db=-48.1,
+        confidence=0.82,
+        mic_active=True,
+        reveal_zone=Zone.NEAR,
+    )
+    assert snapshot["mode"] == "audio"
+    assert snapshot["sourceId"] == "ALIVE-T480"
+    assert snapshot["zone"] == "near"
+    assert snapshot["content"]["revealed"] is True
+
+    no_lock = content_for_audio_zone(Zone.NEAR, Zone.NEAR, confidence=0.05, mic_active=True)
+    assert no_lock["revealed"] is False
+    assert no_lock["kind"] == "dead"
+
+
 def run_tests():
     tests = [
         test_rssi_zone_thresholds,
+        test_audio_signal_zone_thresholds,
         test_zone_parser_accepts_demo_shortcuts,
         test_source_selection_holds_against_small_jumps,
         test_reveal_is_controlled_by_source_zone_mapping,
+        test_audio_snapshot_reveals_only_when_heard_zone_matches,
     ]
     for test in tests:
         test()

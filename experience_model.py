@@ -30,6 +30,13 @@ ZONE_RSSI = {
     Zone.FAR: -86,
 }
 
+SIGNAL_LEVEL_DB = {
+    Zone.VERY_NEAR: -34,
+    Zone.NEAR: -48,
+    Zone.MID: -62,
+    Zone.FAR: -76,
+}
+
 ZONE_COPY = {
     Zone.VERY_NEAR: {
         "title": "Signal saturating",
@@ -81,6 +88,39 @@ def zone_from_rssi(rssi: float) -> Zone:
     if rssi >= -80:
         return Zone.MID
     return Zone.FAR
+
+
+def zone_from_signal_level(level_db: float) -> Zone:
+    if level_db >= -42:
+        return Zone.VERY_NEAR
+    if level_db >= -55:
+        return Zone.NEAR
+    if level_db >= -68:
+        return Zone.MID
+    return Zone.FAR
+
+
+@dataclass
+class ZoneStabilizer:
+    stable_zone: Zone = Zone.FAR
+    candidate_zone: Zone = Zone.FAR
+    candidate_count: int = 0
+    hold_count: int = 3
+
+    def update(self, candidate: Zone) -> Zone:
+        if candidate == self.stable_zone:
+            self.candidate_zone = candidate
+            self.candidate_count = 0
+            return self.stable_zone
+        if candidate == self.candidate_zone:
+            self.candidate_count += 1
+        else:
+            self.candidate_zone = candidate
+            self.candidate_count = 1
+        if self.candidate_count >= self.hold_count:
+            self.stable_zone = candidate
+            self.candidate_count = 0
+        return self.stable_zone
 
 
 @dataclass
@@ -217,6 +257,62 @@ def content_for_zone(zone: Zone, reveal_zone: Zone) -> dict[str, str | bool]:
         "title": copy["title"],
         "body": copy["body"],
         "revealed": False,
+    }
+
+
+def content_for_audio_zone(
+    zone: Zone | None, reveal_zone: Zone, confidence: float, mic_active: bool
+) -> dict[str, str | bool]:
+    if not mic_active:
+        return {
+            "kind": "inactive",
+            "title": "Microphone not active",
+            "body": "Start microphone sensing so the phone can estimate distance from the laptop beacon.",
+            "revealed": False,
+        }
+    if zone is None or confidence < 0.18:
+        return {
+            "kind": "dead",
+            "title": "No stable beacon",
+            "body": "The receiver hears the room, but the beacon is below the lock threshold.",
+            "revealed": False,
+        }
+    if zone == reveal_zone:
+        return content_for_zone(zone, reveal_zone)
+    copy = ZONE_COPY[zone]
+    return {
+        "kind": "fragment",
+        "title": copy["title"],
+        "body": copy["body"],
+        "revealed": False,
+    }
+
+
+def snapshot_for_audio_observation(
+    source_id: str,
+    zone: Zone | None,
+    signal_level_db: float | None,
+    smoothed_signal_level_db: float | None,
+    confidence: float,
+    mic_active: bool,
+    reveal_zone: Zone,
+) -> dict[str, object]:
+    return {
+        "mode": "audio",
+        "sourceId": source_id if mic_active else None,
+        "zone": zone.value if zone is not None else None,
+        "zoneLabel": ZONE_LABELS[zone] if zone is not None else "no lock",
+        "revealZone": reveal_zone.value,
+        "revealZoneLabel": ZONE_LABELS[reveal_zone],
+        "signalLevelDb": None
+        if signal_level_db is None
+        else round(signal_level_db, 1),
+        "smoothedSignalLevelDb": None
+        if smoothed_signal_level_db is None
+        else round(smoothed_signal_level_db, 1),
+        "confidence": round(max(0.0, min(1.0, confidence)), 2),
+        "micActive": mic_active,
+        "content": content_for_audio_zone(zone, reveal_zone, confidence, mic_active),
     }
 
 

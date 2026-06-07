@@ -6,4 +6,8 @@ __pycache__/
 *.png
 *.gif
 transmission*
+.alive-demo-*.pem
+.alive-demo-openssl.cnf
+.tmp/
+.mpl/
 .DS_Store
