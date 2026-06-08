@@ -11,13 +11,18 @@ SAMPLE_RATE = 44100
 BURST_LEN = 0.22
 BURST_AMP = 0.6
 VALID_MODES = ("laser", "horn", "vocal")
+VALID_SIGNAL_TYPES = ("language", "clock", "dead")
+END_FREQS = (1000, 2900)
 
 
 def make_burst(letter: str, mode: str = "laser") -> np.ndarray:
-    if letter not in FREQ_MAP:
+    if letter == "<END>":
+        low_f, high_f = END_FREQS
+    elif letter in FREQ_MAP:
+        low_f, high_f = FREQ_MAP[letter]
+    else:
         return np.zeros(0, dtype=np.float32)
 
-    low_f, high_f = FREQ_MAP[letter]
     t = np.linspace(0, BURST_LEN, int(SAMPLE_RATE * BURST_LEN), endpoint=False)
 
     if mode == "laser":
@@ -70,9 +75,9 @@ def make_burst(letter: str, mode: str = "laser") -> np.ndarray:
         envelope[-decay:] = np.linspace(1, 0, decay)
         texture = texture * envelope
 
-    carrier_low = np.sin(2 * np.pi * low_f * t) * 0.45
-    carrier_high = np.sin(2 * np.pi * high_f * t) * 0.35
-    burst = np.clip(texture + carrier_low + carrier_high, -0.95, 0.95)
+    carrier_low = np.sin(2 * np.pi * low_f * t) * 0.78
+    carrier_high = np.sin(2 * np.pi * high_f * t) * 0.68
+    burst = np.clip(texture * 0.28 + carrier_low + carrier_high, -0.95, 0.95)
     burst = burst / (np.max(np.abs(burst)) + 1e-9) * BURST_AMP
     return burst.astype(np.float32)
 
@@ -87,19 +92,46 @@ def encode_message(text: str, mode: str = "laser", loop_pause_s: float = 1.0) ->
     for ch in message:
         signal.extend(make_burst(ch, mode=mode))
         signal.extend(np.zeros(int(SAMPLE_RATE * (GAP_MAP[ch] / 1000.0)), dtype=np.float32))
-    signal.extend(make_burst(" ", mode=mode))
+    signal.extend(make_burst("<END>", mode=mode))
     signal.extend(np.zeros(int(SAMPLE_RATE * loop_pause_s), dtype=np.float32))
     return np.asarray(signal, dtype=np.float32)
 
 
+def encode_clock_signal(mode: str = "laser", pulses: int = 6, gap_s: float = 0.5) -> np.ndarray:
+    signal: list[float] = []
+    for _ in range(pulses):
+        signal.extend(make_burst("A", mode=mode))
+        signal.extend(np.zeros(int(SAMPLE_RATE * gap_s), dtype=np.float32))
+    signal.extend(make_burst("<END>", mode=mode))
+    signal.extend(np.zeros(int(SAMPLE_RATE * 1.0), dtype=np.float32))
+    return np.asarray(signal, dtype=np.float32)
+
+
+def encode_dead_signal(duration_s: float = 2.0) -> np.ndarray:
+    return np.zeros(int(SAMPLE_RATE * duration_s), dtype=np.float32)
+
+
 class LoopingMessagePlayer:
-    def __init__(self, message: str, mode: str = "laser") -> None:
+    def __init__(
+        self,
+        message: str,
+        mode: str = "laser",
+        signal_type: str = "language",
+    ) -> None:
         self.message = sanitize_message(message) or "ALIVE"
         self.mode = mode if mode in VALID_MODES else "laser"
-        self._audio = encode_message(self.message, self.mode)
+        self.signal_type = signal_type if signal_type in VALID_SIGNAL_TYPES else "language"
+        self._audio = self._encode_current()
         self._cursor = 0
         self._lock = threading.Lock()
         self._stream = None
+
+    def _encode_current(self) -> np.ndarray:
+        if self.signal_type == "dead":
+            return encode_dead_signal()
+        if self.signal_type == "clock":
+            return encode_clock_signal(self.mode)
+        return encode_message(self.message, self.mode)
 
     def start(self) -> bool:
         try:
@@ -120,7 +152,7 @@ class LoopingMessagePlayer:
             print(f"[SENDER] Could not start encoded message loop: {exc}")
             self._stream = None
             return False
-        print(f"[SENDER] Looping '{self.message}' as {self.mode}")
+        print(f"[SENDER] Looping {self._description()}")
         return True
 
     def stop(self) -> None:
@@ -132,23 +164,43 @@ class LoopingMessagePlayer:
         finally:
             self._stream = None
 
-    def configure(self, message: str | None = None, mode: str | None = None) -> None:
+    def configure(
+        self,
+        message: str | None = None,
+        mode: str | None = None,
+        signal_type: str | None = None,
+    ) -> None:
         with self._lock:
             if message is not None:
                 self.message = sanitize_message(message) or self.message
             if mode is not None and mode in VALID_MODES:
                 self.mode = mode
-            self._audio = encode_message(self.message, self.mode)
+            if signal_type is not None and signal_type in VALID_SIGNAL_TYPES:
+                self.signal_type = signal_type
+            self._audio = self._encode_current()
             self._cursor = 0
-        print(f"[SENDER] Looping '{self.message}' as {self.mode}")
+        print(f"[SENDER] Looping {self._description()}")
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
             return {
                 "message": self.message,
                 "mode": self.mode,
+                "signal": self.signal_type,
                 "duration": round(len(self._audio) / SAMPLE_RATE, 2),
             }
+
+    def public_snapshot(self) -> dict[str, object]:
+        with self._lock:
+            return {
+                "signal": self.signal_type,
+                "duration": round(len(self._audio) / SAMPLE_RATE, 2),
+            }
+
+    def _description(self) -> str:
+        if self.signal_type == "language":
+            return f"language signal as {self.mode}"
+        return f"{self.signal_type} signal as {self.mode}"
 
     def _callback(self, outdata, frames: int, time, status) -> None:
         del time, status

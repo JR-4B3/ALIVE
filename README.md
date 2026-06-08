@@ -38,16 +38,24 @@ message WE ARE STILL HERE
 mode laser
 mode horn
 mode vocal
+signal language
+signal clock
+signal dead
+clock
+dead
 status
 quit
 ```
 
 The three modes are the original sound styles from the legacy demo: `laser`, `horn`, and `vocal`.
+The signal control switches between encoded language, periodic clock pulses, and a silent dead signal.
 
 ## Useful Flags
 
 ```bash
 python demo_server.py --message "HELLO WORLD" --mode vocal
+python demo_server.py --signal clock
+python demo_server.py --signal dead
 python demo_server.py --http
 ```
 

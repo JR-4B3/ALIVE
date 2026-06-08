@@ -14,7 +14,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from codebook import COMMON_WORDS, FREQ_MAP, GAP_MAP
-from legacy_audio_loop import LoopingMessagePlayer, VALID_MODES, sanitize_message
+from legacy_audio_loop import (
+    LoopingMessagePlayer,
+    VALID_MODES,
+    VALID_SIGNAL_TYPES,
+    sanitize_message,
+)
 
 
 DEFAULT_MESSAGE = "WE ARE STILL HERE"
@@ -165,7 +170,7 @@ button.primary {
 }
 @media (max-width: 480px) {
   main { padding: 10px; gap: 8px; }
-  .signal { grid-template-columns: 1fr 1fr; }
+  .signal { grid-template-columns: 1fr; }
   .metric { padding: 8px; }
   .controls { grid-template-columns: 1fr; }
 }
@@ -176,18 +181,15 @@ button.primary {
   <header>
     <div>
       <div class="brand">ALIVE translator</div>
-      <div id="source">waiting for encoded audio</div>
+      <div>waiting for encoded audio</div>
     </div>
     <div class="pill" id="server">connecting</div>
   </header>
 
   <section class="signal">
-    <div class="metric panel"><b>microphone</b><span id="mic">inactive</span></div>
     <div class="metric panel"><b>signal</b><span id="level">--</span></div>
-    <div class="metric panel"><b>burst</b><span id="burst">idle</span></div>
     <div class="metric panel"><b>tone pair</b><span id="pair">--</span></div>
     <div class="metric panel"><b>gap</b><span id="gap">--</span></div>
-    <div class="metric panel"><b>sender</b><span id="sender">--</span></div>
   </section>
 
   <section class="translator panel">
@@ -212,15 +214,12 @@ const CODEBOOK = __CODEBOOK__;
 const COMMON_WORDS = new Set(__COMMON_WORDS__);
 const LOW_FREQS = [400, 500, 600, 700, 800, 900, 1000];
 const HIGH_FREQS = [2000, 2300, 2600, 2900];
+const END_PAIR = { low: 1000, high: 2900 };
 const els = {
   server: document.querySelector('#server'),
-  source: document.querySelector('#source'),
-  mic: document.querySelector('#mic'),
   level: document.querySelector('#level'),
-  burst: document.querySelector('#burst'),
   pair: document.querySelector('#pair'),
   gap: document.querySelector('#gap'),
-  sender: document.querySelector('#sender'),
   title: document.querySelector('#title'),
   verdict: document.querySelector('#verdict'),
   decoded: document.querySelector('#decoded'),
@@ -230,7 +229,10 @@ const els = {
 };
 
 let audioCtx = null;
+let micStream = null;
+let sourceNode = null;
 let processor = null;
+let silentNode = null;
 let micActive = false;
 let noiseFloorDb = -110;
 let inBurst = false;
@@ -239,18 +241,18 @@ let burstStartAt = 0;
 let lastBurstEndAt = 0;
 let decoded = '';
 let rawStream = '';
+let recentGaps = [];
 let lastLevelDb = -120;
-let senderState = null;
 let lastDecodedAt = 0;
+let lastFinalText = '';
 
 function connectEvents() {
   const events = new EventSource('/events');
   events.onopen = () => { els.server.textContent = 'live'; };
   events.onerror = () => { els.server.textContent = 'reconnecting'; };
   events.onmessage = event => {
-    senderState = JSON.parse(event.data);
-    els.sender.textContent = `${senderState.mode} / ${senderState.message}`;
-    els.source.textContent = `laptop loop: ${senderState.message}`;
+    const state = JSON.parse(event.data);
+    els.server.textContent = state.signal === 'language' ? 'live' : state.signal;
   };
 }
 
@@ -273,7 +275,8 @@ function goertzel(samples, sampleRate, frequency) {
   const coeff = 2 * Math.cos(omega);
   let q0 = 0, q1 = 0, q2 = 0;
   for (let i = 0; i < samples.length; i++) {
-    q0 = coeff * q1 - q2 + samples[i];
+    const window = samples.length > 1 ? 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (samples.length - 1)) : 1;
+    q0 = coeff * q1 - q2 + samples[i] * window;
     q2 = q1;
     q1 = q0;
   }
@@ -281,7 +284,20 @@ function goertzel(samples, sampleRate, frequency) {
   return Math.sqrt(Math.max(power, 0)) / samples.length;
 }
 
+function trimBurst(samples) {
+  let peak = 0;
+  for (let i = 0; i < samples.length; i++) peak = Math.max(peak, Math.abs(samples[i]));
+  if (peak <= 0) return samples;
+  const threshold = peak * 0.18;
+  let start = 0;
+  let end = samples.length - 1;
+  while (start < samples.length && Math.abs(samples[start]) < threshold) start++;
+  while (end > start && Math.abs(samples[end]) < threshold) end--;
+  return samples.slice(Math.max(0, start - 64), Math.min(samples.length, end + 65));
+}
+
 function detectLetter(samples, sampleRate) {
+  samples = trimBurst(samples);
   let bestLow = LOW_FREQS[0], bestLowMag = 0;
   let bestHigh = HIGH_FREQS[0], bestHighMag = 0;
   for (const f of LOW_FREQS) {
@@ -297,22 +313,23 @@ function detectLetter(samples, sampleRate) {
     const err = Math.abs(row.low - bestLow) + Math.abs(row.high - bestHigh);
     if (err < best.err) best = { ch: row.ch, err, low: bestLow, high: bestHigh };
   }
+  const endErr = Math.abs(END_PAIR.low - bestLow) + Math.abs(END_PAIR.high - bestHigh);
+  if (endErr <= 90) {
+    return { ch: '<END>', err: endErr, low: bestLow, high: bestHigh, confidence: 1 };
+  }
   const confidence = Math.min(1, Math.max(0, (160 - best.err) / 160));
   return { ...best, confidence };
 }
 
-function charFromGap(gapMs) {
-  if (!gapMs) return '';
-  let best = { ch: '', err: Infinity, gap: 0 };
-  for (const row of CODEBOOK) {
-    const err = Math.abs(row.gap - gapMs);
-    if (err < best.err) best = { ch: row.ch, err, gap: row.gap };
-  }
-  return best.err <= 90 ? best.ch : '?';
+function isPeriodic(gaps) {
+  const usable = gaps.filter(gap => gap > 80 && gap < 1800).slice(-5);
+  if (usable.length < 3) return false;
+  return Math.max(...usable) - Math.min(...usable) <= 90;
 }
 
-function classify(text) {
+function classify(text, gaps = recentGaps) {
   const clean = text.trim().replace(/\\s+/g, ' ');
+  if (isPeriodic(gaps)) return { title: 'Clock signal', verdict: 'DEAD' };
   if (!clean) return { title: 'Listening', verdict: 'DEAD' };
   if (clean.length <= 2) return { title: 'Signal fragments', verdict: 'CLOCK' };
   const compact = clean.replace(/ /g, '');
@@ -331,36 +348,43 @@ function appendLetter(ch, gapMs) {
     rawStream = '';
   }
   if (ch === ' ' && decoded.endsWith(' ')) return;
+  if (gapMs > 0) {
+    recentGaps.push(gapMs);
+    if (recentGaps.length > 12) recentGaps.shift();
+  }
   decoded += ch;
   rawStream += ch;
   lastDecodedAt = performance.now();
   if (decoded.length > 42) decoded = decoded.slice(-42);
-  const state = classify(decoded);
+  const state = classify(decoded, recentGaps);
   els.title.textContent = state.title;
   els.verdict.textContent = state.verdict;
   els.decoded.textContent = decoded || '---';
   els.stream.textContent = rawStream.slice(-96);
-  const gapChar = charFromGap(gapMs);
-  els.gap.textContent = gapMs ? `${Math.round(gapMs)} ms -> ${gapChar || '?'}` : '--';
+  els.gap.textContent = gapMs ? `${Math.round(gapMs)} ms` : '--';
 }
 
 function finishCycle() {
   const finalText = decoded.trim();
   if (finalText) {
-    const state = classify(finalText);
+    const repeated = finalText === lastFinalText;
+    const state = classify(finalText, recentGaps);
     els.title.textContent = state.title;
     els.verdict.textContent = state.verdict;
     els.decoded.textContent = finalText;
-    setTimeout(() => {
-      decoded = '';
-      rawStream = '';
-      els.decoded.textContent = '---';
-      els.stream.textContent = 'waiting for next loop';
-    }, 1200);
+    els.stream.textContent = repeated ? 'repeat signal detected' : 'message complete';
+    lastFinalText = finalText;
+  } else {
+    els.stream.textContent = 'end marker received';
   }
+  decoded = '';
+  rawStream = '';
+  recentGaps = [];
+  lastBurstEndAt = 0;
 }
 
 function processChunk(input) {
+  if (!audioCtx) return;
   const now = audioCtx.currentTime;
   const levelDb = rmsDb(input);
   lastLevelDb = lastLevelDb * 0.75 + levelDb * 0.25;
@@ -375,7 +399,6 @@ function processChunk(input) {
     inBurst = true;
     burstSamples = [];
     burstStartAt = now;
-    els.burst.textContent = 'capturing';
     els.title.textContent = 'Signal detected';
   }
 
@@ -384,13 +407,17 @@ function processChunk(input) {
     const burstDuration = now - burstStartAt + chunkDuration;
     if ((levelDb < endThreshold && burstDuration > 0.12) || burstDuration > 0.42) {
       inBurst = false;
-      els.burst.textContent = 'decoding';
       const gapMs = lastBurstEndAt ? (burstStartAt - lastBurstEndAt) * 1000 : 0;
       lastBurstEndAt = now;
       const result = detectLetter(burstSamples, audioCtx.sampleRate);
       els.pair.textContent = `${result.low}/${result.high} Hz`;
-      if (result.confidence > 0.22) appendLetter(result.ch, gapMs);
-      els.burst.textContent = 'idle';
+      if (result.confidence > 0.22) {
+        if (result.ch === '<END>') {
+          finishCycle();
+        } else {
+          appendLetter(result.ch, gapMs);
+        }
+      }
     }
   }
 
@@ -400,35 +427,57 @@ function processChunk(input) {
 }
 
 async function startTranslator() {
+  if (micActive) {
+    await stopTranslator();
+    return;
+  }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
+    micStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
     audioCtx = new AudioContext();
-    const source = audioCtx.createMediaStreamSource(stream);
+    sourceNode = audioCtx.createMediaStreamSource(micStream);
     processor = audioCtx.createScriptProcessor(4096, 1, 1);
-    const silent = audioCtx.createGain();
-    silent.gain.value = 0;
+    silentNode = audioCtx.createGain();
+    silentNode.gain.value = 0;
     processor.onaudioprocess = event => processChunk(event.inputBuffer.getChannelData(0));
-    source.connect(processor);
-    processor.connect(silent).connect(audioCtx.destination);
+    sourceNode.connect(processor);
+    processor.connect(silentNode).connect(audioCtx.destination);
     await audioCtx.resume();
     micActive = true;
-    els.mic.textContent = 'active';
-    els.start.textContent = 'Translator active';
+    els.start.textContent = 'Stop translator';
     els.title.textContent = 'Listening';
     els.verdict.textContent = 'DEAD';
   } catch (error) {
-    els.mic.textContent = 'blocked';
     els.title.textContent = 'Microphone blocked';
     els.stream.textContent = error.message || String(error);
   }
+}
+
+async function stopTranslator() {
+  if (processor) processor.disconnect();
+  if (sourceNode) sourceNode.disconnect();
+  if (silentNode) silentNode.disconnect();
+  if (micStream) micStream.getTracks().forEach(track => track.stop());
+  if (audioCtx && audioCtx.state !== 'closed') await audioCtx.close();
+  audioCtx = null;
+  micStream = null;
+  sourceNode = null;
+  processor = null;
+  silentNode = null;
+  micActive = false;
+  inBurst = false;
+  burstSamples = [];
+  els.start.textContent = 'Start translator';
+  els.title.textContent = 'Receiver idle';
+  els.verdict.textContent = 'DEAD';
 }
 
 els.start.addEventListener('click', startTranslator);
 els.reset.addEventListener('click', () => {
   decoded = '';
   rawStream = '';
+  recentGaps = [];
   els.decoded.textContent = '---';
   els.stream.textContent = 'decoded stream cleared';
   els.title.textContent = micActive ? 'Listening' : 'Receiver idle';
@@ -449,6 +498,9 @@ class DemoState:
 
     def snapshot(self) -> dict[str, object]:
         return self.player.snapshot()
+
+    def public_snapshot(self) -> dict[str, object]:
+        return self.player.public_snapshot()
 
 
 def make_phone_html() -> str:
@@ -491,7 +543,7 @@ def make_handler(state: DemoState):
                 self._send_text(phone_html, "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/state":
-                self._send_json(state.snapshot())
+                self._send_json(state.public_snapshot())
                 return
             if parsed.path == "/api/configure":
                 self._handle_configure(parsed.query)
@@ -508,11 +560,15 @@ def make_handler(state: DemoState):
             params = parse_qs(query)
             message = params.get("message", [None])[0]
             mode = params.get("mode", [None])[0]
+            signal_type = params.get("signal", [None])[0]
             if mode is not None and mode not in VALID_MODES:
                 self.send_error(HTTPStatus.BAD_REQUEST, "mode must be laser, horn, or vocal")
                 return
-            state.player.configure(message=message, mode=mode)
-            self._send_json(state.snapshot())
+            if signal_type is not None and signal_type not in VALID_SIGNAL_TYPES:
+                self.send_error(HTTPStatus.BAD_REQUEST, "signal must be language, clock, or dead")
+                return
+            state.player.configure(message=message, mode=mode, signal_type=signal_type)
+            self._send_json(state.public_snapshot())
 
         def _send_text(self, text: str, content_type: str) -> None:
             data = text.encode("utf-8")
@@ -532,7 +588,7 @@ def make_handler(state: DemoState):
             self.send_header("connection", "keep-alive")
             self.end_headers()
             while state.running:
-                payload = json.dumps(state.snapshot()).encode("utf-8")
+                payload = json.dumps(state.public_snapshot()).encode("utf-8")
                 try:
                     self.wfile.write(b"data: " + payload + b"\n\n")
                     self.wfile.flush()
@@ -627,6 +683,8 @@ def controller_loop(state: DemoState) -> None:
     print("\nLive controls:")
     print("  message <text>          change encoded message")
     print("  mode <laser|horn|vocal> change sender sound style")
+    print("  signal <language|clock|dead>")
+    print("  clock / dead / language quick signal shortcuts")
     print("  status                  show current sender state")
     print("  quit                    stop the server\n")
     while state.running:
@@ -650,7 +708,7 @@ def controller_loop(state: DemoState) -> None:
         elif command == "message" and value.strip():
             cleaned = sanitize_message(value)
             if cleaned:
-                state.player.configure(message=cleaned)
+                state.player.configure(message=cleaned, signal_type="language")
             else:
                 print("[error] message must contain A-Z or spaces")
         elif command == "mode" and value.strip():
@@ -659,8 +717,16 @@ def controller_loop(state: DemoState) -> None:
                 state.player.configure(mode=mode)
             else:
                 print("[error] mode must be laser, horn, or vocal")
+        elif command == "signal" and value.strip():
+            signal_type = value.strip().lower()
+            if signal_type in VALID_SIGNAL_TYPES:
+                state.player.configure(signal_type=signal_type)
+            else:
+                print("[error] signal must be language, clock, or dead")
+        elif command in VALID_SIGNAL_TYPES:
+            state.player.configure(signal_type=command)
         else:
-            print("Unknown command. Try: message HELLO WORLD, mode vocal, status, quit")
+            print("Unknown command. Try: message HELLO WORLD, mode vocal, signal clock, status, quit")
 
 
 def main() -> int:
@@ -669,10 +735,11 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--message", default=DEFAULT_MESSAGE)
     parser.add_argument("--mode", choices=VALID_MODES, default="laser")
+    parser.add_argument("--signal", choices=VALID_SIGNAL_TYPES, default="language")
     parser.add_argument("--http", action="store_true", help="Use HTTP instead of local HTTPS")
     args = parser.parse_args()
 
-    player = LoopingMessagePlayer(args.message, args.mode)
+    player = LoopingMessagePlayer(args.message, args.mode, args.signal)
     state = DemoState(player)
     ip = local_ip()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(state))
@@ -690,6 +757,7 @@ def main() -> int:
     print(f"Phone URL: {url}")
     print(f"Encoded message: {player.message}")
     print(f"Sound style: {player.mode}")
+    print(f"Signal type: {player.signal_type}")
     print(f"Audio loop: {'active' if audio_active else 'unavailable'}")
     if https_active:
         print("[HTTPS] The phone may show a certificate warning; accept it for the local demo.")
