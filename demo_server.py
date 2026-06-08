@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import random
 import socket
 import ssl
 import subprocess
@@ -14,21 +13,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from audio_beacon import BEACON_FREQS, AudioBeacon
-from ble_advertiser import BLEAdvertiser
-from experience_model import (
-    SIGNAL_LEVEL_DB,
-    ZONE_LABELS,
-    ZONE_ORDER,
-    Zone,
-    parse_zone,
-    snapshot_for_ble_observation,
-    snapshot_for_audio_observation,
-    snapshot_for_fused_observation,
-    zone_from_ble_rssi,
-    zone_from_score,
-    zone_score,
-)
+from codebook import COMMON_WORDS, FREQ_MAP, GAP_MAP
+from legacy_audio_loop import LoopingMessagePlayer, VALID_MODES, sanitize_message
+
+
+DEFAULT_MESSAGE = "WE ARE STILL HERE"
 
 
 PHONE_HTML = """<!doctype html>
@@ -36,144 +25,133 @@ PHONE_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ALIVE Room Receiver</title>
+<title>ALIVE Translator</title>
 <style>
 :root {
   color-scheme: dark;
   --bg: #050607;
-  --panel: #101417;
-  --line: #263139;
-  --text: #edf7f4;
-  --muted: #8ba19c;
+  --panel: #0d1214;
+  --line: #253036;
+  --text: #eef8f5;
+  --muted: #8da19d;
   --accent: #35f2b6;
   --warn: #ffd166;
+  --bad: #ff6b6b;
 }
 * { box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
 body {
   margin: 0;
-  min-height: 100vh;
   background:
-    radial-gradient(circle at 50% 20%, rgba(53, 242, 182, 0.14), transparent 35%),
-    var(--bg);
+    radial-gradient(circle at 50% 10%, rgba(53, 242, 182, 0.13), transparent 34%),
+    linear-gradient(180deg, #050607, #070b0c);
   color: var(--text);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 main {
-  width: min(680px, 100%);
-  min-height: 100vh;
+  width: min(720px, 100%);
+  height: 100dvh;
   margin: 0 auto;
-  padding: 18px;
+  padding: 14px;
   display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: 14px;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 10px;
 }
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 0;
 }
 .brand {
-  font-size: 0.78rem;
+  color: var(--muted);
+  font-size: 0.76rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--muted);
 }
-.status {
+.pill {
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 7px 10px;
   color: var(--accent);
   font-size: 0.78rem;
 }
-.receiver {
-  display: grid;
-  align-content: center;
-  gap: 18px;
-}
-.ring {
-  width: min(76vw, 360px);
-  aspect-ratio: 1;
-  margin: 0 auto;
-  border-radius: 50%;
-  border: 1px solid rgba(53, 242, 182, 0.32);
-  display: grid;
-  place-items: center;
-  background:
-    repeating-radial-gradient(circle, rgba(53, 242, 182, 0.16) 0 1px, transparent 1px 27px),
-    radial-gradient(circle, rgba(53, 242, 182, 0.18), rgba(53, 242, 182, 0.02) 62%, transparent 63%);
-  box-shadow: 0 0 60px rgba(53, 242, 182, 0.10);
-}
-.zone {
-  text-align: center;
-}
-.zone strong {
-  display: block;
-  font-size: clamp(2.1rem, 14vw, 5.2rem);
-  line-height: 0.95;
-  text-transform: uppercase;
-}
-.zone span {
-  color: var(--muted);
-  font-size: 0.95rem;
-}
-.message {
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  padding: 18px 0;
-}
-.message h1 {
-  margin: 0 0 8px;
-  font-size: clamp(1.45rem, 7vw, 2.8rem);
-  line-height: 1.05;
-}
-.message p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 1rem;
-  line-height: 1.45;
-}
-.message.revealed h1,
-.message.revealed p {
-  color: var(--accent);
-  text-shadow: 0 0 20px rgba(53, 242, 182, 0.35);
-}
-.telemetry {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
-}
-.metric {
+.panel {
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 10px;
-  min-width: 0;
+  background: rgba(13, 18, 20, 0.82);
 }
+.signal {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+.metric { padding: 9px; min-width: 0; }
 .metric b {
   display: block;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  color: var(--muted);
   margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
 }
-.metric span {
+.metric span { overflow-wrap: anywhere; }
+.translator {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+.statusline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.statusline h1 {
+  margin: 0;
+  font-size: clamp(1.1rem, 5vw, 1.8rem);
+}
+.verdict {
+  color: var(--warn);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.output {
+  min-height: 0;
+  padding: 16px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#decoded {
+  width: 100%;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: clamp(2.1rem, 11vw, 4.8rem);
+  line-height: 1.05;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  text-shadow: 0 0 22px rgba(53, 242, 182, 0.28);
   overflow-wrap: anywhere;
 }
-.bar {
-  height: 8px;
-  border-radius: 999px;
-  background: #1c2529;
+.stream {
+  border-top: 1px solid var(--line);
+  padding: 10px 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86rem;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
-.bar > div {
-  width: 0%;
-  height: 100%;
-  background: var(--accent);
-  transition: width 120ms linear;
+.controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 button {
-  width: 100%;
   min-height: 46px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -181,16 +159,15 @@ button {
   color: var(--text);
   font: inherit;
 }
-.controls {
-  display: grid;
-  gap: 8px;
+button.primary {
+  background: #10251f;
+  border-color: rgba(53, 242, 182, 0.45);
 }
-.warn {
-  color: var(--warn);
-}
-@media (max-width: 460px) {
-  main { padding: 14px; }
-  .telemetry { grid-template-columns: 1fr; }
+@media (max-width: 480px) {
+  main { padding: 10px; gap: 8px; }
+  .signal { grid-template-columns: 1fr 1fr; }
+  .metric { padding: 8px; }
+  .controls { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -198,186 +175,103 @@ button {
 <main>
   <header>
     <div>
-      <div class="brand">ALIVE receiver</div>
-      <div id="source">audio beacon</div>
+      <div class="brand">ALIVE translator</div>
+      <div id="source">waiting for encoded audio</div>
     </div>
-    <div class="status" id="connection">connecting</div>
+    <div class="pill" id="server">connecting</div>
   </header>
 
-  <section class="receiver">
-    <div class="ring" id="ring">
-      <div class="zone">
-        <strong id="zone">--</strong>
-        <span id="hint">start microphone sensing</span>
-      </div>
+  <section class="signal">
+    <div class="metric panel"><b>microphone</b><span id="mic">inactive</span></div>
+    <div class="metric panel"><b>signal</b><span id="level">--</span></div>
+    <div class="metric panel"><b>burst</b><span id="burst">idle</span></div>
+    <div class="metric panel"><b>tone pair</b><span id="pair">--</span></div>
+    <div class="metric panel"><b>gap</b><span id="gap">--</span></div>
+    <div class="metric panel"><b>sender</b><span id="sender">--</span></div>
+  </section>
+
+  <section class="translator panel">
+    <div class="statusline">
+      <h1 id="title">Receiver idle</h1>
+      <div class="verdict" id="verdict">DEAD</div>
     </div>
-
-    <section class="message" id="message">
-      <h1 id="title">Microphone not active</h1>
-      <p id="body">Start microphone sensing so the phone can estimate distance from the laptop beacon.</p>
-    </section>
-
-    <section class="telemetry" aria-label="signal telemetry">
-      <div class="metric"><b>mode</b><span id="mode">not started</span></div>
-      <div class="metric"><b>BLE scan</b><span id="ble">inactive</span></div>
-      <div class="metric"><b>BLE RSSI</b><span id="rssi">--</span></div>
-      <div class="metric"><b>BLE smoothed</b><span id="rssiSmooth">--</span></div>
-      <div class="metric"><b>microphone</b><span id="mic">inactive</span></div>
-      <div class="metric"><b>beacon level</b><span id="level">--</span></div>
-      <div class="metric"><b>smoothed level</b><span id="smooth">--</span></div>
-      <div class="metric"><b>confidence</b><span id="confidence">--</span><div class="bar"><div id="confidenceBar"></div></div></div>
-      <div class="metric"><b>target zone</b><span id="reveal">--</span></div>
-      <div class="metric"><b>tones</b><span id="tones">1720 + 2290 Hz</span></div>
-    </section>
+    <div class="output">
+      <div id="decoded">---</div>
+    </div>
+    <div class="stream" id="stream">decoded stream will appear here</div>
   </section>
 
   <section class="controls">
-    <button id="startBle">Start BLE only</button>
-    <button id="startBleAudio">Start BLE + audio</button>
-    <button id="audio">Enable phone response audio</button>
+    <button class="primary" id="start">Start translator</button>
+    <button id="reset">Reset decoded text</button>
   </section>
 </main>
+
 <script>
-const SOURCE_ID = "__SOURCE_ID__";
-const BEACON_FREQS = __BEACON_FREQS__;
+const CODEBOOK = __CODEBOOK__;
+const COMMON_WORDS = new Set(__COMMON_WORDS__);
+const LOW_FREQS = [400, 500, 600, 700, 800, 900, 1000];
+const HIGH_FREQS = [2000, 2300, 2600, 2900];
 const els = {
-  connection: document.querySelector('#connection'),
+  server: document.querySelector('#server'),
   source: document.querySelector('#source'),
-  zone: document.querySelector('#zone'),
-  hint: document.querySelector('#hint'),
-  title: document.querySelector('#title'),
-  body: document.querySelector('#body'),
-  message: document.querySelector('#message'),
-  mode: document.querySelector('#mode'),
-  ble: document.querySelector('#ble'),
-  rssi: document.querySelector('#rssi'),
-  rssiSmooth: document.querySelector('#rssiSmooth'),
   mic: document.querySelector('#mic'),
   level: document.querySelector('#level'),
-  smooth: document.querySelector('#smooth'),
-  confidence: document.querySelector('#confidence'),
-  confidenceBar: document.querySelector('#confidenceBar'),
-  reveal: document.querySelector('#reveal'),
-  tones: document.querySelector('#tones'),
-  startBle: document.querySelector('#startBle'),
-  startBleAudio: document.querySelector('#startBleAudio'),
-  audio: document.querySelector('#audio'),
+  burst: document.querySelector('#burst'),
+  pair: document.querySelector('#pair'),
+  gap: document.querySelector('#gap'),
+  sender: document.querySelector('#sender'),
+  title: document.querySelector('#title'),
+  verdict: document.querySelector('#verdict'),
+  decoded: document.querySelector('#decoded'),
+  stream: document.querySelector('#stream'),
+  start: document.querySelector('#start'),
+  reset: document.querySelector('#reset')
 };
 
-let latest = null;
-let sensingMode = '__SENSING_MODE__';
+let audioCtx = null;
+let processor = null;
 let micActive = false;
-let analysisCtx = null;
-let analyser = null;
-let samples = null;
-let smoothedLevelDb = null;
-let floorLevelDb = -105;
-let peakLevelDb = -45;
-let stableZone = 'far';
-let candidateZone = 'far';
-let candidateCount = 0;
-let lastPostAt = 0;
-let bleActive = false;
-let bleScan = null;
-let smoothedRssi = null;
-let stableBleZone = 'far';
-let candidateBleZone = 'far';
-let candidateBleCount = 0;
-let lastBlePostAt = 0;
+let noiseFloorDb = -110;
+let inBurst = false;
+let burstSamples = [];
+let burstStartAt = 0;
+let lastBurstEndAt = 0;
+let decoded = '';
+let rawStream = '';
+let lastLevelDb = -120;
+let senderState = null;
+let lastDecodedAt = 0;
 
-let responseCtx = null;
-let osc = null;
-let gain = null;
-
-els.tones.textContent = `${BEACON_FREQS[0]} + ${BEACON_FREQS[1]} Hz`;
-els.mode.textContent = sensingMode === 'ble_audio' ? 'BLE + audio' : sensingMode;
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
+function connectEvents() {
+  const events = new EventSource('/events');
+  events.onopen = () => { els.server.textContent = 'live'; };
+  events.onerror = () => { els.server.textContent = 'reconnecting'; };
+  events.onmessage = event => {
+    senderState = JSON.parse(event.data);
+    els.sender.textContent = `${senderState.mode} / ${senderState.message}`;
+    els.source.textContent = `laptop loop: ${senderState.message}`;
+  };
 }
 
-function zoneLabel(zone) {
-  return { close: 'close', near: 'near', mid: 'mid', far: 'far' }[zone] || 'no lock';
+function rmsDb(samples) {
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  return 20 * Math.log10(Math.sqrt(sum / samples.length) + 1e-8);
 }
 
-function proximityScore(levelDb, confidence) {
-  if (levelDb < floorLevelDb) {
-    floorLevelDb = floorLevelDb * 0.95 + levelDb * 0.05;
+function updateFloor(levelDb) {
+  if (levelDb < noiseFloorDb) {
+    noiseFloorDb = noiseFloorDb * 0.92 + levelDb * 0.08;
   } else {
-    floorLevelDb = floorLevelDb * 0.998 + levelDb * 0.002;
+    noiseFloorDb = noiseFloorDb * 0.998 + levelDb * 0.002;
   }
-  if (levelDb > peakLevelDb) {
-    peakLevelDb = peakLevelDb * 0.88 + levelDb * 0.12;
-  } else {
-    peakLevelDb = peakLevelDb * 0.995 + levelDb * 0.005;
-  }
-  const span = Math.max(26, peakLevelDb - floorLevelDb);
-  const levelScore = clamp((levelDb - floorLevelDb) / span, 0, 1);
-  return clamp(levelScore * 0.72 + confidence * 0.28, 0, 1);
 }
 
-function zoneFromProximity(score) {
-  if (score >= 0.58) return 'close';
-  if (score >= 0.42) return 'near';
-  if (score >= 0.25) return 'mid';
-  return 'far';
-}
-
-function zoneFromRssi(rssi) {
-  if (rssi >= -50) return 'close';
-  if (rssi >= -65) return 'near';
-  if (rssi >= -80) return 'mid';
-  return 'far';
-}
-
-function bleConfidenceFromRssi(rssi) {
-  return clamp((rssi + 94) / 42, 0, 1);
-}
-
-function stabilizeZone(candidate) {
-  if (candidate === stableZone) {
-    candidateZone = candidate;
-    candidateCount = 0;
-    return stableZone;
-  }
-  if (candidate === candidateZone) {
-    candidateCount += 1;
-  } else {
-    candidateZone = candidate;
-    candidateCount = 1;
-  }
-  if (candidateCount >= 4) {
-    stableZone = candidate;
-    candidateCount = 0;
-  }
-  return stableZone;
-}
-
-function stabilizeBleZone(candidate) {
-  if (candidate === stableBleZone) {
-    candidateBleZone = candidate;
-    candidateBleCount = 0;
-    return stableBleZone;
-  }
-  if (candidate === candidateBleZone) {
-    candidateBleCount += 1;
-  } else {
-    candidateBleZone = candidate;
-    candidateBleCount = 1;
-  }
-  if (candidateBleCount >= 3) {
-    stableBleZone = candidate;
-    candidateBleCount = 0;
-  }
-  return stableBleZone;
-}
-
-function magnitudeAt(samples, sampleRate, frequency) {
+function goertzel(samples, sampleRate, frequency) {
   const omega = 2 * Math.PI * frequency / sampleRate;
   const coeff = 2 * Math.cos(omega);
-  let q0 = 0;
-  let q1 = 0;
-  let q2 = 0;
+  let q0 = 0, q1 = 0, q2 = 0;
   for (let i = 0; i < samples.length; i++) {
     q0 = coeff * q1 - q2 + samples[i];
     q2 = q1;
@@ -387,250 +281,159 @@ function magnitudeAt(samples, sampleRate, frequency) {
   return Math.sqrt(Math.max(power, 0)) / samples.length;
 }
 
-function analyzeFrame() {
-  if (!micActive || !analyser || !samples) return;
-  analyser.getFloatTimeDomainData(samples);
-
-  let rmsSum = 0;
-  for (let i = 0; i < samples.length; i++) {
-    rmsSum += samples[i] * samples[i];
+function detectLetter(samples, sampleRate) {
+  let bestLow = LOW_FREQS[0], bestLowMag = 0;
+  let bestHigh = HIGH_FREQS[0], bestHighMag = 0;
+  for (const f of LOW_FREQS) {
+    const mag = goertzel(samples, sampleRate, f);
+    if (mag > bestLowMag) { bestLow = f; bestLowMag = mag; }
   }
-  const rms = Math.sqrt(rmsSum / samples.length);
-  const toneA = magnitudeAt(samples, analysisCtx.sampleRate, BEACON_FREQS[0]);
-  const toneB = magnitudeAt(samples, analysisCtx.sampleRate, BEACON_FREQS[1]);
-  const beacon = (toneA + toneB) * 0.5;
-  const ambient = Math.max(1e-7, rms - beacon * 0.6);
-  const signalLevelDb = 20 * Math.log10(beacon + 1e-8);
-  const snrDb = 20 * Math.log10((beacon + 1e-8) / ambient);
-  const confidence = clamp((snrDb - 1) / 18, 0, 1);
-
-  smoothedLevelDb = smoothedLevelDb === null
-    ? signalLevelDb
-    : smoothedLevelDb * 0.84 + signalLevelDb * 0.16;
-
-  const score = proximityScore(smoothedLevelDb, confidence);
-  const candidateZone = confidence < 0.12 ? 'far' : zoneFromProximity(score);
-  const zone = stabilizeZone(candidateZone);
-  const now = performance.now();
-
-  renderLocalMetrics({ signalLevelDb, smoothedLevelDb, confidence, zone });
-  updateResponseAudio({ zone, confidence, revealed: latest && latest.content && latest.content.revealed });
-
-  if (now - lastPostAt > 360) {
-    lastPostAt = now;
-    postObservation({ zone, signalLevelDb, smoothedLevelDb, confidence });
+  for (const f of HIGH_FREQS) {
+    const mag = goertzel(samples, sampleRate, f);
+    if (mag > bestHighMag) { bestHigh = f; bestHighMag = mag; }
   }
-
-  requestAnimationFrame(analyzeFrame);
+  let best = { ch: '?', err: Infinity, low: bestLow, high: bestHigh };
+  for (const row of CODEBOOK) {
+    const err = Math.abs(row.low - bestLow) + Math.abs(row.high - bestHigh);
+    if (err < best.err) best = { ch: row.ch, err, low: bestLow, high: bestHigh };
+  }
+  const confidence = Math.min(1, Math.max(0, (160 - best.err) / 160));
+  return { ...best, confidence };
 }
 
-function renderLocalMetrics(metric) {
-  els.mic.textContent = micActive ? 'active' : 'inactive';
-  els.level.textContent = `${metric.signalLevelDb.toFixed(1)} dB`;
-  els.smooth.textContent = `${metric.smoothedLevelDb.toFixed(1)} dB`;
-  els.confidence.textContent = `${Math.round(metric.confidence * 100)}%`;
-  els.confidenceBar.style.width = `${Math.round(metric.confidence * 100)}%`;
-  els.zone.textContent = zoneLabel(metric.zone);
-  els.hint.textContent = metric.confidence < 0.18 ? 'beacon below lock threshold' : 'move through the signal field';
+function charFromGap(gapMs) {
+  if (!gapMs) return '';
+  let best = { ch: '', err: Infinity, gap: 0 };
+  for (const row of CODEBOOK) {
+    const err = Math.abs(row.gap - gapMs);
+    if (err < best.err) best = { ch: row.ch, err, gap: row.gap };
+  }
+  return best.err <= 90 ? best.ch : '?';
 }
 
-async function postObservation(metric) {
-  try {
-    await fetch('/api/audio-observation', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        sourceId: SOURCE_ID,
-        micActive: true,
-        zone: metric.zone,
-        signalLevelDb: metric.signalLevelDb,
-        smoothedSignalLevelDb: metric.smoothedLevelDb,
-        confidence: metric.confidence
-      })
-    });
-  } catch (error) {
-    els.connection.textContent = 'post failed';
+function classify(text) {
+  const clean = text.trim().replace(/\\s+/g, ' ');
+  if (!clean) return { title: 'Listening', verdict: 'DEAD' };
+  if (clean.length <= 2) return { title: 'Signal fragments', verdict: 'CLOCK' };
+  const compact = clean.replace(/ /g, '');
+  for (const word of COMMON_WORDS) {
+    if (word.length >= 3 && compact.includes(word)) {
+      return { title: 'Language lock', verdict: 'ALIVE' };
+    }
   }
+  return { title: 'Structured signal', verdict: 'UNKNOWN' };
 }
 
-async function setSensingMode(mode) {
-  sensingMode = mode;
-  els.mode.textContent = mode === 'ble_audio' ? 'BLE + audio' : mode;
-  try {
-    await fetch(`/api/set-mode?mode=${encodeURIComponent(mode)}`);
-  } catch (error) {
-    els.connection.textContent = 'mode post failed';
+function appendLetter(ch, gapMs) {
+  if (gapMs > 2200 && decoded.trim().length > 0) {
+    finishCycle();
+    decoded = '';
+    rawStream = '';
   }
+  if (ch === ' ' && decoded.endsWith(' ')) return;
+  decoded += ch;
+  rawStream += ch;
+  lastDecodedAt = performance.now();
+  if (decoded.length > 42) decoded = decoded.slice(-42);
+  const state = classify(decoded);
+  els.title.textContent = state.title;
+  els.verdict.textContent = state.verdict;
+  els.decoded.textContent = decoded || '---';
+  els.stream.textContent = rawStream.slice(-96);
+  const gapChar = charFromGap(gapMs);
+  els.gap.textContent = gapMs ? `${Math.round(gapMs)} ms -> ${gapChar || '?'}` : '--';
 }
 
-async function startBleScan() {
-  if (!navigator.bluetooth || !navigator.bluetooth.requestLEScan) {
-    els.ble.innerHTML = '<span class="warn">unsupported</span>';
-    els.hint.textContent = 'this browser does not expose BLE advertisement RSSI';
-    els.body.textContent = 'BLE proximity needs Web Bluetooth LE Scan support. Use Chrome on Android with Web Bluetooth scanning enabled, or use BLE + audio/audio fallback.';
-    return false;
-  }
-  if (bleActive) return true;
-  try {
-    bleScan = await navigator.bluetooth.requestLEScan({
-      filters: [{ namePrefix: 'ALIVE' }],
-      keepRepeatedDevices: true
-    });
-    navigator.bluetooth.addEventListener('advertisementreceived', onBleAdvertisement);
-    bleActive = true;
-    els.ble.textContent = bleScan.active ? 'active' : 'requested';
-    return true;
-  } catch (error) {
-    els.ble.innerHTML = '<span class="warn">blocked</span>';
-    els.hint.textContent = 'BLE scan permission was blocked or unavailable';
-    els.body.textContent = `BLE scan could not start: ${error.message || error}`;
-    return false;
+function finishCycle() {
+  const finalText = decoded.trim();
+  if (finalText) {
+    const state = classify(finalText);
+    els.title.textContent = state.title;
+    els.verdict.textContent = state.verdict;
+    els.decoded.textContent = finalText;
+    setTimeout(() => {
+      decoded = '';
+      rawStream = '';
+      els.decoded.textContent = '---';
+      els.stream.textContent = 'waiting for next loop';
+    }, 1200);
   }
 }
 
-function onBleAdvertisement(event) {
-  if (event.name && !event.name.includes('ALIVE')) return;
-  if (typeof event.rssi !== 'number') return;
+function processChunk(input) {
+  const now = audioCtx.currentTime;
+  const levelDb = rmsDb(input);
+  lastLevelDb = lastLevelDb * 0.75 + levelDb * 0.25;
+  updateFloor(levelDb);
+  const startThreshold = Math.max(-86, noiseFloorDb + 18);
+  const endThreshold = Math.max(-94, noiseFloorDb + 10);
+  const chunkDuration = input.length / audioCtx.sampleRate;
 
-  const rawRssi = event.rssi;
-  smoothedRssi = smoothedRssi === null ? rawRssi : smoothedRssi * 0.78 + rawRssi * 0.22;
-  const confidence = bleConfidenceFromRssi(smoothedRssi);
-  const zone = stabilizeBleZone(zoneFromRssi(smoothedRssi));
-  const now = performance.now();
+  els.level.textContent = `${lastLevelDb.toFixed(1)} dB`;
 
-  els.ble.textContent = 'active';
-  els.rssi.textContent = `${rawRssi.toFixed(0)} dBm`;
-  els.rssiSmooth.textContent = `${smoothedRssi.toFixed(1)} dBm`;
-
-  if (sensingMode === 'ble') {
-    els.zone.textContent = zoneLabel(zone);
-    els.confidence.textContent = `${Math.round(confidence * 100)}%`;
-    els.confidenceBar.style.width = `${Math.round(confidence * 100)}%`;
-    updateResponseAudio({ zone, confidence, revealed: latest && latest.content && latest.content.revealed });
+  if (!inBurst && levelDb > startThreshold) {
+    inBurst = true;
+    burstSamples = [];
+    burstStartAt = now;
+    els.burst.textContent = 'capturing';
+    els.title.textContent = 'Signal detected';
   }
 
-  if (now - lastBlePostAt > 320) {
-    lastBlePostAt = now;
-    postBleObservation({ zone, rawRssi, smoothedRssi, confidence });
+  if (inBurst) {
+    burstSamples.push(...input);
+    const burstDuration = now - burstStartAt + chunkDuration;
+    if ((levelDb < endThreshold && burstDuration > 0.12) || burstDuration > 0.42) {
+      inBurst = false;
+      els.burst.textContent = 'decoding';
+      const gapMs = lastBurstEndAt ? (burstStartAt - lastBurstEndAt) * 1000 : 0;
+      lastBurstEndAt = now;
+      const result = detectLetter(burstSamples, audioCtx.sampleRate);
+      els.pair.textContent = `${result.low}/${result.high} Hz`;
+      if (result.confidence > 0.22) appendLetter(result.ch, gapMs);
+      els.burst.textContent = 'idle';
+    }
   }
-}
 
-async function postBleObservation(metric) {
-  try {
-    await fetch('/api/ble-observation', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        sourceId: SOURCE_ID,
-        bleActive: true,
-        zone: metric.zone,
-        rawRssi: metric.rawRssi,
-        smoothedRssi: metric.smoothedRssi,
-        confidence: metric.confidence
-      })
-    });
-  } catch (error) {
-    els.connection.textContent = 'BLE post failed';
+  if (!inBurst && decoded.trim().length > 0 && performance.now() - lastDecodedAt > 3000) {
+    finishCycle();
   }
 }
 
-function renderServerState(state) {
-  latest = state;
-  els.connection.textContent = state.debugSimulated ? 'debug sim' : 'live';
-  els.source.textContent = state.sourceId || SOURCE_ID;
-  els.mode.textContent = state.mode === 'ble_audio' ? 'BLE + audio' : state.mode;
-  els.reveal.textContent = state.revealZoneLabel || '--';
-  els.title.textContent = state.content.title;
-  els.body.textContent = state.content.body;
-  els.message.classList.toggle('revealed', Boolean(state.content.revealed));
-  if (!micActive || state.debugSimulated) {
-    els.zone.textContent = state.zoneLabel || '--';
-    els.level.textContent = state.signalLevelDb === null ? '--' : `${state.signalLevelDb} dB`;
-    els.smooth.textContent = state.smoothedSignalLevelDb === null ? '--' : `${state.smoothedSignalLevelDb} dB`;
-    els.rssi.textContent = state.rawRssi === null ? '--' : `${state.rawRssi} dBm`;
-    els.rssiSmooth.textContent = state.smoothedRssi === null ? '--' : `${state.smoothedRssi} dBm`;
-    els.confidence.textContent = `${Math.round((state.confidence || 0) * 100)}%`;
-    els.confidenceBar.style.width = `${Math.round((state.confidence || 0) * 100)}%`;
-    els.mic.textContent = state.micActive ? 'active' : 'inactive';
-    els.ble.textContent = state.bleActive ? 'active' : 'inactive';
-  }
-  updateResponseAudio({
-    zone: state.zone || stableZone,
-    confidence: state.confidence || 0,
-    revealed: state.content && state.content.revealed
-  });
-}
-
-function connectEvents() {
-  const events = new EventSource('/events');
-  events.onopen = () => { els.connection.textContent = 'live'; };
-  events.onerror = () => { els.connection.textContent = 'reconnecting'; };
-  events.onmessage = event => renderServerState(JSON.parse(event.data));
-}
-
-async function startAudioSensing() {
-  if (micActive) return true;
+async function startTranslator() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false
-      }
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
-    analysisCtx = new AudioContext();
-    const source = analysisCtx.createMediaStreamSource(stream);
-    analyser = new AnalyserNode(analysisCtx, { fftSize: 4096, smoothingTimeConstant: 0 });
-    source.connect(analyser);
-    samples = new Float32Array(analyser.fftSize);
+    audioCtx = new AudioContext();
+    const source = audioCtx.createMediaStreamSource(stream);
+    processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    const silent = audioCtx.createGain();
+    silent.gain.value = 0;
+    processor.onaudioprocess = event => processChunk(event.inputBuffer.getChannelData(0));
+    source.connect(processor);
+    processor.connect(silent).connect(audioCtx.destination);
+    await audioCtx.resume();
     micActive = true;
     els.mic.textContent = 'active';
-    await analysisCtx.resume();
-    analyzeFrame();
-    return true;
+    els.start.textContent = 'Translator active';
+    els.title.textContent = 'Listening';
+    els.verdict.textContent = 'DEAD';
   } catch (error) {
-    els.mic.innerHTML = '<span class="warn">blocked</span>';
-    els.hint.textContent = 'microphone permission or HTTPS is required';
-    els.body.textContent = `Microphone could not start: ${error.message || error}`;
-    return false;
+    els.mic.textContent = 'blocked';
+    els.title.textContent = 'Microphone blocked';
+    els.stream.textContent = error.message || String(error);
   }
 }
 
-els.startBle.addEventListener('click', async () => {
-  await setSensingMode('ble');
-  const ok = await startBleScan();
-  els.startBle.textContent = ok ? 'BLE-only active' : 'BLE-only unavailable';
+els.start.addEventListener('click', startTranslator);
+els.reset.addEventListener('click', () => {
+  decoded = '';
+  rawStream = '';
+  els.decoded.textContent = '---';
+  els.stream.textContent = 'decoded stream cleared';
+  els.title.textContent = micActive ? 'Listening' : 'Receiver idle';
+  els.verdict.textContent = 'DEAD';
 });
-
-els.startBleAudio.addEventListener('click', async () => {
-  await setSensingMode('ble_audio');
-  const bleOk = await startBleScan();
-  const audioOk = await startAudioSensing();
-  els.startBleAudio.textContent = bleOk && audioOk ? 'BLE + audio active' : 'BLE + audio partially active';
-});
-
-els.audio.addEventListener('click', async () => {
-  responseCtx = responseCtx || new AudioContext();
-  if (!osc) {
-    osc = new OscillatorNode(responseCtx, { type: 'sine', frequency: 135 });
-    gain = new GainNode(responseCtx, { gain: 0 });
-    osc.connect(gain).connect(responseCtx.destination);
-    osc.start();
-  }
-  await responseCtx.resume();
-  els.audio.textContent = 'Phone response audio enabled';
-  updateResponseAudio({ zone: stableZone, confidence: latest ? latest.confidence : 0, revealed: latest && latest.content && latest.content.revealed });
-});
-
-function updateResponseAudio(state) {
-  if (!responseCtx || !osc || !gain || !state || !state.zone) return;
-  const revealed = state.revealed;
-  const zone = state.zone;
-  const freq = revealed ? 622 : { close: 440, near: 330, mid: 220, far: 135 }[zone];
-  const volume = revealed ? 0.12 : { close: 0.075, near: 0.052, mid: 0.032, far: 0.012 }[zone] * clamp(state.confidence + 0.2, 0.15, 1);
-  osc.frequency.setTargetAtTime(freq, responseCtx.currentTime, 0.08);
-  gain.gain.setTargetAtTime(volume, responseCtx.currentTime, 0.12);
-}
 
 connectEvents();
 </script>
@@ -640,175 +443,47 @@ connectEvents();
 
 
 class DemoState:
-    def __init__(
-        self,
-        source_id: str,
-        reveal_zone: Zone,
-        debug_sim: bool,
-        sensing_mode: str,
-    ) -> None:
-        self.source_id = source_id
-        self.reveal_zone = reveal_zone
-        self.debug_sim = debug_sim
-        self.sensing_mode = sensing_mode
-        self.simulated_zone = Zone.FAR
-        self.audio_zone: Zone | None = None
-        self.signal_level_db: float | None = None
-        self.smoothed_signal_level_db: float | None = None
-        self.audio_confidence = 0.0
-        self.mic_active = False
-        self.last_audio_observation_at = 0.0
-        self.ble_zone: Zone | None = None
-        self.raw_rssi: float | None = None
-        self.smoothed_rssi: float | None = None
-        self.ble_confidence = 0.0
-        self.ble_active = False
-        self.last_ble_observation_at = 0.0
-        self.lock = threading.Lock()
+    def __init__(self, player: LoopingMessagePlayer) -> None:
+        self.player = player
         self.running = True
 
-    def set_audio_observation(
-        self,
-        zone: Zone,
-        signal_level_db: float,
-        smoothed_signal_level_db: float,
-        confidence: float,
-        mic_active: bool = True,
-    ) -> None:
-        with self.lock:
-            self.audio_zone = zone
-            self.signal_level_db = signal_level_db
-            self.smoothed_signal_level_db = smoothed_signal_level_db
-            self.audio_confidence = max(0.0, min(1.0, confidence))
-            self.mic_active = mic_active
-            self.last_audio_observation_at = time.monotonic()
-
-    def set_ble_observation(
-        self,
-        zone: Zone,
-        raw_rssi: float,
-        smoothed_rssi: float,
-        confidence: float,
-        ble_active: bool = True,
-    ) -> None:
-        with self.lock:
-            self.ble_zone = zone
-            self.raw_rssi = raw_rssi
-            self.smoothed_rssi = smoothed_rssi
-            self.ble_confidence = max(0.0, min(1.0, confidence))
-            self.ble_active = ble_active
-            self.last_ble_observation_at = time.monotonic()
-
-    def set_sensing_mode(self, mode: str) -> None:
-        if mode not in {"audio", "ble", "ble_audio"}:
-            raise ValueError("mode must be audio, ble, or ble_audio")
-        with self.lock:
-            self.sensing_mode = mode
-
-    def set_simulated_zone(self, zone: Zone) -> None:
-        with self.lock:
-            self.simulated_zone = zone
-
-    def set_reveal_zone(self, zone: Zone) -> None:
-        with self.lock:
-            self.reveal_zone = zone
-
     def snapshot(self) -> dict[str, object]:
-        with self.lock:
-            now = time.monotonic()
-            audio_stale = now - self.last_audio_observation_at > 2.5
-            ble_stale = now - self.last_ble_observation_at > 3.5
-            mic_active = self.mic_active and not audio_stale
-            ble_active = self.ble_active and not ble_stale
-            audio_zone = self.audio_zone if mic_active else None
-            ble_zone = self.ble_zone if ble_active else None
-            audio_confidence = self.audio_confidence if mic_active else 0.0
-            ble_confidence = self.ble_confidence if ble_active else 0.0
-
-            if self.sensing_mode == "ble":
-                snapshot = snapshot_for_ble_observation(
-                    self.source_id,
-                    ble_zone,
-                    self.raw_rssi if ble_active else None,
-                    self.smoothed_rssi if ble_active else None,
-                    ble_confidence,
-                    ble_active,
-                    self.reveal_zone,
-                )
-            elif self.sensing_mode == "ble_audio":
-                zone, confidence = self._fused_zone(
-                    ble_zone,
-                    ble_confidence,
-                    audio_zone,
-                    audio_confidence,
-                )
-                snapshot = snapshot_for_fused_observation(
-                    source_id=self.source_id,
-                    zone=zone,
-                    confidence=confidence,
-                    reveal_zone=self.reveal_zone,
-                    ble_active=ble_active,
-                    mic_active=mic_active,
-                    raw_rssi=self.raw_rssi if ble_active else None,
-                    smoothed_rssi=self.smoothed_rssi if ble_active else None,
-                    signal_level_db=self.signal_level_db if mic_active else None,
-                    smoothed_signal_level_db=self.smoothed_signal_level_db
-                    if mic_active
-                    else None,
-                    ble_confidence=ble_confidence,
-                    audio_confidence=audio_confidence,
-                )
-            else:
-                snapshot = snapshot_for_audio_observation(
-                    self.source_id,
-                    audio_zone,
-                    self.signal_level_db if mic_active else None,
-                    self.smoothed_signal_level_db if mic_active else None,
-                    audio_confidence,
-                    mic_active,
-                    self.reveal_zone,
-                )
-            snapshot["debugSimulated"] = self.debug_sim
-            snapshot["simulatedZone"] = self.simulated_zone.value
-            snapshot["simulatedZoneLabel"] = ZONE_LABELS[self.simulated_zone]
-            return snapshot
-
-    def _fused_zone(
-        self,
-        ble_zone: Zone | None,
-        ble_confidence: float,
-        audio_zone: Zone | None,
-        audio_confidence: float,
-    ) -> tuple[Zone | None, float]:
-        weighted_score = 0.0
-        weight = 0.0
-        if ble_zone is not None and ble_confidence >= 0.12:
-            ble_weight = max(0.2, ble_confidence) * 1.15
-            weighted_score += zone_score(ble_zone) * ble_weight
-            weight += ble_weight
-        if audio_zone is not None and audio_confidence >= 0.12:
-            audio_weight = max(0.2, audio_confidence)
-            weighted_score += zone_score(audio_zone) * audio_weight
-            weight += audio_weight
-        if weight == 0.0:
-            return None, 0.0
-        confidence = min(1.0, weight / 1.7)
-        return zone_from_score(weighted_score / weight), confidence
+        return self.player.snapshot()
 
 
-def make_phone_html(source_id: str, sensing_mode: str) -> str:
+def make_phone_html() -> str:
+    entries = [
+        {"ch": ch, "low": low, "high": high, "gap": GAP_MAP[ch]}
+        for ch, (low, high) in FREQ_MAP.items()
+    ]
+    demo_words = {
+        "ALIVE",
+        "ARE",
+        "DEMO",
+        "DISCOVER",
+        "EARTH",
+        "HELLO",
+        "HERE",
+        "LANGUAGE",
+        "MESSAGE",
+        "SIGNAL",
+        "STILL",
+        "TRANSLATE",
+        "WE",
+        "WORLD",
+    }
+    words = sorted(demo_words | {word for word in COMMON_WORDS if 3 <= len(word) <= 8})
     return (
-        PHONE_HTML.replace("__SOURCE_ID__", source_id)
-        .replace("__SENSING_MODE__", sensing_mode)
-        .replace("__BEACON_FREQS__", json.dumps([round(freq) for freq in BEACON_FREQS]))
+        PHONE_HTML.replace("__CODEBOOK__", json.dumps(entries))
+        .replace("__COMMON_WORDS__", json.dumps(words))
     )
 
 
 def make_handler(state: DemoState):
-    phone_html = make_phone_html(state.source_id, state.sensing_mode)
+    phone_html = make_phone_html()
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "ALIVEDemo/0.2"
+        server_version = "ALIVETranslator/0.3"
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -818,78 +493,26 @@ def make_handler(state: DemoState):
             if parsed.path == "/api/state":
                 self._send_json(state.snapshot())
                 return
-            if parsed.path == "/api/set-zone":
-                self._handle_set_zone(parsed.query, reveal=False)
-                return
-            if parsed.path == "/api/set-reveal-zone":
-                self._handle_set_zone(parsed.query, reveal=True)
-                return
-            if parsed.path == "/api/set-mode":
-                self._handle_set_mode(parsed.query)
+            if parsed.path == "/api/configure":
+                self._handle_configure(parsed.query)
                 return
             if parsed.path == "/events":
                 self._events()
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
-        def do_POST(self) -> None:
-            parsed = urlparse(self.path)
-            if parsed.path == "/api/audio-observation":
-                self._handle_audio_observation()
-                return
-            if parsed.path == "/api/ble-observation":
-                self._handle_ble_observation()
-                return
-            self.send_error(HTTPStatus.NOT_FOUND)
-
-        def _handle_audio_observation(self) -> None:
-            length = int(self.headers.get("content-length", "0"))
-            body = self.rfile.read(length)
-            try:
-                payload = json.loads(body.decode("utf-8"))
-                zone = parse_zone(str(payload["zone"]))
-                state.set_audio_observation(
-                    zone=zone,
-                    signal_level_db=float(payload["signalLevelDb"]),
-                    smoothed_signal_level_db=float(payload["smoothedSignalLevelDb"]),
-                    confidence=float(payload["confidence"]),
-                    mic_active=bool(payload.get("micActive", True)),
-                )
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-                self.send_error(HTTPStatus.BAD_REQUEST)
-                return
-            self._send_json({"ok": True})
-
-        def _handle_ble_observation(self) -> None:
-            length = int(self.headers.get("content-length", "0"))
-            body = self.rfile.read(length)
-            try:
-                payload = json.loads(body.decode("utf-8"))
-                zone = parse_zone(str(payload["zone"]))
-                state.set_ble_observation(
-                    zone=zone,
-                    raw_rssi=float(payload["rawRssi"]),
-                    smoothed_rssi=float(payload["smoothedRssi"]),
-                    confidence=float(payload["confidence"]),
-                    ble_active=bool(payload.get("bleActive", True)),
-                )
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-                self.send_error(HTTPStatus.BAD_REQUEST)
-                return
-            self._send_json({"ok": True})
-
-        def _handle_set_mode(self, query: str) -> None:
-            params = parse_qs(query)
-            mode = params.get("mode", [""])[0]
-            try:
-                state.set_sensing_mode(mode)
-            except ValueError as exc:
-                self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
-                return
-            self._send_json(state.snapshot())
-
         def log_message(self, format: str, *args: object) -> None:
             return
+
+        def _handle_configure(self, query: str) -> None:
+            params = parse_qs(query)
+            message = params.get("message", [None])[0]
+            mode = params.get("mode", [None])[0]
+            if mode is not None and mode not in VALID_MODES:
+                self.send_error(HTTPStatus.BAD_REQUEST, "mode must be laser, horn, or vocal")
+                return
+            state.player.configure(message=message, mode=mode)
+            self._send_json(state.snapshot())
 
         def _send_text(self, text: str, content_type: str) -> None:
             data = text.encode("utf-8")
@@ -901,25 +524,6 @@ def make_handler(state: DemoState):
 
         def _send_json(self, payload: dict[str, object]) -> None:
             self._send_text(json.dumps(payload), "application/json")
-
-        def _handle_set_zone(self, query: str, reveal: bool) -> None:
-            params = parse_qs(query)
-            try:
-                zone = parse_zone(params.get("zone", [""])[0])
-            except ValueError as exc:
-                self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
-                return
-            if reveal:
-                state.set_reveal_zone(zone)
-            elif state.debug_sim:
-                state.set_simulated_zone(zone)
-            else:
-                self.send_error(
-                    HTTPStatus.BAD_REQUEST,
-                    "zone simulation is only available with --debug-sim",
-                )
-                return
-            self._send_json(state.snapshot())
 
         def _events(self) -> None:
             self.send_response(HTTPStatus.OK)
@@ -934,7 +538,7 @@ def make_handler(state: DemoState):
                     self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError):
                     break
-                time.sleep(0.25)
+                time.sleep(0.5)
 
     return Handler
 
@@ -971,7 +575,6 @@ def ensure_self_signed_cert(ip_address: str) -> tuple[Path, Path] | None:
         ),
         encoding="utf-8",
     )
-
     try:
         subprocess.run(
             [
@@ -1011,16 +614,6 @@ def apply_https(server: ThreadingHTTPServer, ip_address: str) -> bool:
     return True
 
 
-def simulator_loop(state: DemoState) -> None:
-    while state.running:
-        with state.lock:
-            zone = state.simulated_zone
-        base = SIGNAL_LEVEL_DB[zone]
-        level = base + random.uniform(-3.0, 3.0)
-        state.set_audio_observation(zone, level, level, 0.95, mic_active=True)
-        time.sleep(0.35)
-
-
 def print_qr_hint(url: str) -> None:
     try:
         from simple_qr import terminal_qr
@@ -1031,12 +624,10 @@ def print_qr_hint(url: str) -> None:
 
 
 def controller_loop(state: DemoState) -> None:
-    commands = ", ".join(zone.value for zone in ZONE_ORDER)
     print("\nLive controls:")
-    print(f"  reveal <{commands}>    choose the meaningful-message zone")
-    if state.debug_sim:
-        print(f"  zone <{commands}>      debug: simulate phone proximity")
-    print("  status                  show current state")
+    print("  message <text>          change encoded message")
+    print("  mode <laser|horn|vocal> change sender sound style")
+    print("  status                  show current sender state")
     print("  quit                    stop the server\n")
     while state.running:
         try:
@@ -1050,103 +641,67 @@ def controller_loop(state: DemoState) -> None:
             break
         if not raw:
             continue
-        parts = raw.split()
-        cmd = parts[0].lower()
-        try:
-            if cmd in {"quit", "exit"}:
-                state.running = False
-            elif cmd == "status":
-                print(json.dumps(state.snapshot(), indent=2))
-            elif cmd == "zone" and len(parts) >= 2:
-                if not state.debug_sim:
-                    print("[debug] zone simulation requires --debug-sim")
-                    continue
-                zone = parse_zone(" ".join(parts[1:]))
-                state.set_simulated_zone(zone)
-                print(f"[debug] simulated zone -> {ZONE_LABELS[zone]}")
-            elif cmd == "reveal" and len(parts) >= 2:
-                zone = parse_zone(" ".join(parts[1:]))
-                state.set_reveal_zone(zone)
-                print(f"[demo] meaningful message zone -> {ZONE_LABELS[zone]}")
+        command, _, value = raw.partition(" ")
+        command = command.lower()
+        if command in {"quit", "exit"}:
+            state.running = False
+        elif command == "status":
+            print(json.dumps(state.snapshot(), indent=2))
+        elif command == "message" and value.strip():
+            cleaned = sanitize_message(value)
+            if cleaned:
+                state.player.configure(message=cleaned)
             else:
-                print("Unknown command. Try: reveal mid, status, quit")
-        except ValueError as exc:
-            print(f"[error] {exc}")
+                print("[error] message must contain A-Z or spaces")
+        elif command == "mode" and value.strip():
+            mode = value.strip().lower()
+            if mode in VALID_MODES:
+                state.player.configure(mode=mode)
+            else:
+                print("[error] mode must be laser, horn, or vocal")
+        else:
+            print("Unknown command. Try: message HELLO WORLD, mode vocal, status, quit")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="ALIVE single-source phone demo server")
+    parser = argparse.ArgumentParser(description="ALIVE audio-codebook translator demo")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--source-id", default="ALIVE-T480")
-    parser.add_argument("--reveal-zone", default="close")
-    parser.add_argument(
-        "--sensing-mode",
-        choices=["ble", "ble_audio", "audio"],
-        default="ble_audio",
-        help="Initial phone sensing mode",
-    )
+    parser.add_argument("--message", default=DEFAULT_MESSAGE)
+    parser.add_argument("--mode", choices=VALID_MODES, default="laser")
     parser.add_argument("--http", action="store_true", help="Use HTTP instead of local HTTPS")
-    parser.add_argument("--debug-sim", action="store_true", help="Enable terminal zone simulation fallback")
-    parser.add_argument("--no-audio-beacon", action="store_true", help="Do not emit the laptop audio beacon")
-    parser.add_argument("--no-ble-advertising", action="store_true", help="Do not advertise over BlueZ BLE")
     args = parser.parse_args()
 
-    try:
-        reveal_zone = parse_zone(args.reveal_zone)
-    except ValueError as exc:
-        print(exc, file=sys.stderr)
-        return 2
-
+    player = LoopingMessagePlayer(args.message, args.mode)
+    state = DemoState(player)
     ip = local_ip()
-    state = DemoState(
-        source_id=args.source_id,
-        reveal_zone=reveal_zone,
-        debug_sim=args.debug_sim,
-        sensing_mode=args.sensing_mode,
-    )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(state))
     https_active = False
     if not args.http:
         https_active = apply_https(server, ip)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-
-    beacon = AudioBeacon()
-    beacon_active = False
-    if not args.no_audio_beacon:
-        beacon_active = beacon.start()
-
-    ble_advertiser = BLEAdvertiser(local_name=args.source_id)
-    ble_active = False
-    if not args.no_ble_advertising:
-        ble_active = ble_advertiser.start()
-
-    if args.debug_sim:
-        threading.Thread(target=simulator_loop, args=(state,), daemon=True).start()
+    audio_active = player.start()
 
     scheme = "https" if https_active else "http"
     url = f"{scheme}://{ip}:{args.port}/"
     print("=" * 56)
-    print("ALIVE single-source BLE/audio demo")
+    print("ALIVE audio-codebook translator demo")
     print("=" * 56)
     print(f"Phone URL: {url}")
-    print(f"Source ID: {args.source_id}")
-    print(f"Initial sensing mode: {args.sensing_mode}")
-    print(f"Meaningful message starts in: {ZONE_LABELS[reveal_zone]}")
-    print(f"BLE advertising: {'active' if ble_active else 'unavailable'}")
-    print(f"Audio beacon: {'active' if beacon_active else 'unavailable'}")
-    if not https_active:
-        print("[HTTPS] HTTP mode is active. Phone microphone access may be blocked.")
-    else:
+    print(f"Encoded message: {player.message}")
+    print(f"Sound style: {player.mode}")
+    print(f"Audio loop: {'active' if audio_active else 'unavailable'}")
+    if https_active:
         print("[HTTPS] The phone may show a certificate warning; accept it for the local demo.")
+    else:
+        print("[HTTPS] HTTP mode is active. Phone microphone access may be blocked.")
     print_qr_hint(url)
 
     try:
         controller_loop(state)
     finally:
         state.running = False
-        beacon.stop()
-        ble_advertiser.stop()
+        player.stop()
         server.shutdown()
         server.server_close()
     return 0

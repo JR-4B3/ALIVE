@@ -1,110 +1,80 @@
 # ALIVE Demo
 
-This repository now contains two layers:
+Default demo: the laptop continuously plays an encoded audio message, and the phone acts as a live translator.
 
-- `demo_server.py` + `ble_advertiser.py` + `audio_beacon.py` + `experience_model.py` — the current single-source museum prototype. It models the new loop: laptop BLE/audio beacon -> phone sensing -> smoothed 4-zone state -> phone-side content and audio behavior.
-- `base_demo.py` + `codebook.py` — the old SETI-inspired audio demo. It is still runnable, but it should be treated as legacy/reference material rather than the architecture for the next version.
+BLE/proximity experiments are not the primary demo path now. BLE browser scanning was too unreliable for tomorrow, and dB-based distance was not stable enough. The robust flow is:
 
-## Museum phone demo
+```text
+laptop encoded audio loop -> phone microphone -> codebook FFT decode -> translated message
+```
 
-Run the temporary single-source demo from the T480:
+## Run The Demo
 
 ```bash
 python demo_server.py
 ```
 
-The server starts BLE advertising and a continuous laptop audio beacon, prints a phone URL, and shows a terminal QR code. Put the phone on the same network as the laptop, scan the QR code, accept the local HTTPS warning if shown, and choose one phone mode:
+The server:
 
-- **Start BLE only** — phone scans BLE advertisements and estimates proximity from RSSI.
-- **Start BLE + audio** — phone scans BLE RSSI and also listens for the laptop audio beacon, then fuses both estimates.
+- starts a continuous encoded message loop on the laptop speaker
+- uses the legacy dual-tone frequency codebook and gap timing
+- serves the phone translator page
+- prints a phone URL and terminal QR code
 
-Move the phone closer to or farther from the laptop to change the detected zone.
+On the phone:
 
-Use the live controller only to move the message target zone during the presentation:
+1. Scan the QR code.
+2. Accept the local HTTPS warning if shown.
+3. Tap **Start translator**.
+4. Hold the phone near the laptop audio.
+5. Watch the decoded text reveal letter by letter.
+
+## Live Controls
+
+While the server is running:
 
 ```text
-reveal mid          # move the meaningful message to the mid zone
-reveal close
+message WE ARE STILL HERE
+mode laser
+mode horn
+mode vocal
 status
 quit
 ```
 
-Terminal proximity simulation is now an explicit fallback:
+The three modes are the original sound styles from the legacy demo: `laser`, `horn`, and `vocal`.
+
+## Useful Flags
 
 ```bash
-python demo_server.py --debug-sim
+python demo_server.py --message "HELLO WORLD" --mode vocal
+python demo_server.py --http
 ```
 
-In that mode, `zone mid`, `zone far`, etc. can still drive the state manually. The default path is BLE + audio sensing from the phone, posted to `/api/ble-observation` and `/api/audio-observation`.
+Phone microphone access usually requires HTTPS. `--http` is only for local desktop testing.
 
-BLE note: this needs browser support for Web Bluetooth LE Scan RSSI. If the phone browser does not expose `navigator.bluetooth.requestLEScan`, the page will report BLE as unsupported. Chrome on Android is the most likely browser to work; iOS Safari is unlikely to support this path.
+## Current Architecture
 
-### Current architecture notes
+- `demo_server.py` serves the one-page phone translator UI and controls the live demo.
+- `legacy_audio_loop.py` generates and loops the encoded laptop audio using the legacy codebook.
+- `codebook.py` contains the frequency pairs, gap map, and language helper data.
+- `base_demo.py` remains the old Python-only SETI-inspired sender/receiver demo.
+- `ble_advertiser.py`, `audio_beacon.py`, and `experience_model.py` are retained from the BLE/proximity prototype, but they are not the default demo path.
 
-- App structure: a small Python project with no frontend build step. `demo_server.py` serves the phone HTML/CSS/JS and exposes live JSON/SSE endpoints. `ble_advertiser.py` owns the laptop BLE advertisement. `audio_beacon.py` owns the laptop speaker emitter. `experience_model.py` contains reusable source, smoothing, zone, selection, BLE/audio observation, and content mapping logic. `base_demo.py`, `codebook.py`, and `test_demo.py` are the legacy audio demo.
-- Message/audio/signal pipeline, new path: the laptop advertises `ALIVE-T480` over BLE and emits a continuous two-tone audio beacon. In BLE-only mode, the phone smooths advertisement RSSI and maps it into `close`, `near`, `mid`, or `far`. In BLE+audio mode, the phone also estimates beacon tone strength and the server fuses BLE and audio zones. The selected zone plus `reveal_zone` decides whether the message is revealed. Phone response audio is controlled by app state and is not the message carrier.
-- Temporal/frequency encoding, old path: `base_demo.py::encode` maps typed text into bursts; `codebook.py::FREQ_MAP` defines dual frequency pairs; `codebook.py::GAP_MAP` defines timing gaps.
-- Decoding, old path: `base_demo.py::find_bursts`, `detect_letter_from_burst`, and `decode` perform burst detection, FFT extraction, gap decoding, and redundancy merge.
-- Old SETI-inspired/demo-only parts: `codebook.py` frequency/gap alphabet, `COMMON_WORDS`, `COMMON_BIGRAMS`, `is_plausible_text`, and `base_demo.py::classify_signal` implement the old `NOISE/CLOCK/GIBBERISH/LANGUAGE` story.
-- Obsolete for the new direction: gibberish detection, full-message audio decoding, gap redundancy, and the language/dead classifier should not be part of the museum interaction core.
-- Reusable: the old burst textures in `make_burst` can inspire sound design, and `plot_signal` can remain useful for presentation visuals. The tests show the legacy path still works.
-- Refactor first: keep the old audio demo behind a `legacy_` boundary, then make real BLE observation ingestion another input adapter for `experience_model.py`.
-
-## Quickstart (with uv)
+## Tests
 
 ```bash
-# 1. Make sure uv is installed (https://docs.astral.sh/uv/)
-# 2. Inside this directory:
-uv venv
-uv pip install -r requirements.txt
-
-# 3. Run tests (no audio output needed)
-uv run python test_experience_model.py
-uv run python test_demo.py
-
-# 4. Run the museum phone demo with laptop audio beacon
-uv run python demo_server.py
-
-# Optional: force initial mode
-uv run python demo_server.py --sensing-mode ble
-uv run python demo_server.py --sensing-mode ble_audio
-
-# 5. Run the legacy interactive audio demo (default = laser)
-uv run python base_demo.py
-
-# 6. Legacy spectrogram window + horn or vocal style
-uv run python base_demo.py --show-plot --horn
-uv run python base_demo.py --show-plot --vocal
+python test_demo.py
+python test_experience_model.py
 ```
 
-## Command-line flags
+`test_demo.py` verifies the legacy encoded audio pipeline. `test_experience_model.py` verifies the retained source/zone model.
 
-- `--show-plot` — show spectrogram window (non-blocking, press Enter to continue)
-- `--laser` — quiet high laser psst tone with subtle noise (**default**)
-- `--horn` — powerful metallic aggressive horn burst
-- `--vocal` — deep growl, vocal-like syllable
+## Audio Requirements
 
-## System requirement for audio playback
+Laptop playback uses `sounddevice`, which needs PortAudio:
 
-`sounddevice` needs the PortAudio library:
-- **Debian/Ubuntu:** `sudo apt-get install libportaudio2`
 - **Fedora/Nobara:** `sudo dnf install portaudio`
+- **Debian/Ubuntu:** `sudo apt-get install libportaudio2`
 - **macOS:** usually pre-installed
 - **Windows:** usually works out of the box
-
-If PortAudio is missing, `base_demo.py` will still run but skip audio playback and show:
-`[SENDER] Audio output unavailable (sounddevice/PortAudio missing).`
-
-## Files
-
-- `audio_beacon.py` — laptop-side continuous two-tone audio beacon emitter
-- `ble_advertiser.py` — laptop-side BlueZ BLE advertisement emitter
-- `experience_model.py` — source ID, RSSI smoothing, 4-zone classification, stable source selection, and zone-to-content mapping
-- `demo_server.py` — single-source T480 demo server, phone BLE/audio UI, live controller, JSON/SSE endpoints
-- `simple_qr.py` — dependency-free QR helper used by the demo server
-- `test_experience_model.py` — headless tests for the new source/zone model
-- `codebook.py` — dual-tone frequency map, gap map, word dictionary, and gibberish detector
-- `base_demo.py` — sender (Horn/Laser/Vocal bursts with embedded dual-tone carriers) + receiver (RMS burst detection, FFT peak extraction, redundancy check, 4-state classifier)
-- `test_demo.py` — legacy headless audio tests (no sound, no matplotlib popup)
-- `transmission_spectrogram.png` — saved visualization after each run
-- `HOW_IT_WORKS.md` — technical documentation
