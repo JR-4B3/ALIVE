@@ -13,11 +13,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from codebook import COMMON_WORDS, FREQ_MAP, GAP_MAP
+from codebook import COMMON_WORDS, FREQ_MAP
 from legacy_audio_loop import (
     LoopingMessagePlayer,
     VALID_MODES,
     VALID_SIGNAL_TYPES,
+    encoded_gap_ms,
     sanitize_message,
 )
 
@@ -214,7 +215,7 @@ const CODEBOOK = __CODEBOOK__;
 const COMMON_WORDS = new Set(__COMMON_WORDS__);
 const LOW_FREQS = [400, 500, 600, 700, 800, 900, 1000];
 const HIGH_FREQS = [2000, 2300, 2600, 2900];
-const END_PAIR = { low: 1000, high: 2900 };
+const MIC_CALIBRATION_MS = 1200;
 const els = {
   server: document.querySelector('#server'),
   level: document.querySelector('#level'),
@@ -234,17 +235,29 @@ let sourceNode = null;
 let processor = null;
 let silentNode = null;
 let micActive = false;
-let noiseFloorDb = -110;
+let noiseFloorDb = -65;
+let calibrationUntil = 0;
+let calibrationLevels = [];
 let inBurst = false;
 let burstSamples = [];
 let burstStartAt = 0;
 let lastBurstEndAt = 0;
 let decoded = '';
 let rawStream = '';
+let pendingLetter = null;
 let recentGaps = [];
 let lastLevelDb = -120;
 let lastDecodedAt = 0;
 let lastFinalText = '';
+let cycleTimer = null;
+let pendingTimer = null;
+let serverDurationMs = 0;
+let serverRevision = null;
+let serverCycle = null;
+let serverSignal = 'language';
+let serverActive = false;
+let decoderArmed = false;
+let sawServerState = false;
 
 function connectEvents() {
   const events = new EventSource('/events');
@@ -252,7 +265,42 @@ function connectEvents() {
   events.onerror = () => { els.server.textContent = 'reconnecting'; };
   events.onmessage = event => {
     const state = JSON.parse(event.data);
-    els.server.textContent = state.signal === 'language' ? 'live' : state.signal;
+    const firstState = !sawServerState;
+    sawServerState = true;
+    const wasActive = serverActive;
+    serverSignal = state.signal;
+    serverActive = Boolean(state.active);
+    serverDurationMs = Math.max(0, (Number(state.duration) || 0) * 1000);
+    els.server.textContent = !serverActive ? 'stopped' : state.signal === 'language' ? 'live' : state.signal;
+    if (serverRevision === null) {
+      serverRevision = state.revision;
+    } else if (state.revision !== serverRevision) {
+      serverRevision = state.revision;
+      resetDecoder('sender reset');
+      decoderArmed = serverActive && state.signal === 'language';
+    }
+    if (serverCycle === null) {
+      serverCycle = state.cycle;
+      decoderArmed = false;
+    } else if (state.cycle !== serverCycle) {
+      serverCycle = state.cycle;
+      resetDecoder('signal done');
+      decoderArmed = state.signal === 'language';
+    }
+    if (!firstState && !wasActive && serverActive) {
+      resetDecoder('sender started');
+      decoderArmed = state.signal === 'language';
+    }
+    if (!serverActive && (decoded || rawStream || pendingLetter)) {
+      resetDecoder('sender stopped');
+      decoderArmed = false;
+    }
+    if (state.signal !== 'language' && (decoded || rawStream || pendingLetter)) {
+      resetDecoder(`${state.signal} signal`);
+    }
+    if (serverActive && state.signal !== 'language') {
+      displayNonLanguageSignal(state.signal);
+    }
   };
 }
 
@@ -260,6 +308,13 @@ function rmsDb(samples) {
   let sum = 0;
   for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
   return 20 * Math.log10(Math.sqrt(sum / samples.length) + 1e-8);
+}
+
+function percentile(values, ratio) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * ratio)));
+  return sorted[idx];
 }
 
 function updateFloor(levelDb) {
@@ -313,16 +368,12 @@ function detectLetter(samples, sampleRate) {
     const err = Math.abs(row.low - bestLow) + Math.abs(row.high - bestHigh);
     if (err < best.err) best = { ch: row.ch, err, low: bestLow, high: bestHigh };
   }
-  const endErr = Math.abs(END_PAIR.low - bestLow) + Math.abs(END_PAIR.high - bestHigh);
-  if (endErr <= 90) {
-    return { ch: '<END>', err: endErr, low: bestLow, high: bestHigh, confidence: 1 };
-  }
   const confidence = Math.min(1, Math.max(0, (160 - best.err) / 160));
   return { ...best, confidence };
 }
 
 function isPeriodic(gaps) {
-  const usable = gaps.filter(gap => gap > 80 && gap < 1800).slice(-5);
+  const usable = gaps.filter(gap => gap > 80 && gap < 1300).slice(-5);
   if (usable.length < 3) return false;
   return Math.max(...usable) - Math.min(...usable) <= 90;
 }
@@ -341,12 +392,51 @@ function classify(text, gaps = recentGaps) {
   return { title: 'Structured signal', verdict: 'UNKNOWN' };
 }
 
-function appendLetter(ch, gapMs) {
-  if (gapMs > 2200 && decoded.trim().length > 0) {
-    finishCycle();
-    decoded = '';
-    rawStream = '';
+function gapToChar(gapMs) {
+  if (!gapMs || gapMs <= 0 || gapMs > 1300) return null;
+  let best = null;
+  for (const row of CODEBOOK) {
+    const err = Math.abs(row.gap - gapMs);
+    if (!best || err < best.err) best = { ch: row.ch, err };
   }
+  if (!best) return null;
+  const tolerance = best.ch === ' ' ? 180 : 135;
+  return best.err <= tolerance ? best : null;
+}
+
+function gapForChar(ch) {
+  const row = CODEBOOK.find(entry => entry.ch === ch);
+  return row ? row.gap : null;
+}
+
+function isCycleBoundaryGap(gapMs) {
+  return gapMs > 1400;
+}
+
+function clearPendingTimer() {
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    pendingTimer = null;
+  }
+}
+
+function armPendingTimer(result) {
+  clearPendingTimer();
+  const expectedGap = gapForChar(result.ch) || 500;
+  pendingTimer = setTimeout(() => {
+    if (pendingLetter === result) commitPending(0);
+  }, Math.max(350, expectedGap + 250));
+}
+
+function armCycleTimer() {
+  if (cycleTimer) clearTimeout(cycleTimer);
+  if (serverSignal !== 'language' || serverDurationMs <= 0) return;
+  cycleTimer = setTimeout(() => {
+    if (decoded.trim().length > 0 || pendingLetter) finishCycle();
+  }, serverDurationMs + 450);
+}
+
+function commitLetter(ch, gapMs) {
   if (ch === ' ' && decoded.endsWith(' ')) return;
   if (gapMs > 0) {
     recentGaps.push(gapMs);
@@ -355,7 +445,7 @@ function appendLetter(ch, gapMs) {
   decoded += ch;
   rawStream += ch;
   lastDecodedAt = performance.now();
-  if (decoded.length > 42) decoded = decoded.slice(-42);
+  if (decoded.length > 120) decoded = decoded.slice(-120);
   const state = classify(decoded, recentGaps);
   els.title.textContent = state.title;
   els.verdict.textContent = state.verdict;
@@ -364,7 +454,36 @@ function appendLetter(ch, gapMs) {
   els.gap.textContent = gapMs ? `${Math.round(gapMs)} ms` : '--';
 }
 
+function commitPending(gapMs) {
+  if (!pendingLetter) return;
+  clearPendingTimer();
+  const byGap = gapToChar(gapMs);
+  const expectedGap = gapForChar(pendingLetter.ch);
+  const expectedErr = expectedGap === null || !gapMs ? 0 : Math.abs(expectedGap - gapMs);
+  const shouldTrustGap = byGap && (expectedErr > 260 || pendingLetter.confidence < 0.45);
+  const ch = shouldTrustGap ? byGap.ch : pendingLetter.ch;
+  commitLetter(ch, gapMs);
+  pendingLetter = null;
+}
+
+function acceptLetter(result, gapMs) {
+  if (isCycleBoundaryGap(gapMs) && (decoded.trim().length > 0 || pendingLetter)) {
+    finishCycle();
+  } else {
+    commitPending(gapMs);
+  }
+  pendingLetter = result;
+  armPendingTimer(result);
+  armCycleTimer();
+}
+
 function finishCycle() {
+  clearPendingTimer();
+  if (cycleTimer) {
+    clearTimeout(cycleTimer);
+    cycleTimer = null;
+  }
+  commitPending(0);
   const finalText = decoded.trim();
   if (finalText) {
     const repeated = finalText === lastFinalText;
@@ -375,25 +494,77 @@ function finishCycle() {
     els.stream.textContent = repeated ? 'repeat signal detected' : 'message complete';
     lastFinalText = finalText;
   } else {
-    els.stream.textContent = 'end marker received';
+    els.stream.textContent = 'cycle reset';
   }
   decoded = '';
   rawStream = '';
+  pendingLetter = null;
   recentGaps = [];
   lastBurstEndAt = 0;
+}
+
+function resetDecoder(reason = 'decoded stream cleared') {
+  clearPendingTimer();
+  if (cycleTimer) {
+    clearTimeout(cycleTimer);
+    cycleTimer = null;
+  }
+  decoded = '';
+  rawStream = '';
+  pendingLetter = null;
+  recentGaps = [];
+  lastBurstEndAt = 0;
+  lastDecodedAt = 0;
+  els.decoded.textContent = '---';
+  els.stream.textContent = reason;
+  els.title.textContent = micActive ? 'Listening' : 'Receiver idle';
+  els.verdict.textContent = 'DEAD';
+  els.gap.textContent = '--';
+}
+
+function displayNonLanguageSignal(signal) {
+  if (signal === 'clock') {
+    els.title.textContent = 'Clock signal';
+    els.stream.textContent = 'repeating clock cycle';
+  } else if (signal === 'burst') {
+    els.title.textContent = 'Burst signal';
+    els.stream.textContent = 'isolated burst detected';
+  }
+  els.verdict.textContent = 'DEAD';
 }
 
 function processChunk(input) {
   if (!audioCtx) return;
   const now = audioCtx.currentTime;
+  const nowMs = performance.now();
   const levelDb = rmsDb(input);
   lastLevelDb = lastLevelDb * 0.75 + levelDb * 0.25;
+  if (calibrationUntil > 0) {
+    if (nowMs < calibrationUntil) {
+      calibrationLevels.push(levelDb);
+      els.level.textContent = `${lastLevelDb.toFixed(1)} dB`;
+      els.title.textContent = 'Calibrating mic';
+      els.verdict.textContent = 'DEAD';
+      return;
+    }
+    const floor = percentile(calibrationLevels, 0.35);
+    if (floor !== null) noiseFloorDb = floor;
+    calibrationUntil = 0;
+    calibrationLevels = [];
+  }
   updateFloor(levelDb);
-  const startThreshold = Math.max(-86, noiseFloorDb + 18);
-  const endThreshold = Math.max(-94, noiseFloorDb + 10);
+  const startThreshold = Math.max(-90, noiseFloorDb + 6);
+  const endThreshold = Math.max(-94, noiseFloorDb + 3);
   const chunkDuration = input.length / audioCtx.sampleRate;
 
   els.level.textContent = `${lastLevelDb.toFixed(1)} dB`;
+
+  if (!serverActive) return;
+  if (serverSignal === 'language' && !decoderArmed) {
+    els.title.textContent = 'Waiting for sync';
+    els.verdict.textContent = 'DEAD';
+    return;
+  }
 
   if (!inBurst && levelDb > startThreshold) {
     inBurst = true;
@@ -409,19 +580,23 @@ function processChunk(input) {
       inBurst = false;
       const gapMs = lastBurstEndAt ? (burstStartAt - lastBurstEndAt) * 1000 : 0;
       lastBurstEndAt = now;
-      const result = detectLetter(burstSamples, audioCtx.sampleRate);
-      els.pair.textContent = `${result.low}/${result.high} Hz`;
-      if (result.confidence > 0.22) {
-        if (result.ch === '<END>') {
-          finishCycle();
-        } else {
-          appendLetter(result.ch, gapMs);
+      if (serverSignal !== 'language') {
+        if (gapMs > 0) {
+          recentGaps.push(gapMs);
+          if (recentGaps.length > 12) recentGaps.shift();
+        }
+        displayNonLanguageSignal(serverSignal);
+      } else {
+        const result = detectLetter(burstSamples, audioCtx.sampleRate);
+        els.pair.textContent = `${result.low}/${result.high} Hz`;
+        if (result.confidence > 0.22) {
+          acceptLetter(result, gapMs);
         }
       }
     }
   }
 
-  if (!inBurst && decoded.trim().length > 0 && performance.now() - lastDecodedAt > 3000) {
+  if (!inBurst && decoded.trim().length > 0 && performance.now() - lastDecodedAt > 1800) {
     finishCycle();
   }
 }
@@ -445,8 +620,11 @@ async function startTranslator() {
     processor.connect(silentNode).connect(audioCtx.destination);
     await audioCtx.resume();
     micActive = true;
+    noiseFloorDb = -65;
+    calibrationLevels = [];
+    calibrationUntil = performance.now() + MIC_CALIBRATION_MS;
     els.start.textContent = 'Stop translator';
-    els.title.textContent = 'Listening';
+    els.title.textContent = 'Calibrating mic';
     els.verdict.textContent = 'DEAD';
   } catch (error) {
     els.title.textContent = 'Microphone blocked';
@@ -466,8 +644,16 @@ async function stopTranslator() {
   processor = null;
   silentNode = null;
   micActive = false;
+  calibrationUntil = 0;
+  calibrationLevels = [];
   inBurst = false;
   burstSamples = [];
+  pendingLetter = null;
+  clearPendingTimer();
+  if (cycleTimer) {
+    clearTimeout(cycleTimer);
+    cycleTimer = null;
+  }
   els.start.textContent = 'Start translator';
   els.title.textContent = 'Receiver idle';
   els.verdict.textContent = 'DEAD';
@@ -475,13 +661,7 @@ async function stopTranslator() {
 
 els.start.addEventListener('click', startTranslator);
 els.reset.addEventListener('click', () => {
-  decoded = '';
-  rawStream = '';
-  recentGaps = [];
-  els.decoded.textContent = '---';
-  els.stream.textContent = 'decoded stream cleared';
-  els.title.textContent = micActive ? 'Listening' : 'Receiver idle';
-  els.verdict.textContent = 'DEAD';
+  resetDecoder();
 });
 
 connectEvents();
@@ -503,9 +683,17 @@ class DemoState:
         return self.player.public_snapshot()
 
 
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    def handle_error(self, request, client_address) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError, ssl.SSLError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def make_phone_html() -> str:
     entries = [
-        {"ch": ch, "low": low, "high": high, "gap": GAP_MAP[ch]}
+        {"ch": ch, "low": low, "high": high, "gap": encoded_gap_ms(ch)}
         for ch, (low, high) in FREQ_MAP.items()
     ]
     demo_words = {
@@ -565,7 +753,7 @@ def make_handler(state: DemoState):
                 self.send_error(HTTPStatus.BAD_REQUEST, "mode must be laser, horn, or vocal")
                 return
             if signal_type is not None and signal_type not in VALID_SIGNAL_TYPES:
-                self.send_error(HTTPStatus.BAD_REQUEST, "signal must be language, clock, or dead")
+                self.send_error(HTTPStatus.BAD_REQUEST, "signal must be language, clock, or burst")
                 return
             state.player.configure(message=message, mode=mode, signal_type=signal_type)
             self._send_json(state.public_snapshot())
@@ -594,7 +782,7 @@ def make_handler(state: DemoState):
                     self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError):
                     break
-                time.sleep(0.5)
+                time.sleep(0.1)
 
     return Handler
 
@@ -681,10 +869,10 @@ def print_qr_hint(url: str) -> None:
 
 def controller_loop(state: DemoState) -> None:
     print("\nLive controls:")
+    print("  start                   start the current signal")
+    print("  stop                    stop the current signal")
     print("  message <text>          change encoded message")
-    print("  mode <laser|horn|vocal> change sender sound style")
-    print("  signal <language|clock|dead>")
-    print("  clock / dead / language quick signal shortcuts")
+    print("  language / clock / burst  change signal type")
     print("  status                  show current sender state")
     print("  quit                    stop the server\n")
     while state.running:
@@ -703,6 +891,10 @@ def controller_loop(state: DemoState) -> None:
         command = command.lower()
         if command in {"quit", "exit"}:
             state.running = False
+        elif command == "start":
+            state.player.start()
+        elif command == "stop":
+            state.player.stop()
         elif command == "status":
             print(json.dumps(state.snapshot(), indent=2))
         elif command == "message" and value.strip():
@@ -711,22 +903,16 @@ def controller_loop(state: DemoState) -> None:
                 state.player.configure(message=cleaned, signal_type="language")
             else:
                 print("[error] message must contain A-Z or spaces")
-        elif command == "mode" and value.strip():
-            mode = value.strip().lower()
-            if mode in VALID_MODES:
-                state.player.configure(mode=mode)
-            else:
-                print("[error] mode must be laser, horn, or vocal")
         elif command == "signal" and value.strip():
             signal_type = value.strip().lower()
             if signal_type in VALID_SIGNAL_TYPES:
                 state.player.configure(signal_type=signal_type)
             else:
-                print("[error] signal must be language, clock, or dead")
+                print("[error] signal must be language, clock, or burst")
         elif command in VALID_SIGNAL_TYPES:
             state.player.configure(signal_type=command)
         else:
-            print("Unknown command. Try: message HELLO WORLD, mode vocal, signal clock, status, quit")
+            print("Unknown command. Try: start, stop, message HELLO WORLD, signal clock, burst, status, quit")
 
 
 def main() -> int:
@@ -734,7 +920,10 @@ def main() -> int:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--message", default=DEFAULT_MESSAGE)
-    parser.add_argument("--mode", choices=VALID_MODES, default="laser")
+    tone = parser.add_mutually_exclusive_group()
+    tone.add_argument("--laser", dest="mode", action="store_const", const="laser", default="laser")
+    tone.add_argument("--horn", dest="mode", action="store_const", const="horn")
+    tone.add_argument("--vocal", dest="mode", action="store_const", const="vocal")
     parser.add_argument("--signal", choices=VALID_SIGNAL_TYPES, default="language")
     parser.add_argument("--http", action="store_true", help="Use HTTP instead of local HTTPS")
     args = parser.parse_args()
@@ -742,12 +931,11 @@ def main() -> int:
     player = LoopingMessagePlayer(args.message, args.mode, args.signal)
     state = DemoState(player)
     ip = local_ip()
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(state))
+    server = QuietThreadingHTTPServer((args.host, args.port), make_handler(state))
     https_active = False
     if not args.http:
         https_active = apply_https(server, ip)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    audio_active = player.start()
 
     scheme = "https" if https_active else "http"
     url = f"{scheme}://{ip}:{args.port}/"
@@ -758,7 +946,7 @@ def main() -> int:
     print(f"Encoded message: {player.message}")
     print(f"Sound style: {player.mode}")
     print(f"Signal type: {player.signal_type}")
-    print(f"Audio loop: {'active' if audio_active else 'unavailable'}")
+    print("Audio loop: stopped; type start to play the current signal")
     if https_active:
         print("[HTTPS] The phone may show a certificate warning; accept it for the local demo.")
     else:
