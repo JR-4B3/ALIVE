@@ -5,7 +5,9 @@ import { clamp, combineConfidence } from './sensorFusion';
 
 const HISTORY_MS = 2800;
 const MIC_CALIBRATION_MS = 1200;
-const HYSTERESIS = 5;
+const HYSTERESIS = 4;
+const GAP_HOLD_MS = 1900;
+const ACTIVE_CONFIDENCE = 10;
 
 interface HistorySample {
   t: number;
@@ -23,6 +25,7 @@ interface InternalEmitterState {
   pairScore: number;
   rhythmScore: number;
   energy: number;
+  lastSignalAt: number;
 }
 
 export class AudioZoneTracker {
@@ -44,7 +47,8 @@ export class AudioZoneTracker {
         levelScore: 0,
         pairScore: 0,
         rhythmScore: 0,
-        energy: 0
+        energy: 0,
+        lastSignalAt: 0
       });
     }
   }
@@ -90,12 +94,12 @@ export class AudioZoneTracker {
     }));
     const maxEnergy = Math.max(...energies.map((item) => item.energy), 1e-9);
     const levelOverNoise = Math.max(0, this.levelDb - this.noiseFloorDb);
-    const signalPresence = clamp((levelOverNoise - 2) / 8, 0, 1);
+    const signalPresence = clamp((levelOverNoise - 1.5) / 6, 0, 1);
 
     for (const item of energies) {
       const entry = this.requireState(item.emitter.id);
       entry.energy = item.energy;
-      entry.levelScore = clamp((levelOverNoise - 3) / 26, 0, 1);
+      entry.levelScore = clamp((levelOverNoise - 2) / 18, 0, 1);
       entry.pairScore = clamp(item.energy / maxEnergy, 0, 1) * signalPresence;
       entry.history.push({ t: audioTimeSeconds, wall: nowMs, value: item.energy / maxEnergy });
       while (entry.history.length > 0 && nowMs - entry.history[0].wall > HISTORY_MS) {
@@ -104,8 +108,16 @@ export class AudioZoneTracker {
       entry.rhythmScore = rhythmScore(entry.history, item.emitter.pulseHz) * signalPresence;
 
       const rawAudio = 100 * (entry.levelScore * 0.48 + entry.pairScore * 0.34 + entry.rhythmScore * 0.18);
-      entry.audioConfidence = entry.audioConfidence * 0.82 + rawAudio * 0.18;
-      if (entry.audioConfidence < 8 || levelOverNoise < 2) entry.audioConfidence *= 0.92;
+      const emitterPresent = signalPresence > 0.22 && (entry.pairScore > 0.28 || entry.rhythmScore > 0.18);
+      if (emitterPresent) {
+        entry.lastSignalAt = nowMs;
+        entry.audioConfidence = entry.audioConfidence * 0.76 + rawAudio * 0.24;
+      } else if (nowMs - entry.lastSignalAt <= GAP_HOLD_MS) {
+        entry.audioConfidence *= 0.995;
+      } else {
+        entry.audioConfidence = entry.audioConfidence * 0.86 + rawAudio * 0.14;
+        if (entry.audioConfidence < 8 || levelOverNoise < 2) entry.audioConfidence *= 0.9;
+      }
 
       const candidateZone = zoneForConfidence(entry.audioConfidence, entry.zone);
       entry.stability = updateStability(entry.stability, candidateZone === entry.zone, entry.audioConfidence);
@@ -125,8 +137,8 @@ export class AudioZoneTracker {
     const emitters = this.emitters.map((emitter) => toEstimate(emitter, this.requireState(emitter.id)));
     const active = [...emitters].sort((a, b) => b.confidence - a.confidence)[0] ?? null;
     return {
-      status: active && active.confidence >= 12 ? this.status : this.status === 'locked' ? 'listening' : this.status,
-      active: active && active.confidence >= 12 ? active : null,
+      status: active && active.confidence >= ACTIVE_CONFIDENCE ? this.status : this.status === 'locked' ? 'listening' : this.status,
+      active: active && active.confidence >= ACTIVE_CONFIDENCE ? active : null,
       emitters,
       levelDb: this.levelDb,
       noiseFloorDb: this.noiseFloorDb
@@ -150,6 +162,7 @@ export class AudioZoneTracker {
       entry.pairScore = 0;
       entry.rhythmScore = 0;
       entry.energy = 0;
+      entry.lastSignalAt = 0;
     }
   }
 }

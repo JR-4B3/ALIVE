@@ -11,8 +11,8 @@ export const EMITTERS: EmitterFingerprint[] = [
 export const ZONES: Zone[] = ['far', 'mid', 'near', 'close'];
 
 export const ZONE_THRESHOLDS: Record<Zone, number> = {
-  far: 12,
-  mid: 34,
-  near: 58,
-  close: 80
+  far: 10,
+  mid: 28,
+  near: 50,
+  close: 68
 };

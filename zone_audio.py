@@ -30,10 +30,10 @@ EMITTER_FINGERPRINTS = (
 
 
 ZONE_SOUND = {
-    "far": {"amplitude": 0.07, "pulse_depth": 0.32, "texture": 0.05},
-    "mid": {"amplitude": 0.11, "pulse_depth": 0.42, "texture": 0.08},
-    "near": {"amplitude": 0.16, "pulse_depth": 0.52, "texture": 0.11},
-    "close": {"amplitude": 0.21, "pulse_depth": 0.62, "texture": 0.15},
+    "far": {"amplitude": 0.09, "pulse_depth": 0.32, "texture": 0.05},
+    "mid": {"amplitude": 0.15, "pulse_depth": 0.42, "texture": 0.08},
+    "near": {"amplitude": 0.23, "pulse_depth": 0.52, "texture": 0.11},
+    "close": {"amplitude": 0.34, "pulse_depth": 0.62, "texture": 0.15},
 }
 
 

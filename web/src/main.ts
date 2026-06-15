@@ -8,18 +8,10 @@ const POST_INTERVAL_MS = 500;
 const app = requiredElement<HTMLDivElement>('#app');
 app.innerHTML = `
   <main class="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-4 px-4 py-4">
-    <header class="flex items-start justify-between gap-3 border border-white px-3 py-3">
-      <div>
-        <div class="text-xs uppercase tracking-[0.28em] text-neutral-400">ALIVE</div>
-        <div class="mt-1 text-sm text-white">phone receiver</div>
-      </div>
-      <div id="status" class="border border-white px-2 py-1 text-xs uppercase tracking-[0.18em]">idle</div>
-    </header>
-
-    <section class="border border-white px-4 py-5">
+    <section class="border border-white px-4 py-4">
       <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">current zone</div>
-      <div id="zone" class="mt-2 text-[4.4rem] font-semibold leading-none tracking-normal sm:text-8xl">far</div>
-      <div class="mt-4 flex items-center justify-between gap-3 border-t border-white pt-3">
+      <div id="zone" class="mt-2 text-[3.35rem] font-semibold leading-none tracking-normal sm:text-7xl">far</div>
+      <div class="mt-3 flex items-center justify-between gap-3 border-t border-white pt-3">
         <div id="activeEmitter" class="min-w-0 truncate text-xs uppercase tracking-[0.16em] text-neutral-400">no emitter lock</div>
         <div id="confidence" class="shrink-0 font-mono text-lg">0%</div>
       </div>
@@ -36,7 +28,6 @@ app.innerHTML = `
       <div class="flex min-h-48 flex-1 items-center justify-center px-4 py-8">
         <div id="message" class="w-full break-words text-center font-mono text-4xl leading-tight sm:text-6xl">---</div>
       </div>
-      <div id="stream" class="border-t border-white px-3 py-2 font-mono text-xs text-neutral-400">decoded message will appear here</div>
     </section>
 
     <section class="grid gap-3">
@@ -53,13 +44,11 @@ app.innerHTML = `
 `;
 
 const refs = {
-  status: requiredElement<HTMLDivElement>('#status'),
   zone: requiredElement<HTMLDivElement>('#zone'),
   activeEmitter: requiredElement<HTMLDivElement>('#activeEmitter'),
   confidence: requiredElement<HTMLDivElement>('#confidence'),
   translationState: requiredElement<HTMLDivElement>('#translationState'),
   message: requiredElement<HTMLDivElement>('#message'),
-  stream: requiredElement<HTMLDivElement>('#stream'),
   mic: requiredElement<HTMLButtonElement>('#mic'),
   clear: requiredElement<HTMLButtonElement>('#clear'),
   controller: requiredElement<HTMLInputElement>('#controller'),
@@ -139,7 +128,7 @@ async function startMicrophone(): Promise<void> {
     render();
   } catch (error) {
     renderStatus('mic-blocked');
-    refs.stream.textContent = error instanceof Error ? error.message : String(error);
+    refs.translationState.textContent = error instanceof Error ? error.message : String(error);
   }
 }
 
@@ -173,7 +162,6 @@ function render(): void {
 
   refs.translationState.textContent = `${translationSnapshot.title} · ${translationSnapshot.verdict}`;
   refs.message.textContent = translationSnapshot.message;
-  refs.stream.textContent = translationSnapshot.stream;
   renderStatus(zoneSnapshot.status);
 
   refs.debug.textContent = [
@@ -183,7 +171,7 @@ function render(): void {
 }
 
 function renderStatus(status: ReceiverStatus): void {
-  refs.status.textContent = statusLabel(status);
+  document.documentElement.dataset.status = statusLabel(status);
 }
 
 function statusLabel(status: ReceiverStatus): string {

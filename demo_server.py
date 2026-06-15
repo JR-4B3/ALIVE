@@ -675,7 +675,7 @@ connectEvents();
 
 
 class DemoState:
-    def __init__(self, player: LoopingMessagePlayer | ZoneEmitterPlayer) -> None:
+    def __init__(self, player: LoopingMessagePlayer | ZoneEmitterPlayer | ZoneDemoPlayer) -> None:
         self.player = player
         self.running = True
 
@@ -686,6 +686,88 @@ class DemoState:
         if hasattr(self.player, "public_snapshot"):
             return self.player.public_snapshot()
         return self.player.snapshot()
+
+
+class ZoneDemoPlayer:
+    def __init__(
+        self,
+        emitter_id: str = "emitter-1",
+        zone: str = "far",
+        message: str = DEFAULT_MESSAGE,
+        mode: str = "laser",
+        signal_type: str = "language",
+    ) -> None:
+        self.zone_player = ZoneEmitterPlayer(emitter_id=emitter_id, zone=zone)
+        self.message_player = LoopingMessagePlayer(message, mode, signal_type)
+        self.active_mode = "zone"
+
+    def start(self) -> bool:
+        if self.active_mode == "zone":
+            self.message_player.stop()
+            return self.zone_player.start()
+        self.zone_player.stop()
+        return self.message_player.start()
+
+    def stop(self) -> None:
+        self.zone_player.stop()
+        self.message_player.stop()
+
+    def configure(
+        self,
+        emitter_id: str | None = None,
+        zone: str | None = None,
+        message: str | None = None,
+        mode: str | None = None,
+        signal_type: str | None = None,
+    ) -> None:
+        was_running = self.snapshot()["active"]
+        if emitter_id is not None or zone is not None:
+            if self.active_mode != "zone":
+                self.message_player.stop()
+            self.active_mode = "zone"
+            self.zone_player.configure(emitter_id=emitter_id, zone=zone)
+        if message is not None or mode is not None or signal_type is not None:
+            if self.active_mode == "zone":
+                self.zone_player.stop()
+            self.active_mode = "message"
+            self.message_player.configure(message=message, mode=mode, signal_type=signal_type)
+        if was_running:
+            self.start()
+
+    def apply_phone_zone(
+        self,
+        emitter_id: str,
+        zone: str,
+        confidence: float,
+        levels: dict[str, object] | None = None,
+    ) -> None:
+        self.zone_player.apply_phone_zone(emitter_id, zone, confidence, levels)
+
+    def snapshot(self) -> dict[str, object]:
+        zone_snapshot = self.zone_player.snapshot()
+        message_snapshot = self.message_player.snapshot()
+        active = (
+            zone_snapshot["active"]
+            if self.active_mode == "zone"
+            else message_snapshot["active"]
+        )
+        return {
+            "mode": "zone-demo",
+            "activeMode": self.active_mode,
+            "active": active,
+            "zone": zone_snapshot,
+            "message": message_snapshot,
+        }
+
+    def public_snapshot(self) -> dict[str, object]:
+        snapshot = self.snapshot()
+        return {
+            "mode": snapshot["mode"],
+            "activeMode": snapshot["activeMode"],
+            "active": snapshot["active"],
+            "zone": self.zone_player.snapshot(),
+            "message": self.message_player.public_snapshot(),
+        }
 
 
 class QuietThreadingHTTPServer(ThreadingHTTPServer):
@@ -773,7 +855,7 @@ def make_handler(state: DemoState, phone_html: str | None = None):
             return
 
         def _handle_configure(self, query: str) -> None:
-            if not isinstance(state.player, LoopingMessagePlayer):
+            if not isinstance(state.player, LoopingMessagePlayer) and not isinstance(state.player, ZoneDemoPlayer):
                 self.send_error(HTTPStatus.BAD_REQUEST, "configure is only available in translator mode")
                 return
             params = parse_qs(query)
@@ -948,7 +1030,7 @@ def print_qr_hint(url: str) -> None:
 
 
 def controller_loop(state: DemoState) -> None:
-    zone_mode = isinstance(state.player, ZoneEmitterPlayer)
+    zone_mode = isinstance(state.player, (ZoneEmitterPlayer, ZoneDemoPlayer))
     print("\nLive controls:")
     print("  start                   start the current signal")
     print("  stop                    stop the current signal")
@@ -956,6 +1038,8 @@ def controller_loop(state: DemoState) -> None:
         print("  emitter <1-5|id>        choose the laptop test emitter")
         print("  zone <far|mid|near|close>  change the emitted zone sound")
         print("  far / mid / near / close   shortcut for zone")
+        print("  message <text>          play encoded language instead of beacon")
+        print("  language / clock / burst  change encoded signal type")
     else:
         print("  message <text>          change encoded message")
         print("  language / clock / burst  change signal type")
@@ -994,23 +1078,23 @@ def controller_loop(state: DemoState) -> None:
                 print(f"[error] {exc}")
         elif zone_mode and command in VALID_ZONES:
             state.player.configure(zone=command)
-        elif not zone_mode and command == "message" and value.strip():
+        elif command == "message" and value.strip():
             cleaned = sanitize_message(value)
             if cleaned:
                 state.player.configure(message=cleaned, signal_type="language")
             else:
                 print("[error] message must contain A-Z or spaces")
-        elif not zone_mode and command == "signal" and value.strip():
+        elif command == "signal" and value.strip():
             signal_type = value.strip().lower()
             if signal_type in VALID_SIGNAL_TYPES:
                 state.player.configure(signal_type=signal_type)
             else:
                 print("[error] signal must be language, clock, or burst")
-        elif not zone_mode and command in VALID_SIGNAL_TYPES:
+        elif command in VALID_SIGNAL_TYPES:
             state.player.configure(signal_type=command)
         else:
             if zone_mode:
-                print("Unknown command. Try: start, stop, emitter 1, zone near, status, quit")
+                print("Unknown command. Try: start, stop, emitter 1, zone near, message HELLO, language, clock, burst, status, quit")
             else:
                 print("Unknown command. Try: start, stop, message HELLO WORLD, signal clock, burst, status, quit")
 
@@ -1033,7 +1117,13 @@ def main() -> int:
 
     emitter_id = f"emitter-{args.emitter}" if str(args.emitter).isdigit() else args.emitter
     if args.zone_demo:
-        player = ZoneEmitterPlayer(emitter_id=emitter_id, zone=args.zone)
+        player = ZoneDemoPlayer(
+            emitter_id=emitter_id,
+            zone=args.zone,
+            message=args.message,
+            mode=args.mode,
+            signal_type=args.signal,
+        )
         phone_html = make_static_phone_html()
     else:
         player = LoopingMessagePlayer(args.message, args.mode, args.signal)
@@ -1054,9 +1144,10 @@ def main() -> int:
     print(f"Phone URL: {url}")
     if args.zone_demo:
         print(f"Controller URL for GitHub Pages app: {scheme}://{ip}:{args.port}")
-        print(f"Emitter: {player.emitter.emitter_id}")
-        print(f"Zone sound: {player.zone}")
-        print("Audio emitter: stopped; type start to play the current fingerprint")
+        print(f"Emitter: {player.zone_player.emitter.emitter_id}")
+        print(f"Zone sound: {player.zone_player.zone}")
+        print(f"Encoded message: {player.message_player.message}")
+        print("Audio emitter: stopped; type start to play the current beacon or encoded signal")
     else:
         print(f"Encoded message: {player.message}")
         print(f"Sound style: {player.mode}")
