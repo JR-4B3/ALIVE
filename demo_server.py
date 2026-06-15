@@ -21,9 +21,11 @@ from legacy_audio_loop import (
     encoded_gap_ms,
     sanitize_message,
 )
+from zone_audio import VALID_ZONES, ZoneEmitterPlayer, normalize_zone
 
 
 DEFAULT_MESSAGE = "WE ARE STILL HERE"
+STATIC_PHONE_APP = Path(__file__).parent / "docs" / "index.html"
 
 
 PHONE_HTML = """<!doctype html>
@@ -672,7 +674,7 @@ connectEvents();
 
 
 class DemoState:
-    def __init__(self, player: LoopingMessagePlayer) -> None:
+    def __init__(self, player: LoopingMessagePlayer | ZoneEmitterPlayer) -> None:
         self.player = player
         self.running = True
 
@@ -680,7 +682,9 @@ class DemoState:
         return self.player.snapshot()
 
     def public_snapshot(self) -> dict[str, object]:
-        return self.player.public_snapshot()
+        if hasattr(self.player, "public_snapshot"):
+            return self.player.public_snapshot()
+        return self.player.snapshot()
 
 
 class QuietThreadingHTTPServer(ThreadingHTTPServer):
@@ -719,15 +723,21 @@ def make_phone_html() -> str:
     )
 
 
-def make_handler(state: DemoState):
-    phone_html = make_phone_html()
+def make_static_phone_html() -> str:
+    if STATIC_PHONE_APP.exists():
+        return STATIC_PHONE_APP.read_text(encoding="utf-8")
+    return "<!doctype html><title>ALIVE</title><p>Static phone app is missing.</p>"
+
+
+def make_handler(state: DemoState, phone_html: str | None = None):
+    phone_html = phone_html or make_phone_html()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ALIVETranslator/0.3"
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
-            if parsed.path == "/":
+            if parsed.path in {"/", "/index.html", "/zone"}:
                 self._send_text(phone_html, "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/state":
@@ -741,10 +751,27 @@ def make_handler(state: DemoState):
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
+        def do_OPTIONS(self) -> None:
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self._send_cors_headers()
+            self.send_header("access-control-allow-methods", "GET, POST, OPTIONS")
+            self.send_header("access-control-allow-headers", "content-type")
+            self.end_headers()
+
+        def do_POST(self) -> None:
+            parsed = urlparse(self.path)
+            if parsed.path == "/api/zone":
+                self._handle_zone_post()
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
+
         def log_message(self, format: str, *args: object) -> None:
             return
 
         def _handle_configure(self, query: str) -> None:
+            if not isinstance(state.player, LoopingMessagePlayer):
+                self.send_error(HTTPStatus.BAD_REQUEST, "configure is only available in translator mode")
+                return
             params = parse_qs(query)
             message = params.get("message", [None])[0]
             mode = params.get("mode", [None])[0]
@@ -758,9 +785,41 @@ def make_handler(state: DemoState):
             state.player.configure(message=message, mode=mode, signal_type=signal_type)
             self._send_json(state.public_snapshot())
 
+        def _handle_zone_post(self) -> None:
+            length = int(self.headers.get("content-length", "0") or "0")
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self.send_error(HTTPStatus.BAD_REQUEST, "invalid JSON body")
+                return
+
+            emitter_id = str(payload.get("emitterId") or payload.get("emitter") or "emitter-1")
+            zone_raw = str(payload.get("zone") or "far")
+            try:
+                zone = normalize_zone(zone_raw)
+            except ValueError as exc:
+                self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+
+            confidence = float(payload.get("confidence") or 0.0)
+            levels = payload.get("levels")
+            if hasattr(state.player, "apply_phone_zone"):
+                state.player.apply_phone_zone(
+                    emitter_id=emitter_id,
+                    zone=zone,
+                    confidence=confidence,
+                    levels=levels if isinstance(levels, dict) else None,
+                )
+            self._send_json({"ok": True, **state.public_snapshot()})
+
+        def _send_cors_headers(self) -> None:
+            self.send_header("access-control-allow-origin", "*")
+            self.send_header("access-control-allow-private-network", "true")
+
         def _send_text(self, text: str, content_type: str) -> None:
             data = text.encode("utf-8")
             self.send_response(HTTPStatus.OK)
+            self._send_cors_headers()
             self.send_header("content-type", content_type)
             self.send_header("content-length", str(len(data)))
             self.end_headers()
@@ -868,11 +927,17 @@ def print_qr_hint(url: str) -> None:
 
 
 def controller_loop(state: DemoState) -> None:
+    zone_mode = isinstance(state.player, ZoneEmitterPlayer)
     print("\nLive controls:")
     print("  start                   start the current signal")
     print("  stop                    stop the current signal")
-    print("  message <text>          change encoded message")
-    print("  language / clock / burst  change signal type")
+    if zone_mode:
+        print("  emitter <1-5|id>        choose the laptop test emitter")
+        print("  zone <far|mid|near|close>  change the emitted zone sound")
+        print("  far / mid / near / close   shortcut for zone")
+    else:
+        print("  message <text>          change encoded message")
+        print("  language / clock / burst  change signal type")
     print("  status                  show current sender state")
     print("  quit                    stop the server\n")
     while state.running:
@@ -897,29 +962,46 @@ def controller_loop(state: DemoState) -> None:
             state.player.stop()
         elif command == "status":
             print(json.dumps(state.snapshot(), indent=2))
-        elif command == "message" and value.strip():
+        elif zone_mode and command == "emitter" and value.strip():
+            raw_id = value.strip().lower()
+            emitter_id = f"emitter-{raw_id}" if raw_id.isdigit() else raw_id
+            state.player.configure(emitter_id=emitter_id)
+        elif zone_mode and command == "zone" and value.strip():
+            try:
+                state.player.configure(zone=normalize_zone(value))
+            except ValueError as exc:
+                print(f"[error] {exc}")
+        elif zone_mode and command in VALID_ZONES:
+            state.player.configure(zone=command)
+        elif not zone_mode and command == "message" and value.strip():
             cleaned = sanitize_message(value)
             if cleaned:
                 state.player.configure(message=cleaned, signal_type="language")
             else:
                 print("[error] message must contain A-Z or spaces")
-        elif command == "signal" and value.strip():
+        elif not zone_mode and command == "signal" and value.strip():
             signal_type = value.strip().lower()
             if signal_type in VALID_SIGNAL_TYPES:
                 state.player.configure(signal_type=signal_type)
             else:
                 print("[error] signal must be language, clock, or burst")
-        elif command in VALID_SIGNAL_TYPES:
+        elif not zone_mode and command in VALID_SIGNAL_TYPES:
             state.player.configure(signal_type=command)
         else:
-            print("Unknown command. Try: start, stop, message HELLO WORLD, signal clock, burst, status, quit")
+            if zone_mode:
+                print("Unknown command. Try: start, stop, emitter 1, zone near, status, quit")
+            else:
+                print("Unknown command. Try: start, stop, message HELLO WORLD, signal clock, burst, status, quit")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="ALIVE audio-codebook translator demo")
+    parser = argparse.ArgumentParser(description="ALIVE phone audio receiver demo")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--message", default=DEFAULT_MESSAGE)
+    parser.add_argument("--zone-demo", action="store_true", help="Run the phone zone receiver test emitter/controller")
+    parser.add_argument("--emitter", default="emitter-1", help="Zone demo emitter id, e.g. emitter-1 or 1")
+    parser.add_argument("--zone", choices=VALID_ZONES, default="far", help="Initial zone sound for --zone-demo")
     tone = parser.add_mutually_exclusive_group()
     tone.add_argument("--laser", dest="mode", action="store_const", const="laser", default="laser")
     tone.add_argument("--horn", dest="mode", action="store_const", const="horn")
@@ -928,10 +1010,16 @@ def main() -> int:
     parser.add_argument("--http", action="store_true", help="Use HTTP instead of local HTTPS")
     args = parser.parse_args()
 
-    player = LoopingMessagePlayer(args.message, args.mode, args.signal)
+    emitter_id = f"emitter-{args.emitter}" if str(args.emitter).isdigit() else args.emitter
+    if args.zone_demo:
+        player = ZoneEmitterPlayer(emitter_id=emitter_id, zone=args.zone)
+        phone_html = make_static_phone_html()
+    else:
+        player = LoopingMessagePlayer(args.message, args.mode, args.signal)
+        phone_html = make_phone_html()
     state = DemoState(player)
     ip = local_ip()
-    server = QuietThreadingHTTPServer((args.host, args.port), make_handler(state))
+    server = QuietThreadingHTTPServer((args.host, args.port), make_handler(state, phone_html))
     https_active = False
     if not args.http:
         https_active = apply_https(server, ip)
@@ -940,13 +1028,19 @@ def main() -> int:
     scheme = "https" if https_active else "http"
     url = f"{scheme}://{ip}:{args.port}/"
     print("=" * 56)
-    print("ALIVE audio-codebook translator demo")
+    print("ALIVE zone receiver demo" if args.zone_demo else "ALIVE audio-codebook translator demo")
     print("=" * 56)
     print(f"Phone URL: {url}")
-    print(f"Encoded message: {player.message}")
-    print(f"Sound style: {player.mode}")
-    print(f"Signal type: {player.signal_type}")
-    print("Audio loop: stopped; type start to play the current signal")
+    if args.zone_demo:
+        print(f"Controller URL for GitHub Pages app: {scheme}://{ip}:{args.port}")
+        print(f"Emitter: {player.emitter.emitter_id}")
+        print(f"Zone sound: {player.zone}")
+        print("Audio emitter: stopped; type start to play the current fingerprint")
+    else:
+        print(f"Encoded message: {player.message}")
+        print(f"Sound style: {player.mode}")
+        print(f"Signal type: {player.signal_type}")
+        print("Audio loop: stopped; type start to play the current signal")
     if https_active:
         print("[HTTPS] The phone may show a certificate warning; accept it for the local demo.")
     else:

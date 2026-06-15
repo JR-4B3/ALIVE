@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ALIVE Zone Receiver</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #060807;
+  --panel: #101614;
+  --line: #26332f;
+  --text: #eef8f3;
+  --muted: #92a39d;
+  --accent: #36e0a1;
+  --warn: #f5c451;
+  --bad: #ef6a6a;
+}
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+main {
+  width: min(900px, 100%);
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: 14px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 12px;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.brand {
+  color: var(--muted);
+  font-size: 0.76rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.status {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 10px;
+  color: var(--accent);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.hero {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #0e1713, #090d0c);
+  padding: 18px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 16px;
+}
+h1 {
+  margin: 0;
+  font-size: clamp(2.4rem, 12vw, 5.7rem);
+  line-height: 0.9;
+  letter-spacing: 0;
+}
+.active {
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin-top: 10px;
+}
+.confidence {
+  text-align: right;
+  min-width: 108px;
+}
+.confidence b {
+  display: block;
+  color: var(--accent);
+  font-size: clamp(2rem, 9vw, 4.4rem);
+  line-height: 0.9;
+}
+.confidence span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+.grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+.emitter {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  min-width: 0;
+  padding: 10px;
+}
+.emitter[data-active="true"] {
+  border-color: rgba(54, 224, 161, 0.75);
+  background: #102019;
+}
+.emitter h2 {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+.meter {
+  height: 7px;
+  border-radius: 999px;
+  background: #1d2925;
+  overflow: hidden;
+  margin: 8px 0;
+}
+.fill {
+  width: 0%;
+  height: 100%;
+  background: var(--accent);
+}
+.meta {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.controls {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+}
+button, input, label.toggle {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+button {
+  padding: 0 14px;
+}
+button.primary {
+  background: #10251f;
+  border-color: rgba(54, 224, 161, 0.45);
+}
+input {
+  width: 100%;
+  padding: 0 11px;
+}
+label.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  color: var(--muted);
+}
+label.toggle input {
+  width: auto;
+  min-height: auto;
+}
+.debug {
+  display: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  white-space: pre-wrap;
+}
+.debug[data-visible="true"] {
+  display: block;
+}
+@media (max-width: 720px) {
+  main { padding: 10px; }
+  header, .hero { align-items: stretch; }
+  .hero { grid-template-columns: 1fr; }
+  .confidence { text-align: left; }
+  .grid { grid-template-columns: 1fr; }
+  .controls { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <div class="brand">ALIVE receiver</div>
+      <div>phone microphone zone estimate</div>
+    </div>
+    <div class="status" id="status">idle</div>
+  </header>
+
+  <section class="hero">
+    <div>
+      <h1 id="zone">far</h1>
+      <div class="active" id="active">No emitter lock yet</div>
+    </div>
+    <div class="confidence">
+      <b id="confidence">0%</b>
+      <span>confidence</span>
+    </div>
+  </section>
+
+  <section class="grid" id="emitters"></section>
+
+  <section class="controls">
+    <input id="controller" placeholder="optional controller URL, e.g. https://192.168.1.20:8765">
+    <button class="primary" id="start">Start listening</button>
+    <label class="toggle"><input type="checkbox" id="debugToggle"> Debug</label>
+  </section>
+
+  <section class="debug" id="debug"></section>
+</main>
+
+<script>
+const EMITTERS = [
+  { id: 'emitter-1', label: 'Emitter 1', low: 1430, high: 2210, pulseHz: 1.05 },
+  { id: 'emitter-2', label: 'Emitter 2', low: 1510, high: 2330, pulseHz: 1.27 },
+  { id: 'emitter-3', label: 'Emitter 3', low: 1630, high: 2470, pulseHz: 1.51 },
+  { id: 'emitter-4', label: 'Emitter 4', low: 1760, high: 2590, pulseHz: 1.73 },
+  { id: 'emitter-5', label: 'Emitter 5', low: 1910, high: 2740, pulseHz: 1.93 }
+];
+const ZONES = ['far', 'mid', 'near', 'close'];
+const ZONE_THRESHOLDS = { far: 12, mid: 34, near: 58, close: 80 };
+const HYSTERESIS = 5;
+const POST_INTERVAL_MS = 500;
+const HISTORY_MS = 2800;
+const MIC_CALIBRATION_MS = 1200;
+
+const els = {
+  status: document.querySelector('#status'),
+  zone: document.querySelector('#zone'),
+  active: document.querySelector('#active'),
+  confidence: document.querySelector('#confidence'),
+  emitters: document.querySelector('#emitters'),
+  controller: document.querySelector('#controller'),
+  start: document.querySelector('#start'),
+  debugToggle: document.querySelector('#debugToggle'),
+  debug: document.querySelector('#debug')
+};
+
+const params = new URLSearchParams(location.search);
+if (params.get('controller')) els.controller.value = params.get('controller');
+if (params.get('debug') === '1') els.debugToggle.checked = true;
+
+const state = new Map(EMITTERS.map(emitter => [
+  emitter.id,
+  {
+    confidence: 0,
+    zone: 'far',
+    history: [],
+    levelScore: 0,
+    pairScore: 0,
+    rhythmScore: 0,
+    energy: 0
+  }
+]));
+
+let audioCtx = null;
+let micStream = null;
+let sourceNode = null;
+let processor = null;
+let silentNode = null;
+let micActive = false;
+let calibrationUntil = 0;
+let calibrationLevels = [];
+let noiseFloorDb = -68;
+let levelDb = -120;
+let activeEmitterId = null;
+let lastPostAt = 0;
+let lastPostedKey = '';
+
+function renderCards() {
+  els.emitters.innerHTML = '';
+  for (const emitter of EMITTERS) {
+    const node = document.createElement('article');
+    node.className = 'emitter';
+    node.dataset.id = emitter.id;
+    node.innerHTML = `
+      <h2>${emitter.label}</h2>
+      <div class="meter"><div class="fill"></div></div>
+      <div class="meta">
+        <div class="zone">zone: far</div>
+        <div class="score">confidence: 0%</div>
+        <div>${emitter.low}/${emitter.high} Hz</div>
+      </div>
+    `;
+    els.emitters.appendChild(node);
+  }
+}
+
+function rmsDb(samples) {
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  return 20 * Math.log10(Math.sqrt(sum / samples.length) + 1e-8);
+}
+
+function percentile(values, ratio) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * ratio)));
+  return sorted[index];
+}
+
+function updateFloor(nextLevelDb) {
+  if (nextLevelDb < noiseFloorDb) {
+    noiseFloorDb = noiseFloorDb * 0.9 + nextLevelDb * 0.1;
+  } else {
+    noiseFloorDb = noiseFloorDb * 0.997 + nextLevelDb * 0.003;
+  }
+}
+
+function goertzel(samples, sampleRate, frequency) {
+  const omega = 2 * Math.PI * frequency / sampleRate;
+  const coeff = 2 * Math.cos(omega);
+  let q0 = 0, q1 = 0, q2 = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const window = samples.length > 1 ? 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (samples.length - 1)) : 1;
+    q0 = coeff * q1 - q2 + samples[i] * window;
+    q2 = q1;
+    q1 = q0;
+  }
+  const power = q1 * q1 + q2 * q2 - coeff * q1 * q2;
+  return Math.sqrt(Math.max(power, 0)) / samples.length;
+}
+
+function rhythmScore(history, pulseHz) {
+  if (history.length < 8) return 0;
+  const mean = history.reduce((sum, item) => sum + item.value, 0) / history.length;
+  let sin = 0, cos = 0, total = 0;
+  for (const item of history) {
+    const value = Math.max(0, item.value - mean);
+    const phase = 2 * Math.PI * pulseHz * item.t;
+    sin += value * Math.sin(phase);
+    cos += value * Math.cos(phase);
+    total += Math.abs(value);
+  }
+  return Math.max(0, Math.min(1, Math.sqrt(sin * sin + cos * cos) / (total + 1e-9) * 2.4));
+}
+
+function zoneForConfidence(confidence, previousZone) {
+  let candidate = 'far';
+  if (confidence >= ZONE_THRESHOLDS.close) candidate = 'close';
+  else if (confidence >= ZONE_THRESHOLDS.near) candidate = 'near';
+  else if (confidence >= ZONE_THRESHOLDS.mid) candidate = 'mid';
+  else if (confidence >= ZONE_THRESHOLDS.far) candidate = 'far';
+
+  const previousIndex = ZONES.indexOf(previousZone);
+  const candidateIndex = ZONES.indexOf(candidate);
+  if (previousIndex < 0 || candidateIndex === previousIndex) return candidate;
+
+  if (candidateIndex > previousIndex) {
+    return confidence >= ZONE_THRESHOLDS[candidate] + HYSTERESIS ? candidate : previousZone;
+  }
+  const currentThreshold = ZONE_THRESHOLDS[previousZone] || 0;
+  return confidence < currentThreshold - HYSTERESIS ? candidate : previousZone;
+}
+
+function processChunk(input) {
+  if (!audioCtx) return;
+  const nowMs = performance.now();
+  const nowSeconds = audioCtx.currentTime;
+  const currentLevel = rmsDb(input);
+  levelDb = levelDb * 0.76 + currentLevel * 0.24;
+
+  if (calibrationUntil > 0) {
+    if (nowMs < calibrationUntil) {
+      calibrationLevels.push(currentLevel);
+      els.status.textContent = 'calibrating';
+      render();
+      return;
+    }
+    const floor = percentile(calibrationLevels, 0.35);
+    if (floor !== null) noiseFloorDb = floor;
+    calibrationUntil = 0;
+    calibrationLevels = [];
+  }
+  updateFloor(currentLevel);
+
+  const energies = EMITTERS.map(emitter => ({
+    emitter,
+    energy: (goertzel(input, audioCtx.sampleRate, emitter.low) + goertzel(input, audioCtx.sampleRate, emitter.high)) / 2
+  }));
+  const maxEnergy = Math.max(...energies.map(item => item.energy), 1e-9);
+  const levelOverNoise = Math.max(0, levelDb - noiseFloorDb);
+  const signalPresence = Math.max(0, Math.min(1, (levelOverNoise - 2) / 8));
+
+  for (const item of energies) {
+    const entry = state.get(item.emitter.id);
+    entry.energy = item.energy;
+    entry.levelScore = Math.max(0, Math.min(1, (levelOverNoise - 3) / 26));
+    entry.pairScore = Math.max(0, Math.min(1, item.energy / maxEnergy)) * signalPresence;
+    entry.history.push({ t: nowSeconds, wall: nowMs, value: item.energy / maxEnergy });
+    while (entry.history.length && nowMs - entry.history[0].wall > HISTORY_MS) entry.history.shift();
+    entry.rhythmScore = rhythmScore(entry.history, item.emitter.pulseHz) * signalPresence;
+    const raw = 100 * (entry.levelScore * 0.48 + entry.pairScore * 0.34 + entry.rhythmScore * 0.18);
+    entry.confidence = entry.confidence * 0.82 + raw * 0.18;
+    if (entry.confidence < 8 || levelOverNoise < 2) entry.confidence *= 0.92;
+    entry.zone = zoneForConfidence(entry.confidence, entry.zone);
+  }
+
+  const best = EMITTERS
+    .map(emitter => ({ emitter, entry: state.get(emitter.id) }))
+    .sort((a, b) => b.entry.confidence - a.entry.confidence)[0];
+  activeEmitterId = best && best.entry.confidence >= 12 ? best.emitter.id : null;
+  render();
+  postZoneIfNeeded();
+}
+
+function render() {
+  const activeEmitter = EMITTERS.find(emitter => emitter.id === activeEmitterId);
+  const activeState = activeEmitter ? state.get(activeEmitter.id) : null;
+  const zone = activeState ? activeState.zone : 'far';
+  const confidence = activeState ? Math.round(activeState.confidence) : 0;
+  els.zone.textContent = zone;
+  els.confidence.textContent = `${confidence}%`;
+  els.active.textContent = activeEmitter
+    ? `${activeEmitter.label} heard as ${zone}`
+    : micActive ? 'Listening for emitter fingerprints' : 'No emitter lock yet';
+  if (micActive && calibrationUntil <= 0) els.status.textContent = activeEmitter ? 'locked' : 'listening';
+
+  for (const emitter of EMITTERS) {
+    const node = els.emitters.querySelector(`[data-id="${emitter.id}"]`);
+    const entry = state.get(emitter.id);
+    if (!node || !entry) continue;
+    node.dataset.active = String(emitter.id === activeEmitterId);
+    node.querySelector('.fill').style.width = `${Math.max(0, Math.min(100, entry.confidence))}%`;
+    node.querySelector('.zone').textContent = `zone: ${entry.zone}`;
+    node.querySelector('.score').textContent = `confidence: ${Math.round(entry.confidence)}%`;
+  }
+
+  els.debug.dataset.visible = String(els.debugToggle.checked);
+  if (els.debugToggle.checked) {
+    const rows = EMITTERS.map(emitter => {
+      const entry = state.get(emitter.id);
+      return `${emitter.id}: zone=${entry.zone} confidence=${entry.confidence.toFixed(1)} level=${entry.levelScore.toFixed(2)} pair=${entry.pairScore.toFixed(2)} rhythm=${entry.rhythmScore.toFixed(2)}`;
+    });
+    els.debug.textContent = [
+      `mic=${micActive} level=${levelDb.toFixed(1)}dB floor=${noiseFloorDb.toFixed(1)}dB`,
+      `active=${activeEmitterId || 'none'} controller=${normalizedControllerUrl() || 'off'}`,
+      ...rows
+    ].join('\n');
+  }
+}
+
+function normalizedControllerUrl() {
+  return els.controller.value.trim().replace(/\/+$/, '');
+}
+
+async function postZoneIfNeeded(force = false) {
+  const controller = normalizedControllerUrl();
+  if (!controller || !activeEmitterId) return;
+  const entry = state.get(activeEmitterId);
+  const now = performance.now();
+  const key = `${activeEmitterId}:${entry.zone}:${Math.round(entry.confidence / 5) * 5}`;
+  if (!force && key === lastPostedKey && now - lastPostAt < POST_INTERVAL_MS) return;
+  if (!force && now - lastPostAt < POST_INTERVAL_MS) return;
+  lastPostAt = now;
+  lastPostedKey = key;
+  try {
+    await fetch(`${controller}/api/zone`, {
+      method: 'POST',
+      mode: 'cors',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        emitterId: activeEmitterId,
+        zone: entry.zone,
+        confidence: Math.round(entry.confidence),
+        levels: Object.fromEntries(EMITTERS.map(emitter => [
+          emitter.id,
+          {
+            zone: state.get(emitter.id).zone,
+            confidence: Math.round(state.get(emitter.id).confidence)
+          }
+        ]))
+      })
+    });
+  } catch (error) {
+    els.status.textContent = 'control offline';
+  }
+}
+
+async function startListening() {
+  if (micActive) {
+    await stopListening();
+    return;
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    audioCtx = new AudioContext();
+    sourceNode = audioCtx.createMediaStreamSource(micStream);
+    processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    silentNode = audioCtx.createGain();
+    silentNode.gain.value = 0;
+    processor.onaudioprocess = event => processChunk(event.inputBuffer.getChannelData(0));
+    sourceNode.connect(processor);
+    processor.connect(silentNode).connect(audioCtx.destination);
+    await audioCtx.resume();
+    micActive = true;
+    activeEmitterId = null;
+    calibrationUntil = performance.now() + MIC_CALIBRATION_MS;
+    calibrationLevels = [];
+    levelDb = -120;
+    noiseFloorDb = -68;
+    els.start.textContent = 'Stop listening';
+    els.status.textContent = 'calibrating';
+    render();
+  } catch (error) {
+    els.status.textContent = 'mic blocked';
+    els.active.textContent = error.message || String(error);
+  }
+}
+
+async function stopListening() {
+  if (processor) processor.disconnect();
+  if (sourceNode) sourceNode.disconnect();
+  if (silentNode) silentNode.disconnect();
+  if (micStream) micStream.getTracks().forEach(track => track.stop());
+  if (audioCtx && audioCtx.state !== 'closed') await audioCtx.close();
+  audioCtx = null;
+  micStream = null;
+  sourceNode = null;
+  processor = null;
+  silentNode = null;
+  micActive = false;
+  activeEmitterId = null;
+  calibrationUntil = 0;
+  calibrationLevels = [];
+  els.start.textContent = 'Start listening';
+  els.status.textContent = 'idle';
+  render();
+}
+
+els.start.addEventListener('click', startListening);
+els.debugToggle.addEventListener('change', render);
+renderCards();
+render();
+</script>
+</body>
+</html>
