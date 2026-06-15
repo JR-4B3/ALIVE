@@ -7,13 +7,14 @@ ALIVE now has two demo paths:
 
 ## Zone Receiver Demo
 
-The static phone app lives in `docs/index.html`, so it can be deployed with GitHub Pages without Python-only endpoints.
+The phone app source lives in `web/` and builds into `docs/`, so GitHub Pages can keep serving from `/docs` without Python-only endpoints.
 
 Default mode:
 
 - open the static app from GitHub Pages or from the laptop server
-- tap **Start listening**
+- tap **Enable microphone**
 - the phone estimates zones locally from microphone audio
+- the UI shows only the strongest active emitter estimate, current zone, confidence, and translation window
 
 Debug/control mode:
 
@@ -27,7 +28,7 @@ python demo_server.py --zone-demo
 - enter the printed controller URL in the phone app, or open the app with:
 
 ```text
-?controller=https://YOUR-LAPTOP-IP:8765&debug=1
+?controller=https://YOUR-LAPTOP-IP:8765
 ```
 
 The phone sends zone updates to `POST /api/zone`. The laptop switches the active emitter sound between:
@@ -38,6 +39,7 @@ The phone sends zone updates to `POST /api/zone`. The laptop switches the active
 - `close`
 
 Each test emitter has a unique frequency pair and rhythm. The phone scores audio level above noise floor, frequency match, rhythm match, and recent stability; it maps confidence to a zone with smoothing and hysteresis rather than exact meters.
+The TypeScript sensing model keeps camera and BLE confidence as future inputs, but they are not shown in the UI yet.
 
 Terminal controls in zone mode:
 
@@ -55,6 +57,20 @@ quit
 ```
 
 Later, the laptop emitter can be replaced by ESP32-C3 units on Wi-Fi. Use an amplifier module for a speaker; do not drive a 4 ohm speaker directly from ESP32 pins.
+Phone-to-emitter BLE contribution likely needs a native app, OS beacon, or controller-side pairing because normal browser pages generally cannot advertise BLE from the phone.
+
+## Frontend Build
+
+The frontend uses Bun, Vite, TypeScript, and Tailwind CSS. There is no React dependency.
+
+```bash
+cd web
+bun install
+bun run dev
+bun run build
+```
+
+`bun run build` writes the static GitHub Pages app to `docs/`.
 
 ## Translator Demo
 
@@ -117,7 +133,8 @@ Phone microphone access usually requires HTTPS. `--http` is only for local deskt
 
 ## Current Architecture
 
-- `docs/index.html` is the static GitHub Pages-compatible zone receiver phone app.
+- `web/` is the Bun + Vite + TypeScript + Tailwind source for the phone app.
+- `docs/` is the generated static GitHub Pages app.
 - `zone_audio.py` defines five emitter fingerprints and the laptop test emitter/controller sound.
 - `demo_server.py` serves either the static zone app or the translator UI and controls the live demo.
 - `legacy_audio_loop.py` generates and loops the encoded laptop audio using the legacy codebook.
@@ -128,6 +145,7 @@ Phone microphone access usually requires HTTPS. `--http` is only for local deskt
 ## Tests
 
 ```bash
+cd web && bun run build
 python test_demo.py
 python test_experience_model.py
 python test_zone_audio.py

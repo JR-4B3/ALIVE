@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #app {
+    min-height: 100%;
+  }
+
+  body {
+    @apply m-0 bg-black text-white antialiased;
+  }
+
+  button,
+  input {
+    @apply rounded-none border border-white bg-black text-white outline-none;
+  }
+
+  button:focus-visible,
+  input:focus-visible,
+  summary:focus-visible {
+    @apply outline outline-2 outline-offset-2 outline-white;
+  }
+}

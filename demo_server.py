@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import socket
 import ssl
 import subprocess
@@ -740,6 +741,9 @@ def make_handler(state: DemoState, phone_html: str | None = None):
             if parsed.path in {"/", "/index.html", "/zone"}:
                 self._send_text(phone_html, "text/html; charset=utf-8")
                 return
+            if parsed.path.startswith("/assets/"):
+                self._send_static_asset(parsed.path)
+                return
             if parsed.path == "/api/state":
                 self._send_json(state.public_snapshot())
                 return
@@ -818,6 +822,9 @@ def make_handler(state: DemoState, phone_html: str | None = None):
 
         def _send_text(self, text: str, content_type: str) -> None:
             data = text.encode("utf-8")
+            self._send_bytes(data, content_type)
+
+        def _send_bytes(self, data: bytes, content_type: str) -> None:
             self.send_response(HTTPStatus.OK)
             self._send_cors_headers()
             self.send_header("content-type", content_type)
@@ -827,6 +834,20 @@ def make_handler(state: DemoState, phone_html: str | None = None):
 
         def _send_json(self, payload: dict[str, object]) -> None:
             self._send_text(json.dumps(payload), "application/json")
+
+        def _send_static_asset(self, request_path: str) -> None:
+            root = STATIC_PHONE_APP.parent.resolve()
+            target = (root / request_path.lstrip("/")).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            if not target.is_file():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+            self._send_bytes(target.read_bytes(), content_type)
 
         def _events(self) -> None:
             self.send_response(HTTPStatus.OK)
