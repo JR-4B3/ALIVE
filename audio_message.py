@@ -86,9 +86,9 @@ def make_burst(letter: str, mode: str = "laser") -> np.ndarray:
         texture = texture * envelope
 
     if mode == "laser":
-        carrier_low = np.sin(2 * np.pi * low_f * t) * 0.50
-        carrier_high = np.sin(2 * np.pi * high_f * t) * 0.44
-        burst = texture * 0.62 + carrier_low + carrier_high
+        carrier_low = np.sin(2 * np.pi * low_f * t) * 0.68
+        carrier_high = np.sin(2 * np.pi * high_f * t) * 0.62
+        burst = texture * 0.28 + carrier_low + carrier_high
     else:
         carrier_low = np.sin(2 * np.pi * low_f * t) * 0.78
         carrier_high = np.sin(2 * np.pi * high_f * t) * 0.68
@@ -155,6 +155,7 @@ class LoopingMessagePlayer:
         self._cycle = 0
         self._lock = threading.Lock()
         self._stream = None
+        self.last_phone_update: dict[str, object] | None = None
 
     def _encode_current(self) -> np.ndarray:
         if self.signal_type == "burst":
@@ -237,6 +238,7 @@ class LoopingMessagePlayer:
                 "revision": self._revision,
                 "cycle": self._cycle,
                 "active": self._stream is not None,
+                "lastPhoneUpdate": self.last_phone_update,
             }
 
     def public_snapshot(self) -> dict[str, object]:

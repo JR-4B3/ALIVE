@@ -1,10 +1,11 @@
-import { goertzel } from '../audio/dsp';
+import { goertzel, rmsDb } from '../audio/dsp';
 import type { TranslationSnapshot } from '../types';
 
 const LOW_FREQS = [400, 500, 600, 700, 800, 900, 1000];
 const HIGH_FREQS = [2000, 2300, 2600, 2900];
 const MIC_MIN_BURST_SECONDS = 0.12;
 const MIC_MAX_BURST_SECONDS = 0.42;
+const CYCLE_BOUNDARY_GAP_MS = 1400;
 
 const CODEBOOK = [
   ['A', 400, 2000, 65],
@@ -66,25 +67,28 @@ export class TranslationDecoder {
   private burstStartAt = 0;
   private lastBurstEndAt = 0;
   private decoded = '';
+  private finalMessage = '';
   private stream = '';
   private pendingLetter: LetterDetection | null = null;
   private recentGaps: number[] = [];
   private lastDecodedAt = 0;
+  private lastFinalText = '';
   private pair = '--';
 
   process(
     input: Float32Array,
     sampleRate: number,
-    levelDb: number,
+    _levelDb: number,
     noiseFloorDb: number,
     audioTimeSeconds: number,
     nowMs: number
   ): TranslationSnapshot {
+    const chunkLevelDb = rmsDb(input);
     const startThreshold = Math.max(-90, noiseFloorDb + 6);
     const endThreshold = Math.max(-94, noiseFloorDb + 3);
     const chunkDuration = input.length / sampleRate;
 
-    if (!this.inBurst && levelDb > startThreshold) {
+    if (!this.inBurst && chunkLevelDb > startThreshold) {
       this.inBurst = true;
       this.burstSamples = [];
       this.burstStartAt = audioTimeSeconds;
@@ -93,20 +97,20 @@ export class TranslationDecoder {
     if (this.inBurst) {
       this.burstSamples.push(...input);
       const burstDuration = audioTimeSeconds - this.burstStartAt + chunkDuration;
-      if ((levelDb < endThreshold && burstDuration > MIC_MIN_BURST_SECONDS) || burstDuration > MIC_MAX_BURST_SECONDS) {
+      if ((chunkLevelDb < endThreshold && burstDuration > MIC_MIN_BURST_SECONDS) || burstDuration > MIC_MAX_BURST_SECONDS) {
         this.inBurst = false;
         const gapMs = this.lastBurstEndAt ? (this.burstStartAt - this.lastBurstEndAt) * 1000 : 0;
         this.lastBurstEndAt = audioTimeSeconds;
         const result = detectLetter(this.burstSamples, sampleRate);
         this.pair = `${result.low}/${result.high} Hz`;
-        if (result.confidence > 0.22) {
+        if (result.confidence > 0.3) {
           this.acceptLetter(result, gapMs);
         }
       }
     }
 
     if (!this.inBurst && this.decoded.trim().length > 0 && nowMs - this.lastDecodedAt > 1800) {
-      this.commitPending(0);
+      this.finishCycle();
     }
 
     return this.snapshot();
@@ -117,28 +121,50 @@ export class TranslationDecoder {
     this.burstSamples = [];
     this.lastBurstEndAt = 0;
     this.decoded = '';
+    this.finalMessage = '';
     this.stream = reason;
     this.pendingLetter = null;
     this.recentGaps = [];
     this.lastDecodedAt = 0;
+    this.lastFinalText = '';
     this.pair = '--';
     return this.snapshot();
   }
 
   snapshot(): TranslationSnapshot {
-    const classified = classify(this.decoded, this.recentGaps);
+    const message = this.displayMessage();
+    const classified = classify(message, this.recentGaps);
     return {
       title: classified.title,
       verdict: classified.verdict,
-      message: this.decoded.trim() || '---',
+      message: message || '---',
       stream: this.stream.slice(-96) || 'decoded message will appear here',
       pair: this.pair
     };
   }
 
   private acceptLetter(result: LetterDetection, gapMs: number): void {
-    this.commitPending(gapMs);
+    if (gapMs > CYCLE_BOUNDARY_GAP_MS && (this.decoded.trim().length > 0 || this.pendingLetter)) {
+      this.finishCycle();
+    } else {
+      this.commitPending(gapMs);
+    }
     this.pendingLetter = result;
+  }
+
+  private finishCycle(): void {
+    this.commitPending(0);
+    const finalText = this.decoded.trim();
+    if (finalText) {
+      const repeated = finalText === this.lastFinalText;
+      this.lastFinalText = finalText;
+      this.finalMessage = finalText;
+      this.stream = repeated ? 'repeat signal detected' : 'message complete';
+    }
+    this.decoded = '';
+    this.pendingLetter = null;
+    this.recentGaps = [];
+    this.lastBurstEndAt = 0;
   }
 
   private commitPending(gapMs: number): void {
@@ -160,8 +186,18 @@ export class TranslationDecoder {
     }
     this.decoded += ch;
     this.stream += ch;
+    if (this.finalMessage && !this.finalMessage.startsWith(this.decoded.trim())) {
+      this.finalMessage = '';
+    }
     this.lastDecodedAt = performance.now();
     if (this.decoded.length > 120) this.decoded = this.decoded.slice(-120);
+  }
+
+  private displayMessage(): string {
+    const current = this.decoded.trim();
+    if (!this.finalMessage) return current;
+    if (!current || this.finalMessage.startsWith(current)) return this.finalMessage;
+    return current;
   }
 }
 

@@ -155,7 +155,7 @@ function render(): void {
   refs.zone.textContent = active?.zone ?? 'far';
   refs.confidence.textContent = `${Math.round(active?.confidence ?? 0)}%`;
   refs.activeEmitter.textContent = active
-    ? `${active.emitter.id} · audio ${Math.round(active.audioConfidence)}%`
+    ? `${active.emitter.label} · audio ${Math.round(active.audioConfidence)}%`
     : micActive
       ? 'listening for emitter'
       : 'no emitter lock';

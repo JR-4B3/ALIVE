@@ -6,8 +6,9 @@ import { clamp, combineConfidence } from './sensorFusion';
 const HISTORY_MS = 2800;
 const MIC_CALIBRATION_MS = 1200;
 const HYSTERESIS = 4;
-const GAP_HOLD_MS = 1900;
+const GAP_HOLD_MS = 2600;
 const ACTIVE_CONFIDENCE = 10;
+const CODE_FREQS = [400, 500, 600, 700, 800, 900, 1000, 2000, 2300, 2600, 2900];
 
 interface HistorySample {
   t: number;
@@ -88,10 +89,8 @@ export class AudioZoneTracker {
     this.noiseFloorDb = updateNoiseFloor(this.noiseFloorDb, currentLevel);
     this.status = 'listening';
 
-    const energies = this.emitters.map((emitter) => ({
-      emitter,
-      energy: (goertzel(input, sampleRate, emitter.low) + goertzel(input, sampleRate, emitter.high)) / 2
-    }));
+    const codedEnergy = codedBandEnergy(input, sampleRate);
+    const energies = this.emitters.map((emitter) => ({ emitter, energy: codedEnergy }));
     const maxEnergy = Math.max(...energies.map((item) => item.energy), 1e-9);
     const levelOverNoise = Math.max(0, this.levelDb - this.noiseFloorDb);
     const signalPresence = clamp((levelOverNoise - 1.5) / 6, 0, 1);
@@ -108,7 +107,7 @@ export class AudioZoneTracker {
       entry.rhythmScore = rhythmScore(entry.history, item.emitter.pulseHz) * signalPresence;
 
       const rawAudio = 100 * (entry.levelScore * 0.48 + entry.pairScore * 0.34 + entry.rhythmScore * 0.18);
-      const emitterPresent = signalPresence > 0.22 && (entry.pairScore > 0.28 || entry.rhythmScore > 0.18);
+      const emitterPresent = signalPresence > 0.22 && entry.energy > 0.0025;
       if (emitterPresent) {
         entry.lastSignalAt = nowMs;
         entry.audioConfidence = entry.audioConfidence * 0.76 + rawAudio * 0.24;
@@ -181,6 +180,7 @@ function toEstimate(emitter: EmitterFingerprint, entry: InternalEmitterState): E
 }
 
 function rhythmScore(history: HistorySample[], pulseHz: number): number {
+  if (pulseHz <= 0) return 0;
   if (history.length < 8) return 0;
   const mean = history.reduce((sum, item) => sum + item.value, 0) / history.length;
   let sin = 0;
@@ -194,6 +194,14 @@ function rhythmScore(history: HistorySample[], pulseHz: number): number {
     total += Math.abs(value);
   }
   return clamp((Math.sqrt(sin * sin + cos * cos) / (total + 1e-9)) * 2.4, 0, 1);
+}
+
+function codedBandEnergy(input: Float32Array, sampleRate: number): number {
+  let sum = 0;
+  for (const frequency of CODE_FREQS) {
+    sum += goertzel(input, sampleRate, frequency);
+  }
+  return sum / CODE_FREQS.length;
 }
 
 function zoneForConfidence(confidence: number, previousZone: Zone): Zone {
