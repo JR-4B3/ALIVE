@@ -42,6 +42,7 @@ class DemoState:
         return self.player.public_snapshot()
 
     def current_emitter_message(self) -> dict[str, object]:
+        player_state = self.player.public_snapshot()
         with self._lock:
             return {
                 "emitterId": "main",
@@ -49,13 +50,15 @@ class DemoState:
                 "message": self.latest_reply,
                 "mode": "language",
                 "maxChars": MAX_REPLY_CHARS,
-                "active": self.player.public_snapshot()["active"],
+                "duration": player_state["duration"],
+                "active": player_state["active"],
             }
 
     def set_reply(self, reply: str) -> dict[str, object]:
         cleaned = sanitize_message(reply)[:MAX_REPLY_CHARS].strip() or "SIGNAL WEAK"
         self.player.configure(message=cleaned, signal_type="language")
-        self.player.start()
+        self.player.play_once()
+        player_state = self.player.public_snapshot()
         with self._lock:
             self.latest_reply = cleaned
             self.reply_revision += 1
@@ -65,8 +68,13 @@ class DemoState:
                 "message": self.latest_reply,
                 "mode": "language",
                 "maxChars": MAX_REPLY_CHARS,
-                "active": self.player.public_snapshot()["active"],
+                "duration": player_state["duration"],
+                "active": player_state["active"],
             }
+
+    def play_current_once(self) -> dict[str, object]:
+        self.player.play_once()
+        return self.current_emitter_message()
 
 
 class QuietThreadingHTTPServer(ThreadingHTTPServer):
@@ -114,6 +122,9 @@ def make_handler(state: DemoState):
             parsed = urlparse(self.path)
             if parsed.path == "/api/message":
                 self._handle_message_post()
+                return
+            if parsed.path == "/api/emitter/main/play":
+                self._send_json(state.play_current_once())
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 

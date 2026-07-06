@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import numpy as np
 
@@ -155,6 +156,8 @@ class LoopingMessagePlayer:
         self._cycle = 0
         self._lock = threading.Lock()
         self._stream = None
+        self._loop_playback = True
+        self._playback_id = 0
 
     def _encode_current(self) -> np.ndarray:
         if self.signal_type == "burst":
@@ -176,6 +179,8 @@ class LoopingMessagePlayer:
             return True
         with self._lock:
             self._cursor = -int(SAMPLE_RATE * START_LEAD_IN_S)
+            self._loop_playback = True
+            self._playback_id += 1
         try:
             import sounddevice as sd
         except Exception as exc:
@@ -197,6 +202,36 @@ class LoopingMessagePlayer:
         print(f"[SENDER] Looping {self._description()}")
         return True
 
+    def play_once(self) -> bool:
+        self.stop()
+        with self._lock:
+            self._cursor = 0
+            self._loop_playback = False
+            self._playback_id += 1
+            playback_id = self._playback_id
+            duration = len(self._audio) / SAMPLE_RATE
+        try:
+            import sounddevice as sd
+        except Exception as exc:
+            print(f"[SENDER] Audio output unavailable: {exc}")
+            return False
+        try:
+            self._stream = sd.OutputStream(
+                samplerate=SAMPLE_RATE,
+                channels=1,
+                dtype="float32",
+                blocksize=1024,
+                callback=self._callback,
+            )
+            self._stream.start()
+        except Exception as exc:
+            print(f"[SENDER] Could not play encoded message: {exc}")
+            self._stream = None
+            return False
+        threading.Thread(target=self._stop_after_once, args=(playback_id, duration), daemon=True).start()
+        print(f"[SENDER] Playing once {self._description()}")
+        return True
+
     def stop(self) -> None:
         if self._stream is None:
             return
@@ -206,6 +241,13 @@ class LoopingMessagePlayer:
         finally:
             self._stream = None
             print("[SENDER] Signal stopped")
+
+    def _stop_after_once(self, playback_id: int, duration: float) -> None:
+        time.sleep(max(0.1, duration + 0.2))
+        with self._lock:
+            should_stop = self._stream is not None and self._playback_id == playback_id and not self._loop_playback
+        if should_stop:
+            self.stop()
 
     def configure(
         self,
@@ -259,6 +301,7 @@ class LoopingMessagePlayer:
         with self._lock:
             audio = self._audio
             cursor = self._cursor
+            loop_playback = self._loop_playback
             if len(audio) == 0:
                 out = np.zeros(frames, dtype=np.float32)
             elif cursor < 0:
@@ -276,9 +319,18 @@ class LoopingMessagePlayer:
                 audio_len = len(audio)
                 reset_frame = self._reset_frame
                 next_cursor_abs = cursor + frames
-                if cursor < reset_frame <= next_cursor_abs or next_cursor_abs >= audio_len + reset_frame:
-                    self._cycle += 1
-                idx = (np.arange(frames) + cursor) % audio_len
-                out = audio[idx]
-                self._cursor = next_cursor_abs % audio_len
+                if not loop_playback:
+                    out = np.zeros(frames, dtype=np.float32)
+                    if cursor < audio_len:
+                        available = min(frames, audio_len - cursor)
+                        out[:available] = audio[cursor : cursor + available]
+                        if cursor + available >= audio_len:
+                            self._cycle += 1
+                    self._cursor = min(next_cursor_abs, audio_len)
+                else:
+                    if cursor < reset_frame <= next_cursor_abs or next_cursor_abs >= audio_len + reset_frame:
+                        self._cycle += 1
+                    idx = (np.arange(frames) + cursor) % audio_len
+                    out = audio[idx]
+                    self._cursor = next_cursor_abs % audio_len
         outdata[:, 0] = out

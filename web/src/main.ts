@@ -6,14 +6,6 @@ import type { ReceiverStatus } from './types';
 const app = requiredElement<HTMLDivElement>('#app');
 app.innerHTML = `
   <main class="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-4 px-4 py-4">
-    <section class="border border-white px-4 py-4">
-      <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">receiver</div>
-      <div id="receiverStatus" class="mt-2 text-3xl font-semibold uppercase leading-tight tracking-normal sm:text-5xl">idle</div>
-      <div class="mt-3 border-t border-white pt-3">
-        <div id="signalState" class="text-xs uppercase tracking-[0.16em] text-neutral-400">microphone disabled</div>
-      </div>
-    </section>
-
     <section class="flex flex-1 flex-col border border-white">
       <div class="flex items-center justify-between border-b border-white px-3 py-2">
         <div>
@@ -32,21 +24,18 @@ app.innerHTML = `
       <form id="contactForm" class="grid gap-3 border border-white px-3 py-3">
         <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">contact</div>
         <input id="prompt" class="min-h-11 px-3 text-base" maxlength="120" placeholder="message">
-        <button id="send" class="min-h-11 px-3 text-xs uppercase tracking-[0.16em]">send</button>
-        <details>
-          <summary class="cursor-pointer text-xs uppercase tracking-[0.18em] text-neutral-400">api</summary>
-          <input id="apiBase" class="mt-3 min-h-11 w-full px-3 font-mono text-sm" placeholder="api base URL">
-        </details>
+        <div class="grid grid-cols-2 gap-3">
+          <button id="send" class="min-h-11 px-3 text-xs uppercase tracking-[0.16em]">send</button>
+          <button id="playSignal" type="button" class="min-h-11 px-3 text-xs uppercase tracking-[0.16em]">play signal</button>
+        </div>
+        <input id="apiBase" type="hidden">
         <div id="contactStatus" class="min-h-6 font-mono text-xs uppercase tracking-[0.16em] text-neutral-400">---</div>
       </form>
-      <div id="debug" class="whitespace-pre-wrap border border-white px-3 py-3 font-mono text-xs text-neutral-400"></div>
     </section>
   </main>
 `;
 
 const refs = {
-  receiverStatus: requiredElement<HTMLDivElement>('#receiverStatus'),
-  signalState: requiredElement<HTMLDivElement>('#signalState'),
   translationState: requiredElement<HTMLDivElement>('#translationState'),
   message: requiredElement<HTMLDivElement>('#message'),
   mic: requiredElement<HTMLButtonElement>('#mic'),
@@ -55,7 +44,7 @@ const refs = {
   prompt: requiredElement<HTMLInputElement>('#prompt'),
   apiBase: requiredElement<HTMLInputElement>('#apiBase'),
   contactStatus: requiredElement<HTMLDivElement>('#contactStatus'),
-  debug: requiredElement<HTMLDivElement>('#debug')
+  playSignal: requiredElement<HTMLButtonElement>('#playSignal')
 };
 
 const params = new URLSearchParams(location.search);
@@ -71,6 +60,8 @@ let sourceNode: MediaStreamAudioSourceNode | null = null;
 let processor: ScriptProcessorNode | null = null;
 let silentNode: GainNode | null = null;
 let micActive = false;
+let replayReadyAt = 0;
+let replayTimer: number | null = null;
 
 refs.mic.addEventListener('click', () => {
   void toggleMicrophone();
@@ -82,6 +73,9 @@ refs.clear.addEventListener('click', () => {
 refs.contactForm.addEventListener('submit', (event) => {
   event.preventDefault();
   void sendContactMessage();
+});
+refs.playSignal.addEventListener('click', () => {
+  void playCurrentSignal();
 });
 
 render();
@@ -168,9 +162,10 @@ async function sendContactMessage(): Promise<void> {
       body: JSON.stringify({ message })
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = (await response.json()) as { reply?: string; message?: string };
+    const payload = (await response.json()) as { reply?: string; message?: string; duration?: number };
     refs.contactStatus.textContent = payload.reply ?? payload.message ?? 'sent';
     refs.prompt.value = '';
+    lockReplay(payload.duration);
   } catch (error) {
     refs.contactStatus.textContent = error instanceof Error ? error.message : 'send failed';
   } finally {
@@ -179,17 +174,55 @@ async function sendContactMessage(): Promise<void> {
   }
 }
 
+async function playCurrentSignal(): Promise<void> {
+  if (Date.now() < replayReadyAt) return;
+  refs.contactStatus.textContent = 'playing';
+  lockReplay(1);
+  try {
+    const response = await fetch(`${normalizedApiBase()}/api/emitter/main/play`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = (await response.json()) as { duration?: number };
+    lockReplay(payload.duration);
+  } catch (error) {
+    unlockReplay();
+    refs.contactStatus.textContent = error instanceof Error ? error.message : 'play failed';
+  }
+}
+
+function lockReplay(durationSeconds = 0): void {
+  const durationMs = Math.max(1000, Math.ceil(durationSeconds * 1000) + 250);
+  replayReadyAt = Date.now() + durationMs;
+  if (replayTimer !== null) window.clearInterval(replayTimer);
+  refs.playSignal.disabled = true;
+  updateReplayButton();
+  replayTimer = window.setInterval(updateReplayButton, 200);
+}
+
+function updateReplayButton(): void {
+  const remainingMs = replayReadyAt - Date.now();
+  if (remainingMs <= 0) {
+    unlockReplay();
+    return;
+  }
+  refs.playSignal.textContent = `wait ${Math.ceil(remainingMs / 1000)}s`;
+}
+
+function unlockReplay(): void {
+  replayReadyAt = 0;
+  if (replayTimer !== null) {
+    window.clearInterval(replayTimer);
+    replayTimer = null;
+  }
+  refs.playSignal.disabled = false;
+  refs.playSignal.textContent = 'play signal';
+}
+
 function render(): void {
-  refs.receiverStatus.textContent = micActive ? levelSnapshot.status : 'idle';
-  refs.signalState.textContent = micActive ? 'listening for encoded audio' : 'microphone disabled';
   refs.translationState.textContent = `${translationSnapshot.title} · ${translationSnapshot.verdict}`;
   refs.message.textContent = translationSnapshot.message;
   renderStatus(levelSnapshot.status);
-
-  refs.debug.textContent = [
-    `level ${levelSnapshot.levelDb.toFixed(1)} dB / floor ${levelSnapshot.noiseFloorDb.toFixed(1)} dB`,
-    `pair ${translationSnapshot.pair}`
-  ].join('\n');
 }
 
 function normalizedApiBase(): string {
