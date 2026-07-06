@@ -1,19 +1,16 @@
 import './styles.css';
-import { AudioZoneTracker } from './sensing/audioZoneTracker';
+import { SignalLevelTracker } from './sensing/signalLevelTracker';
 import { TranslationDecoder } from './sensing/translationDecoder';
-import type { ControllerPayload, ReceiverStatus } from './types';
-
-const POST_INTERVAL_MS = 500;
+import type { ReceiverStatus } from './types';
 
 const app = requiredElement<HTMLDivElement>('#app');
 app.innerHTML = `
   <main class="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-4 px-4 py-4">
     <section class="border border-white px-4 py-4">
-      <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">current zone</div>
-      <div id="zone" class="mt-2 text-[3.35rem] font-semibold leading-none tracking-normal sm:text-7xl">far</div>
-      <div class="mt-3 flex items-center justify-between gap-3 border-t border-white pt-3">
-        <div id="activeEmitter" class="min-w-0 truncate text-xs uppercase tracking-[0.16em] text-neutral-400">no emitter lock</div>
-        <div id="confidence" class="shrink-0 font-mono text-lg">0%</div>
+      <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">receiver</div>
+      <div id="receiverStatus" class="mt-2 text-3xl font-semibold uppercase leading-tight tracking-normal sm:text-5xl">idle</div>
+      <div class="mt-3 border-t border-white pt-3">
+        <div id="signalState" class="text-xs uppercase tracking-[0.16em] text-neutral-400">microphone disabled</div>
       </div>
     </section>
 
@@ -32,35 +29,41 @@ app.innerHTML = `
 
     <section class="grid gap-3">
       <button id="mic" class="min-h-14 px-4 text-base uppercase tracking-[0.18em]">enable microphone</button>
-      <details class="border border-white px-3 py-3">
-        <summary class="cursor-pointer text-xs uppercase tracking-[0.18em] text-neutral-400">control</summary>
-        <div class="mt-3 grid gap-3">
-          <input id="controller" class="min-h-11 px-3 font-mono text-sm" placeholder="controller URL">
-          <div id="debug" class="whitespace-pre-wrap border border-white px-3 py-3 font-mono text-xs text-neutral-400"></div>
-        </div>
-      </details>
+      <form id="contactForm" class="grid gap-3 border border-white px-3 py-3">
+        <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">contact</div>
+        <input id="prompt" class="min-h-11 px-3 text-base" maxlength="120" placeholder="message">
+        <button id="send" class="min-h-11 px-3 text-xs uppercase tracking-[0.16em]">send</button>
+        <details>
+          <summary class="cursor-pointer text-xs uppercase tracking-[0.18em] text-neutral-400">api</summary>
+          <input id="apiBase" class="mt-3 min-h-11 w-full px-3 font-mono text-sm" placeholder="api base URL">
+        </details>
+        <div id="contactStatus" class="min-h-6 font-mono text-xs uppercase tracking-[0.16em] text-neutral-400">---</div>
+      </form>
+      <div id="debug" class="whitespace-pre-wrap border border-white px-3 py-3 font-mono text-xs text-neutral-400"></div>
     </section>
   </main>
 `;
 
 const refs = {
-  zone: requiredElement<HTMLDivElement>('#zone'),
-  activeEmitter: requiredElement<HTMLDivElement>('#activeEmitter'),
-  confidence: requiredElement<HTMLDivElement>('#confidence'),
+  receiverStatus: requiredElement<HTMLDivElement>('#receiverStatus'),
+  signalState: requiredElement<HTMLDivElement>('#signalState'),
   translationState: requiredElement<HTMLDivElement>('#translationState'),
   message: requiredElement<HTMLDivElement>('#message'),
   mic: requiredElement<HTMLButtonElement>('#mic'),
   clear: requiredElement<HTMLButtonElement>('#clear'),
-  controller: requiredElement<HTMLInputElement>('#controller'),
+  contactForm: requiredElement<HTMLFormElement>('#contactForm'),
+  prompt: requiredElement<HTMLInputElement>('#prompt'),
+  apiBase: requiredElement<HTMLInputElement>('#apiBase'),
+  contactStatus: requiredElement<HTMLDivElement>('#contactStatus'),
   debug: requiredElement<HTMLDivElement>('#debug')
 };
 
 const params = new URLSearchParams(location.search);
-refs.controller.value = params.get('controller') ?? '';
+refs.apiBase.value = params.get('api') ?? localStorage.getItem('aliveApiBase') ?? '';
 
-const tracker = new AudioZoneTracker();
+const levels = new SignalLevelTracker();
 const decoder = new TranslationDecoder();
-let zoneSnapshot = tracker.snapshot();
+let levelSnapshot = levels.snapshot();
 let translationSnapshot = decoder.snapshot();
 let audioCtx: AudioContext | null = null;
 let micStream: MediaStream | null = null;
@@ -68,8 +71,6 @@ let sourceNode: MediaStreamAudioSourceNode | null = null;
 let processor: ScriptProcessorNode | null = null;
 let silentNode: GainNode | null = null;
 let micActive = false;
-let lastPostAt = 0;
-let lastPostedKey = '';
 
 refs.mic.addEventListener('click', () => {
   void toggleMicrophone();
@@ -77,6 +78,10 @@ refs.mic.addEventListener('click', () => {
 refs.clear.addEventListener('click', () => {
   translationSnapshot = decoder.reset();
   render();
+});
+refs.contactForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void sendContactMessage();
 });
 
 render();
@@ -104,24 +109,23 @@ async function startMicrophone(): Promise<void> {
       if (!audioCtx) return;
       const input = event.inputBuffer.getChannelData(0);
       const nowMs = performance.now();
-      zoneSnapshot = tracker.process(input, audioCtx.sampleRate, audioCtx.currentTime, nowMs);
+      levelSnapshot = levels.process(input, nowMs);
       translationSnapshot = decoder.process(
         input,
         audioCtx.sampleRate,
-        zoneSnapshot.levelDb,
-        zoneSnapshot.noiseFloorDb,
+        levelSnapshot.levelDb,
+        levelSnapshot.noiseFloorDb,
         audioCtx.currentTime,
         nowMs
       );
       render();
-      void postZoneIfNeeded();
     };
     sourceNode.connect(processor);
     processor.connect(silentNode).connect(audioCtx.destination);
     await audioCtx.resume();
     micActive = true;
-    tracker.startCalibration(performance.now());
-    zoneSnapshot = tracker.snapshot();
+    levels.startCalibration(performance.now());
+    levelSnapshot = levels.snapshot();
     translationSnapshot = decoder.reset('decoded message will appear here');
     refs.mic.textContent = 'disable microphone';
     renderStatus('calibrating');
@@ -144,30 +148,52 @@ async function stopMicrophone(): Promise<void> {
   processor = null;
   silentNode = null;
   micActive = false;
-  tracker.stop();
-  zoneSnapshot = tracker.snapshot();
+  levels.stop();
+  levelSnapshot = levels.snapshot();
   refs.mic.textContent = 'enable microphone';
   render();
 }
 
-function render(): void {
-  const active = zoneSnapshot.active;
-  refs.zone.textContent = active?.zone ?? 'far';
-  refs.confidence.textContent = `${Math.round(active?.confidence ?? 0)}%`;
-  refs.activeEmitter.textContent = active
-    ? `${active.emitter.label} · audio ${Math.round(active.audioConfidence)}%`
-    : micActive
-      ? 'listening for emitter'
-      : 'no emitter lock';
+async function sendContactMessage(): Promise<void> {
+  const message = refs.prompt.value.trim();
+  if (!message) return;
+  refs.contactStatus.textContent = 'sending';
+  refs.prompt.disabled = true;
+  const apiBase = normalizedApiBase();
+  localStorage.setItem('aliveApiBase', apiBase);
+  try {
+    const response = await fetch(`${apiBase}/api/message`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message })
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = (await response.json()) as { reply?: string; message?: string };
+    refs.contactStatus.textContent = payload.reply ?? payload.message ?? 'sent';
+    refs.prompt.value = '';
+  } catch (error) {
+    refs.contactStatus.textContent = error instanceof Error ? error.message : 'send failed';
+  } finally {
+    refs.prompt.disabled = false;
+    refs.prompt.focus();
+  }
+}
 
+function render(): void {
+  refs.receiverStatus.textContent = micActive ? levelSnapshot.status : 'idle';
+  refs.signalState.textContent = micActive ? 'listening for encoded audio' : 'microphone disabled';
   refs.translationState.textContent = `${translationSnapshot.title} · ${translationSnapshot.verdict}`;
   refs.message.textContent = translationSnapshot.message;
-  renderStatus(zoneSnapshot.status);
+  renderStatus(levelSnapshot.status);
 
   refs.debug.textContent = [
-    `level ${zoneSnapshot.levelDb.toFixed(1)} dB / floor ${zoneSnapshot.noiseFloorDb.toFixed(1)} dB`,
-    `active ${active?.emitter.id ?? 'none'} / pair ${translationSnapshot.pair}`
+    `level ${levelSnapshot.levelDb.toFixed(1)} dB / floor ${levelSnapshot.noiseFloorDb.toFixed(1)} dB`,
+    `pair ${translationSnapshot.pair}`
   ].join('\n');
+}
+
+function normalizedApiBase(): string {
+  return refs.apiBase.value.trim().replace(/\/+$/, '');
 }
 
 function renderStatus(status: ReceiverStatus): void {
@@ -182,59 +208,12 @@ function statusLabel(status: ReceiverStatus): string {
       return 'cal';
     case 'listening':
       return 'listen';
-    case 'locked':
-      return 'lock';
     case 'mic-blocked':
       return 'blocked';
-    case 'control-offline':
-      return 'offline';
     case 'idle':
     default:
       return 'idle';
   }
-}
-
-async function postZoneIfNeeded(force = false): Promise<void> {
-  const controller = normalizedControllerUrl();
-  const active = zoneSnapshot.active;
-  if (!controller || !active) return;
-  const now = performance.now();
-  const key = `${active.emitter.id}:${active.zone}:${Math.round(active.confidence / 5) * 5}:${translationSnapshot.message}`;
-  if (!force && key === lastPostedKey && now - lastPostAt < POST_INTERVAL_MS) return;
-  if (!force && now - lastPostAt < POST_INTERVAL_MS) return;
-  lastPostAt = now;
-  lastPostedKey = key;
-
-  const payload: ControllerPayload = {
-    emitterId: active.emitter.id,
-    zone: active.zone,
-    confidence: Math.round(active.confidence),
-    message: translationSnapshot.message === '---' ? '' : translationSnapshot.message,
-    levels: Object.fromEntries(
-      zoneSnapshot.emitters.map((estimate) => [
-        estimate.emitter.id,
-        {
-          zone: estimate.zone,
-          confidence: Math.round(estimate.confidence)
-        }
-      ])
-    )
-  };
-
-  try {
-    await fetch(`${controller}/api/zone`, {
-      method: 'POST',
-      mode: 'cors',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-  } catch {
-    renderStatus('control-offline');
-  }
-}
-
-function normalizedControllerUrl(): string {
-  return refs.controller.value.trim().replace(/\/+$/, '');
 }
 
 function requiredElement<T extends Element>(selector: string): T {

@@ -155,7 +155,6 @@ class LoopingMessagePlayer:
         self._cycle = 0
         self._lock = threading.Lock()
         self._stream = None
-        self.last_phone_update: dict[str, object] | None = None
 
     def _encode_current(self) -> np.ndarray:
         if self.signal_type == "burst":
@@ -238,7 +237,6 @@ class LoopingMessagePlayer:
                 "revision": self._revision,
                 "cycle": self._cycle,
                 "active": self._stream is not None,
-                "lastPhoneUpdate": self.last_phone_update,
             }
 
     def public_snapshot(self) -> dict[str, object]:

@@ -6,7 +6,7 @@ ALIVE is now one demo path:
 laptop encoded-audio emitter -> phone microphone -> browser receiver
 ```
 
-The laptop plays an encoded message as short dual-tone bursts. The phone decodes the bursts into text and estimates `far` / `mid` / `near` / `close` from the same audio signal. The zone estimate holds through intentional silent gaps between message bursts instead of treating every gap as distance.
+The laptop plays an encoded message as short dual-tone bursts. The phone listens through the microphone, calibrates against the local noise floor, decodes the bursts into text, and classifies the received signal.
 
 ## Run
 
@@ -27,6 +27,41 @@ python emitter.py
 
 Then scan/open the printed phone URL, accept the local HTTPS warning if needed, tap **Enable microphone**, and type `start` in the emitter terminal.
 
+## Reply API
+
+The laptop server can also act as the temporary signal API before the NAS/ESP32 emitter exists. The phone page includes a contact form; when served from the laptop it posts to the same origin by default.
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/message \
+  -H 'content-type: application/json' \
+  -d '{"message":"hello are you alive"}'
+```
+
+The generated reply is sanitized to A-Z plus spaces and capped at 20 characters before it is encoded into the laptop audio loop. Without `OPENAI_API_KEY`, the server uses deterministic fallback replies for local testing. With an API key:
+
+```bash
+export OPENAI_API_KEY=...
+export ALIVE_OPENAI_MODEL=gpt-5.4-mini
+python emitter.py
+```
+
+The future ESP32 I2S emitter can poll the same transport shape:
+
+```text
+GET /api/emitter/main/current
+```
+
+```json
+{
+  "emitterId": "main",
+  "revision": 1,
+  "message": "I AM HERE",
+  "mode": "language",
+  "maxChars": 20,
+  "active": true
+}
+```
+
 ## Live Controls
 
 While `python emitter.py` is running:
@@ -35,6 +70,7 @@ While `python emitter.py` is running:
 start                   start the current signal
 stop                    stop the current signal
 message <text>          change encoded message
+ask <text>              generate a max-20-char reply and play it
 language / clock / burst  change signal type
 status                  show current sender state
 quit                    stop the server
@@ -67,7 +103,3 @@ Microphone access usually requires HTTPS. Use `--http` only for local desktop te
 python test_audio_message.py
 cd web && bun run build
 ```
-
-## BLE Note
-
-BLE can help later if hardware emitters advertise and the phone reads their signal strength, but browser support is limited and RSSI is noisy. The current browser demo should not depend on BLE for gap handling; the receiver smooths and holds the audio zone through normal encoded-message silence.
