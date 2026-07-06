@@ -8,6 +8,7 @@ from audio_message import (
     encoded_gap_ms,
     sanitize_message,
 )
+from reply_engine import fallback_reply, normalize_reply
 
 
 def test_sanitize_message_keeps_codebook_chars():
@@ -45,6 +46,12 @@ def test_player_configures_without_audio_device():
     assert snapshot["active"] is False
 
 
+def test_reply_text_is_transport_safe():
+    assert normalize_reply("yes... but the air is running thin") == "YES BUT THE AIR IS"
+    assert len(normalize_reply("abcdefghijklmnopqrstuvwxyz")) <= 20
+    assert fallback_reply("hello are you alive") == "I AM HERE"
+
+
 def run_tests():
     tests = [
         test_sanitize_message_keeps_codebook_chars,
@@ -52,6 +59,7 @@ def run_tests():
         test_language_signal_contains_bursts_and_gaps,
         test_clock_and_burst_signals_are_distinct,
         test_player_configures_without_audio_device,
+        test_reply_text_is_transport_safe,
     ]
     for test in tests:
         test()

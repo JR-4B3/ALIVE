@@ -20,6 +20,7 @@ from audio_message import (
     VALID_SIGNAL_TYPES,
     sanitize_message,
 )
+from reply_engine import MAX_REPLY_CHARS, generate_reply
 
 
 DEFAULT_MESSAGE = "WE ARE STILL HERE"
@@ -30,12 +31,42 @@ class DemoState:
     def __init__(self, player: LoopingMessagePlayer) -> None:
         self.player = player
         self.running = True
+        self.latest_reply = sanitize_message(player.message)[:MAX_REPLY_CHARS] or "ALIVE"
+        self.reply_revision = 0
+        self._lock = threading.Lock()
 
     def snapshot(self) -> dict[str, object]:
         return self.player.snapshot()
 
     def public_snapshot(self) -> dict[str, object]:
         return self.player.public_snapshot()
+
+    def current_emitter_message(self) -> dict[str, object]:
+        with self._lock:
+            return {
+                "emitterId": "main",
+                "revision": self.reply_revision,
+                "message": self.latest_reply,
+                "mode": "language",
+                "maxChars": MAX_REPLY_CHARS,
+                "active": self.player.public_snapshot()["active"],
+            }
+
+    def set_reply(self, reply: str) -> dict[str, object]:
+        cleaned = sanitize_message(reply)[:MAX_REPLY_CHARS].strip() or "SIGNAL WEAK"
+        self.player.configure(message=cleaned, signal_type="language")
+        self.player.start()
+        with self._lock:
+            self.latest_reply = cleaned
+            self.reply_revision += 1
+            return {
+                "emitterId": "main",
+                "revision": self.reply_revision,
+                "message": self.latest_reply,
+                "mode": "language",
+                "maxChars": MAX_REPLY_CHARS,
+                "active": self.player.public_snapshot()["active"],
+            }
 
 
 class QuietThreadingHTTPServer(ThreadingHTTPServer):
@@ -61,6 +92,9 @@ def make_handler(state: DemoState):
             if parsed.path == "/api/state":
                 self._send_json(state.public_snapshot())
                 return
+            if parsed.path == "/api/emitter/main/current":
+                self._send_json(state.current_emitter_message())
+                return
             if parsed.path == "/api/configure":
                 self._handle_configure(parsed.query)
                 return
@@ -78,8 +112,8 @@ def make_handler(state: DemoState):
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
-            if parsed.path == "/api/zone":
-                self._handle_zone_post()
+            if parsed.path == "/api/message":
+                self._handle_message_post()
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -100,14 +134,25 @@ def make_handler(state: DemoState):
             state.player.configure(message=message, mode=mode, signal_type=signal_type)
             self._send_json(state.public_snapshot())
 
-        def _handle_zone_post(self) -> None:
+        def _handle_message_post(self) -> None:
+            payload = self._read_json()
+            player_text = str(payload.get("message") or payload.get("playerText") or "")
+            if not player_text.strip():
+                self.send_error(HTTPStatus.BAD_REQUEST, "message is required")
+                return
+            reply = generate_reply(player_text)
+            current = state.set_reply(reply)
+            self._send_json({"reply": current["message"], **current})
+
+        def _read_json(self) -> dict[str, object]:
             length = int(self.headers.get("content-length", "0") or "0")
+            if length <= 0:
+                return {}
             try:
                 payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
             except json.JSONDecodeError:
-                payload = {}
-            state.player.last_phone_update = payload
-            self._send_json({"ok": True, **state.public_snapshot()})
+                return {}
+            return payload if isinstance(payload, dict) else {}
 
         def _send_cors_headers(self) -> None:
             self.send_header("access-control-allow-origin", "*")
@@ -250,6 +295,7 @@ def controller_loop(state: DemoState) -> None:
     print("  start                   start the current signal")
     print("  stop                    stop the current signal")
     print("  message <text>          change encoded message")
+    print("  ask <text>              generate a max-20-char reply and play it")
     print("  language / clock / burst  change signal type")
     print("  status                  show current sender state")
     print("  quit                    stop the server\n")
@@ -281,6 +327,10 @@ def controller_loop(state: DemoState) -> None:
                 state.player.configure(message=cleaned, signal_type="language")
             else:
                 print("[error] message must contain A-Z or spaces")
+        elif command == "ask" and value.strip():
+            reply = generate_reply(value)
+            current = state.set_reply(reply)
+            print(f"[reply] {current['message']}")
         elif command == "signal" and value.strip():
             signal_type = value.strip().lower()
             if signal_type in VALID_SIGNAL_TYPES:
@@ -290,7 +340,7 @@ def controller_loop(state: DemoState) -> None:
         elif command in VALID_SIGNAL_TYPES:
             state.player.configure(signal_type=command)
         else:
-            print("Unknown command. Try: start, stop, message HELLO WORLD, language, clock, burst, status, quit")
+            print("Unknown command. Try: start, stop, message HELLO WORLD, ask ARE YOU THERE, language, clock, burst, status, quit")
 
 
 def main() -> int:
