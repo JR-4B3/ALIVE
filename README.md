@@ -37,7 +37,9 @@ curl -X POST http://127.0.0.1:8765/api/message \
   -d '{"message":"hello are you alive"}'
 ```
 
-The generated reply is sanitized to A-Z plus spaces and capped at 20 characters before it is encoded into the laptop audio loop. Without `OPENAI_API_KEY`, the server uses deterministic fallback replies for local testing. With an API key:
+The generated reply is sanitized to A-Z plus spaces and capped at 20 characters before it is encoded and played once through the laptop. It does not loop automatically. Use the web page's **play signal** button to replay the current signal; the button stays locked until the current audio duration has elapsed.
+
+Without `OPENAI_API_KEY`, the server uses deterministic fallback replies for local testing. With an API key:
 
 ```bash
 export OPENAI_API_KEY=...
@@ -58,8 +60,15 @@ GET /api/emitter/main/current
   "message": "I AM HERE",
   "mode": "language",
   "maxChars": 20,
+  "duration": 9.23,
   "active": true
 }
+```
+
+The web replay button calls:
+
+```text
+POST /api/emitter/main/play
 ```
 
 ## Live Controls
