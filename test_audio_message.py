@@ -9,6 +9,7 @@ from audio_message import (
     sanitize_message,
 )
 from reply_engine import fallback_reply, normalize_reply
+from emitter import DemoState
 
 
 def test_sanitize_message_keeps_codebook_chars():
@@ -52,6 +53,22 @@ def test_reply_text_is_transport_safe():
     assert fallback_reply("hello are you alive") == "I AM HERE"
 
 
+def test_device_output_queues_each_play_without_laptop_audio():
+    player = LoopingMessagePlayer("TEST")
+    laptop_play_calls = []
+    player.play_once = lambda: laptop_play_calls.append(True)  # type: ignore[method-assign]
+    state = DemoState(player, device_output=True)
+
+    first = state.set_reply("I AM HERE")
+    replay = state.play_current_once()
+
+    assert first["revision"] == 1
+    assert replay["revision"] == 2
+    assert replay["message"] == "I AM HERE"
+    assert replay["output"] == "esp32"
+    assert laptop_play_calls == []
+
+
 def run_tests():
     tests = [
         test_sanitize_message_keeps_codebook_chars,
@@ -60,6 +77,7 @@ def run_tests():
         test_clock_and_burst_signals_are_distinct,
         test_player_configures_without_audio_device,
         test_reply_text_is_transport_safe,
+        test_device_output_queues_each_play_without_laptop_audio,
     ]
     for test in tests:
         test()

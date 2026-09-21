@@ -28,8 +28,9 @@ STATIC_PHONE_APP = Path(__file__).parent / "docs" / "index.html"
 
 
 class DemoState:
-    def __init__(self, player: LoopingMessagePlayer) -> None:
+    def __init__(self, player: LoopingMessagePlayer, device_output: bool = False) -> None:
         self.player = player
+        self.device_output = device_output
         self.running = True
         self.latest_reply = sanitize_message(player.message)[:MAX_REPLY_CHARS] or "ALIVE"
         self.reply_revision = 0
@@ -52,12 +53,14 @@ class DemoState:
                 "maxChars": MAX_REPLY_CHARS,
                 "duration": player_state["duration"],
                 "active": player_state["active"],
+                "output": "esp32" if self.device_output else "laptop",
             }
 
     def set_reply(self, reply: str) -> dict[str, object]:
         cleaned = sanitize_message(reply)[:MAX_REPLY_CHARS].strip() or "SIGNAL WEAK"
         self.player.configure(message=cleaned, signal_type="language")
-        self.player.play_once()
+        if not self.device_output:
+            self.player.play_once()
         player_state = self.player.public_snapshot()
         with self._lock:
             self.latest_reply = cleaned
@@ -70,10 +73,14 @@ class DemoState:
                 "maxChars": MAX_REPLY_CHARS,
                 "duration": player_state["duration"],
                 "active": player_state["active"],
+                "output": "esp32" if self.device_output else "laptop",
             }
 
     def play_current_once(self) -> dict[str, object]:
-        self.player.play_once()
+        if not self.device_output:
+            self.player.play_once()
+        with self._lock:
+            self.reply_revision += 1
         return self.current_emitter_message()
 
 
@@ -365,10 +372,15 @@ def main() -> int:
     tone.add_argument("--vocal", dest="mode", action="store_const", const="vocal")
     parser.add_argument("--signal", choices=VALID_SIGNAL_TYPES, default="language")
     parser.add_argument("--http", action="store_true", help="Use HTTP instead of local HTTPS")
+    parser.add_argument(
+        "--device-output",
+        action="store_true",
+        help="Queue replies for the ESP32 I2S emitter instead of laptop audio",
+    )
     args = parser.parse_args()
 
     player = LoopingMessagePlayer(args.message, args.mode, args.signal)
-    state = DemoState(player)
+    state = DemoState(player, device_output=args.device_output)
     ip = local_ip()
     server = QuietThreadingHTTPServer((args.host, args.port), make_handler(state))
     https_active = False
@@ -385,6 +397,7 @@ def main() -> int:
     print(f"Encoded message: {player.message}")
     print(f"Sound style: {player.mode}")
     print(f"Signal type: {player.signal_type}")
+    print(f"Audio output: {'ESP32 / MAX98357' if args.device_output else 'laptop'}")
     print("Audio loop: stopped; type start to play the current signal")
     if https_active:
         print("[HTTPS] The phone may show a certificate warning; accept it for the local demo.")

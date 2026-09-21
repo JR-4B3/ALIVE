@@ -14,3 +14,5 @@ transmission*
 node_modules/
 web/node_modules/
 web/dist/
+firmware/**/.pio/
+firmware/**/include/secrets.h
