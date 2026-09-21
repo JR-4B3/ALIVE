@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="850" viewBox="0 0 1600 850">
+  <style>
+    text { font-family: Arial, Helvetica, sans-serif; fill: #111; }
+    .title { font-size: 48px; font-weight: 800; }
+    .heading { font-size: 30px; font-weight: 700; }
+    .label { font-size: 18px; font-weight: 700; }
+    .small { font-size: 16px; font-weight: 700; }
+    .wire { fill: none; stroke-width: 12; stroke-linecap: round; stroke-linejoin: round; }
+    .pin { stroke: #fff; stroke-width: 4; }
+  </style>
+  <rect width="1600" height="850" fill="#fff"/>
+  <text x="800" y="70" text-anchor="middle" class="title">ALIVE — ESP32-C3 + MAX98357 wiring</text>
+
+  <text x="320" y="135" text-anchor="middle" class="heading">ESP32-C3 Super Mini</text>
+  <rect x="100" y="220" width="500" height="300" rx="24" fill="#191919"/>
+  <rect x="38" y="315" width="105" height="110" rx="12" fill="#bbb" stroke="#555" stroke-width="5"/>
+  <text x="58" y="375" class="small">USB-C</text>
+  <rect x="260" y="315" width="210" height="110" rx="10" fill="#777" stroke="#aaa" stroke-width="4"/>
+  <text x="365" y="365" text-anchor="middle" fill="#fff" class="heading">ESP32-C3</text>
+  <text x="365" y="397" text-anchor="middle" fill="#fff" class="label">USB PORT FACES LEFT</text>
+
+  <!-- Rotated top row: 5V, GND, 3V3, GPIO4, GPIO3, GPIO2, GPIO1, GPIO0 -->
+  <g>
+    <circle cx="145" cy="220" r="16" fill="#e52521" class="pin"/><text x="145" y="190" text-anchor="middle" class="label">5V</text>
+    <circle cx="205" cy="220" r="16" fill="#111" class="pin"/><text x="205" y="190" text-anchor="middle" class="label">GND</text>
+    <circle cx="265" cy="220" r="16" fill="#d9a500" class="pin"/><text x="265" y="190" text-anchor="middle" class="label">3V3</text>
+    <circle cx="325" cy="220" r="16" fill="#1769dd" class="pin"/><text x="325" y="190" text-anchor="middle" class="label">GPIO4</text>
+    <circle cx="385" cy="220" r="14" fill="#d9a500" class="pin"/><text x="385" y="190" text-anchor="middle" class="small">GPIO3</text>
+    <circle cx="445" cy="220" r="14" fill="#d9a500" class="pin"/><text x="445" y="190" text-anchor="middle" class="small">GPIO2</text>
+    <circle cx="505" cy="220" r="14" fill="#d9a500" class="pin"/><text x="505" y="190" text-anchor="middle" class="small">GPIO1</text>
+    <circle cx="565" cy="220" r="14" fill="#d9a500" class="pin"/><text x="565" y="190" text-anchor="middle" class="small">GPIO0</text>
+  </g>
+
+  <!-- Rotated bottom row: GPIO5, GPIO6, GPIO7, GPIO8, GPIO9, GPIO10, GPIO20, GPIO21 -->
+  <g>
+    <circle cx="145" cy="520" r="16" fill="#159447" class="pin"/><text x="145" y="555" text-anchor="middle" class="label">GPIO5</text>
+    <circle cx="205" cy="520" r="16" fill="#f1bf00" class="pin"/><text x="205" y="555" text-anchor="middle" class="label">GPIO6</text>
+    <circle cx="265" cy="520" r="14" fill="#d9a500" class="pin"/><text x="265" y="555" text-anchor="middle" class="small">GPIO7</text>
+    <circle cx="325" cy="520" r="14" fill="#d9a500" class="pin"/><text x="325" y="555" text-anchor="middle" class="small">GPIO8</text>
+    <circle cx="385" cy="520" r="14" fill="#d9a500" class="pin"/><text x="385" y="555" text-anchor="middle" class="small">GPIO9</text>
+    <circle cx="445" cy="520" r="14" fill="#d9a500" class="pin"/><text x="445" y="555" text-anchor="middle" class="small">GPIO10</text>
+    <circle cx="505" cy="520" r="14" fill="#d9a500" class="pin"/><text x="505" y="555" text-anchor="middle" class="small">GPIO20</text>
+    <circle cx="565" cy="520" r="14" fill="#d9a500" class="pin"/><text x="565" y="555" text-anchor="middle" class="small">GPIO21</text>
+  </g>
+
+  <text x="880" y="135" text-anchor="middle" class="heading">MAX98357 I²S amplifier</text>
+  <rect x="760" y="220" width="300" height="400" rx="25" fill="#176aa5" stroke="#0d4e7d" stroke-width="6"/>
+  <text x="910" y="285" text-anchor="middle" fill="#fff" class="heading">MAX98357</text>
+  <g class="label">
+    <circle cx="760" cy="335" r="15" fill="#e52521" class="pin"/><text x="790" y="342" fill="#fff">VIN</text>
+    <circle cx="760" cy="390" r="15" fill="#111" class="pin"/><text x="790" y="397" fill="#fff">GND</text>
+    <circle cx="760" cy="445" r="15" fill="#1769dd" class="pin"/><text x="790" y="452" fill="#fff">BCLK</text>
+    <circle cx="760" cy="500" r="15" fill="#159447" class="pin"/><text x="790" y="507" fill="#fff">LRC</text>
+    <circle cx="760" cy="555" r="15" fill="#f1bf00" class="pin"/><text x="790" y="562" fill="#fff">DIN</text>
+    <circle cx="760" cy="595" r="11" fill="#d9a500" class="pin"/><text x="790" y="602" fill="#fff">GAIN / SD: leave open</text>
+  </g>
+
+  <!-- Each wire begins at the center of the labeled ESP32 hole. -->
+  <path d="M145 220 V290 H680 V335 H760" class="wire" stroke="#e52521"/>
+  <path d="M205 220 V315 H700 V390 H760" fill="none" stroke="#fff" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M205 220 V315 H700 V390 H760" class="wire" stroke="#111"/>
+  <path d="M325 220 V350 H720 V445 H760" class="wire" stroke="#1769dd"/>
+  <path d="M145 520 V680 H690 V500 H760" class="wire" stroke="#159447"/>
+  <path d="M205 520 V650 H720 V555 H760" class="wire" stroke="#f1bf00"/>
+  <!-- redraw endpoint dots above wires -->
+  <circle cx="145" cy="220" r="16" fill="#e52521" class="pin"/><circle cx="205" cy="220" r="16" fill="#111" class="pin"/><circle cx="325" cy="220" r="16" fill="#1769dd" class="pin"/>
+  <circle cx="145" cy="520" r="16" fill="#159447" class="pin"/><circle cx="205" cy="520" r="16" fill="#f1bf00" class="pin"/>
+
+  <text x="1285" y="170" text-anchor="middle" class="heading">Passive speaker (4–8 Ω)</text>
+  <circle cx="1300" cy="405" r="155" fill="#333" stroke="#111" stroke-width="10"/>
+  <circle cx="1300" cy="405" r="105" fill="#555" stroke="#111" stroke-width="8"/>
+  <circle cx="1300" cy="405" r="42" fill="#222"/>
+  <circle cx="1060" cy="335" r="15" fill="#e52521" class="pin"/><text x="1025" y="343" text-anchor="end" fill="#fff" class="heading">+</text>
+  <circle cx="1060" cy="505" r="15" fill="#111" class="pin"/><text x="1025" y="513" text-anchor="end" fill="#fff" class="heading">−</text>
+  <rect x="1035" y="340" width="55" height="48" rx="8" fill="#ddd" stroke="#555" stroke-width="3"/>
+  <rect x="1035" y="430" width="55" height="48" rx="8" fill="#ddd" stroke="#555" stroke-width="3"/>
+  <text x="1062" y="374" text-anchor="middle" fill="#e52521" class="heading">+</text>
+  <text x="1062" y="464" text-anchor="middle" class="heading">−</text>
+  <path d="M1060 335 V315 H1120 V364 H1090" class="wire" stroke="#e52521"/>
+  <path d="M1060 505 V530 H1120 V454 H1090" class="wire" stroke="#111"/>
+  <text x="1060" y="305" text-anchor="middle" fill="#e52521" class="label">speaker +</text>
+  <text x="1060" y="555" text-anchor="middle" class="label">speaker −</text>
+
+  <rect x="310" y="740" width="980" height="75" rx="18" fill="#fff0f0" stroke="#e52521" stroke-width="5"/>
+  <text x="800" y="790" text-anchor="middle" fill="#d71919" class="heading">⚠ Disconnect USB and power while wiring</text>
+</svg>

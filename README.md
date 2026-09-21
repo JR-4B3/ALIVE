@@ -25,7 +25,7 @@ Wire the boards with power disconnected:
 
 Connect the speaker directly to the green `+` and `-` terminals. Leave `GAIN` and `SD` unconnected for the first demo.
 
-![ESP32-C3 to MAX98357 wiring](docs/alive-esp32-max98357-wiring.png)
+![ESP32-C3 to MAX98357 wiring with USB-C facing left](docs/alive-esp32-max98357-wiring-usb-left.svg)
 
 Configure and flash the device:
 
