@@ -18,10 +18,12 @@ constexpr uint32_t BURST_MS = 220;
 constexpr float GAP_SCALE = 0.65f;
 constexpr uint32_t MIN_GAP_MS = 90;
 constexpr uint32_t POLL_MS = 300;
-constexpr int16_t AMPLITUDE = 8500;
+// Start conservatively. The MAX98357 has substantial speaker gain.
+constexpr int16_t AMPLITUDE = 3500;
 
 long lastRevision = -1;
 uint32_t lastPollAt = 0;
+uint32_t lastHardwareTestAt = 0;
 
 bool frequenciesFor(char ch, float &low, float &high, uint16_t &rawGapMs) {
   if (ch == ' ') {
@@ -37,18 +39,19 @@ bool frequenciesFor(char ch, float &low, float &high, uint16_t &rawGapMs) {
 }
 
 void writeSilence(uint32_t durationMs) {
-  static int16_t zeros[256] = {};
+  // Interleaved left/right samples keep the I2S frame unambiguous for the amp.
+  static int16_t zeros[512] = {};
   uint32_t remaining = (SAMPLE_RATE * durationMs) / 1000;
   while (remaining > 0) {
     const size_t count = min<uint32_t>(remaining, 256);
     size_t written = 0;
-    i2s_write(I2S_PORT, zeros, count * sizeof(int16_t), &written, portMAX_DELAY);
+    i2s_write(I2S_PORT, zeros, count * 2 * sizeof(int16_t), &written, portMAX_DELAY);
     remaining -= count;
   }
 }
 
 void writeTone(float low, float high) {
-  int16_t samples[256];
+  int16_t samples[512];
   const uint32_t total = (SAMPLE_RATE * BURST_MS) / 1000;
   uint32_t cursor = 0;
   while (cursor < total) {
@@ -62,10 +65,12 @@ void writeTone(float low, float high) {
       if (tail < SAMPLE_RATE / 50) envelope = min(envelope, tail / (SAMPLE_RATE / 50.0f));
       const float signal = 0.53f * sinf(TWO_PI * low * time) +
                            0.47f * sinf(TWO_PI * high * time);
-      samples[i] = static_cast<int16_t>(signal * envelope * AMPLITUDE);
+      const int16_t sample = static_cast<int16_t>(signal * envelope * AMPLITUDE);
+      samples[i * 2] = sample;
+      samples[i * 2 + 1] = sample;
     }
     size_t written = 0;
-    i2s_write(I2S_PORT, samples, count * sizeof(int16_t), &written, portMAX_DELAY);
+    i2s_write(I2S_PORT, samples, count * 2 * sizeof(int16_t), &written, portMAX_DELAY);
     cursor += count;
   }
 }
@@ -131,7 +136,7 @@ void setup() {
       .mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_TX),
       .sample_rate = SAMPLE_RATE,
       .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-      .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+      .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
       .communication_format = I2S_COMM_FORMAT_STAND_I2S,
       .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
       .dma_buf_count = 8,
@@ -150,15 +155,32 @@ void setup() {
   i2s_driver_install(I2S_PORT, &config, 0, nullptr);
   i2s_set_pin(I2S_PORT, &pins);
   i2s_zero_dma_buffer(I2S_PORT);
+#ifdef ALIVE_HARDWARE_TEST
+  Serial.println("ALIVE hardware test: playing a quiet 1 kHz beep every 6 seconds");
+  writeSilence(300);
+  writeTone(1000, 1000);
+  writeSilence(500);
+  lastHardwareTestAt = millis();
+#else
   connectWifi();
   Serial.println("ALIVE I2S emitter ready");
+#endif
 }
 
 void loop() {
+#ifdef ALIVE_HARDWARE_TEST
+  if (millis() - lastHardwareTestAt >= 6000) {
+    Serial.println("Hardware test beep");
+    writeTone(1000, 1000);
+    writeSilence(500);
+    lastHardwareTestAt = millis();
+  }
+#else
   if (WiFi.status() != WL_CONNECTED) connectWifi();
   if (millis() - lastPollAt >= POLL_MS) {
     lastPollAt = millis();
     pollForMessage();
   }
+#endif
   delay(10);
 }
