@@ -16,6 +16,8 @@ The phone, NAS, and ESP32 all need internet access. The phone and ESP32 may use 
 
 On 23 September, the connected ESP32 enumerated as `/dev/ttyACM0`, accepted `PLAY HI`, and made an audible sound through the MAX98357 and speaker. The website API also sent `HI` once successfully. No new USB over-current event appeared during those checks. Earlier PC logs **did** show over-current, so inspect the USB log again before flashing or leaving the installation running unattended. If an over-current event returns, unplug USB and investigate the power wiring before another active test. The successful short test does not prove that the setup is stable for a whole exhibition day.
 
+The GitHub Pages QR page, public Funnel URL, NAS container, and a live GPT-6 Luna reply have since been verified. The remaining blocker is the ESP32's Wi-Fi association: it sees the home router and iPhone hotspot but repeatedly reports authentication expiry; a direct WPA2 PC hotspot also failed. The same failure occurs in firmware without I2S initialization. **Play signal** correctly reports `ESP32 is offline` until this is resolved. Inspect the ESP32 antenna area and power wiring before relying on the no-laptop setup at the exhibition.
+
 ## 1. Publish the matching phone page
 
 GitHub Pages for `JR-4B3/ALIVE` is set to the `main` branch's `/docs` folder, at <https://jr-4b3.github.io/ALIVE/>. Include the built `docs/` files when publishing. The printable [exhibition QR](docs/ALIVE-QR.svg) points to that page. On the published page, the NAS address is already filled in and visitors do not enter a token. Connection settings are tucked under a disclosure for the operator.
