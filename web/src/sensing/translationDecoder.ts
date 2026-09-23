@@ -3,131 +3,104 @@ import type { TranslationSnapshot } from '../types';
 
 const LOW_FREQS = [400, 500, 600, 700, 800, 900, 1000];
 const HIGH_FREQS = [2000, 2300, 2600, 2900];
-const MIC_MIN_BURST_SECONDS = 0.12;
-const MIC_MAX_BURST_SECONDS = 0.42;
+// A 93 ms window at 44.1 kHz separates adjacent low carriers much more
+// reliably than the old 46 ms window, even when the phone is farther away.
+const FRAME_SAMPLES = 4096;
+const FRAME_HOP = 1024;
+const MIN_EVIDENCE_SECONDS = 0.065;
+const RELEASE_SECONDS = 0.045;
 const CYCLE_BOUNDARY_GAP_MS = 1400;
 
-const CODEBOOK = [
-  ['A', 400, 2000, 65],
-  ['B', 400, 2300, 98],
-  ['C', 400, 2600, 130],
-  ['D', 400, 2900, 163],
-  ['E', 500, 2000, 195],
-  ['F', 500, 2300, 228],
-  ['G', 500, 2600, 260],
-  ['H', 500, 2900, 293],
-  ['I', 600, 2000, 325],
-  ['J', 600, 2300, 358],
-  ['K', 600, 2600, 390],
-  ['L', 600, 2900, 423],
-  ['M', 700, 2000, 455],
-  ['N', 700, 2300, 488],
-  ['O', 700, 2600, 520],
-  ['P', 700, 2900, 553],
-  ['Q', 800, 2000, 585],
-  ['R', 800, 2300, 618],
-  ['S', 800, 2600, 650],
-  ['T', 800, 2900, 683],
-  ['U', 900, 2000, 715],
-  ['V', 900, 2300, 748],
-  ['W', 900, 2600, 780],
-  ['X', 900, 2900, 813],
-  ['Y', 1000, 2000, 845],
-  ['Z', 1000, 2300, 878],
-  [' ', 1000, 2600, 1040]
-] as const;
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ ';
 
-const COMMON_WORDS = new Set([
-  'ALIVE',
-  'ARE',
-  'DEMO',
-  'DISCOVER',
-  'EARTH',
-  'HELLO',
-  'HERE',
-  'LANGUAGE',
-  'MESSAGE',
-  'SIGNAL',
-  'STILL',
-  'TRANSLATE',
-  'WE',
-  'WORLD'
-]);
-
-interface LetterDetection {
+interface TonePair {
   ch: string;
-  confidence: number;
   low: number;
   high: number;
+  strength: number;
+  confidence: number;
 }
 
 export class TranslationDecoder {
-  private inBurst = false;
-  private burstSamples: number[] = [];
+  private frame = new Float32Array(FRAME_SAMPLES);
+  private frameFill = 0;
+  private processedSamples = 0;
+  private candidate: TonePair | null = null;
+  private votes = new Map<string, { pair: TonePair; score: number; frames: number }>();
   private burstStartAt = 0;
+  private burstLastAt = 0;
+  private burstPeak = 0;
+  private releaseFrames = 0;
   private lastBurstEndAt = 0;
+  private lastLetterStartAt: number | null = null;
+  private lastLetter = '';
   private decoded = '';
   private finalMessage = '';
   private stream = '';
-  private pendingLetter: LetterDetection | null = null;
   private recentGaps: number[] = [];
   private lastDecodedAt = 0;
   private lastFinalText = '';
   private pair = '--';
+  private captureUntilMs = 0;
+
+  beginCapture(nowMs: number): TranslationSnapshot {
+    this.reset('listening for signal');
+    this.captureUntilMs = nowMs + 20000;
+    return this.snapshot();
+  }
+
+  setCaptureDuration(nowMs: number, durationSeconds: number): void {
+    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+      this.captureUntilMs = nowMs + Math.min(durationSeconds, 20) * 1000 + 2000;
+    }
+  }
 
   process(
     input: Float32Array,
     sampleRate: number,
     _levelDb: number,
     noiseFloorDb: number,
-    audioTimeSeconds: number,
+    _audioTimeSeconds: number,
     nowMs: number
   ): TranslationSnapshot {
-    const chunkLevelDb = rmsDb(input);
-    const startThreshold = Math.max(-90, noiseFloorDb + 6);
-    const endThreshold = Math.max(-94, noiseFloorDb + 3);
-    const chunkDuration = input.length / sampleRate;
-
-    if (!this.inBurst && chunkLevelDb > startThreshold) {
-      this.inBurst = true;
-      this.burstSamples = [];
-      this.burstStartAt = audioTimeSeconds;
-    }
-
-    if (this.inBurst) {
-      this.burstSamples.push(...input);
-      const burstDuration = audioTimeSeconds - this.burstStartAt + chunkDuration;
-      if ((chunkLevelDb < endThreshold && burstDuration > MIC_MIN_BURST_SECONDS) || burstDuration > MIC_MAX_BURST_SECONDS) {
-        this.inBurst = false;
-        const gapMs = this.lastBurstEndAt ? (this.burstStartAt - this.lastBurstEndAt) * 1000 : 0;
-        this.lastBurstEndAt = audioTimeSeconds;
-        const result = detectLetter(this.burstSamples, sampleRate);
-        this.pair = `${result.low}/${result.high} Hz`;
-        if (result.confidence > 0.3) {
-          this.acceptLetter(result, gapMs);
-        }
+    for (let i = 0; i < input.length; i += 1) {
+      this.frame[this.frameFill++] = input[i];
+      if (this.frameFill === FRAME_SAMPLES) {
+        // Callback delivery on a busy phone can be uneven; protocol timing
+        // comes from recorded samples, never the callback's wall clock.
+        const endAt = (this.processedSamples + i + 1) / sampleRate;
+        this.processFrame(this.frame, sampleRate, noiseFloorDb, endAt, nowMs);
+        this.frame.copyWithin(0, FRAME_HOP);
+        this.frameFill = FRAME_SAMPLES - FRAME_HOP;
       }
     }
-
-    if (!this.inBurst && this.decoded.trim().length > 0 && nowMs - this.lastDecodedAt > 1800) {
+    this.processedSamples += input.length;
+    if (nowMs >= this.captureUntilMs && !this.candidate && this.decoded.trim() && nowMs - this.lastDecodedAt > 1800) {
       this.finishCycle();
     }
-
     return this.snapshot();
   }
 
   reset(reason = 'decoded stream cleared'): TranslationSnapshot {
-    this.inBurst = false;
-    this.burstSamples = [];
+    this.frameFill = 0;
+    this.processedSamples = 0;
+    this.candidate = null;
+    this.votes.clear();
+    this.burstStartAt = 0;
+    this.burstLastAt = 0;
+    this.burstPeak = 0;
+    this.releaseFrames = 0;
     this.lastBurstEndAt = 0;
+    this.lastLetterStartAt = null;
+    this.lastLetter = '';
     this.decoded = '';
     this.finalMessage = '';
     this.stream = reason;
-    this.pendingLetter = null;
     this.recentGaps = [];
     this.lastDecodedAt = 0;
     this.lastFinalText = '';
     this.pair = '--';
+    this.captureUntilMs = 0;
     return this.snapshot();
   }
 
@@ -143,17 +116,75 @@ export class TranslationDecoder {
     };
   }
 
-  private acceptLetter(result: LetterDetection, gapMs: number): void {
-    if (gapMs > CYCLE_BOUNDARY_GAP_MS && (this.decoded.trim().length > 0 || this.pendingLetter)) {
-      this.finishCycle();
-    } else {
-      this.commitPending(gapMs);
+  private processFrame(frame: Float32Array, sampleRate: number, noiseFloorDb: number, endAt: number, nowMs: number): void {
+    const detected = detectTonePair(frame, sampleRate, noiseFloorDb);
+    // Vote over the whole burst. A changing harmonic or a reflection within
+    // one tone must not become an extra letter. A quiet gap ends the burst.
+    if (!detected || (this.candidate && detected.strength < this.burstPeak * 0.12)) {
+      if (!this.candidate) return;
+      this.releaseFrames += 1;
+      if (this.releaseFrames * FRAME_HOP / sampleRate >= RELEASE_SECONDS) {
+        this.finishBurst(this.burstLastAt, nowMs, sampleRate);
+      }
+      return;
     }
-    this.pendingLetter = result;
+    if (!this.candidate) this.burstStartAt = endAt - FRAME_SAMPLES / sampleRate;
+    this.candidate = detected;
+    this.pair = `${detected.low}/${detected.high} Hz`;
+    this.burstLastAt = endAt;
+    this.burstPeak = Math.max(this.burstPeak, detected.strength);
+    this.releaseFrames = 0;
+    const vote = this.votes.get(detected.ch) ?? { pair: detected, score: 0, frames: 0 };
+    vote.score += detected.confidence;
+    vote.frames += 1;
+    this.votes.set(detected.ch, vote);
+  }
+
+  private finishBurst(endAt: number, nowMs: number, sampleRate: number): void {
+    const winner = [...this.votes.values()].sort((a, b) => b.score - a.score)[0];
+    if (winner && winner.frames * FRAME_HOP / sampleRate >= MIN_EVIDENCE_SECONDS &&
+        endAt - this.burstStartAt < 0.55) {
+      const separation = this.lastLetterStartAt === null ? Infinity : this.burstStartAt - this.lastLetterStartAt;
+      // The emitter sends 220 ms of sound followed by at least 90 ms of
+      // silence. A fragment/echo arriving sooner cannot be another letter.
+      const duplicate = separation < 0.265 || (winner.pair.ch === this.lastLetter &&
+        separation < letterInterval(this.lastLetter) - 0.12);
+      if (!duplicate) {
+        const gapMs = this.lastBurstEndAt ? (this.burstStartAt - this.lastBurstEndAt) * 1000 : 0;
+        if (nowMs >= this.captureUntilMs && gapMs > CYCLE_BOUNDARY_GAP_MS && this.decoded.trim()) this.finishCycle();
+        this.correctOctaveFromTiming(separation);
+        this.commitLetter(winner.pair.ch, gapMs, nowMs);
+        this.pair = `${winner.pair.low}/${winner.pair.high} Hz`;
+        this.lastBurstEndAt = endAt;
+        this.lastLetterStartAt = this.burstStartAt;
+        this.lastLetter = winner.pair.ch;
+      }
+    }
+    this.candidate = null;
+    this.votes.clear();
+    this.burstPeak = 0;
+    this.releaseFrames = 0;
+  }
+
+  private correctOctaveFromTiming(separation: number): void {
+    if (!this.decoded || !Number.isFinite(separation)) return;
+    const index = LETTERS.indexOf(this.lastLetter);
+    const low = LOW_FREQS[Math.floor(index / 4)];
+    // The gaps also encode the letter. Use that independent evidence only
+    // for a plausible doubled fundamental (e.g. E's 500 Hz heard as Y's
+    // 1000 Hz), and only when it clearly contradicts the spectral choice.
+    const fundamentalIndex = LOW_FREQS.indexOf(low / 2);
+    if (fundamentalIndex < 0) return;
+    const corrected = LETTERS[fundamentalIndex * 4 + index % 4];
+    if (Math.abs(separation - letterInterval(corrected)) < 0.10 &&
+        Math.abs(separation - letterInterval(this.lastLetter)) > 0.25) {
+      this.decoded = this.decoded.slice(0, -1) + corrected;
+      this.stream = this.stream.slice(0, -1) + corrected;
+      this.lastLetter = corrected;
+    }
   }
 
   private finishCycle(): void {
-    this.commitPending(0);
     const finalText = this.decoded.trim();
     if (finalText) {
       const repeated = finalText === this.lastFinalText;
@@ -162,34 +193,23 @@ export class TranslationDecoder {
       this.stream = repeated ? 'repeat signal detected' : 'message complete';
     }
     this.decoded = '';
-    this.pendingLetter = null;
     this.recentGaps = [];
     this.lastBurstEndAt = 0;
+    this.lastLetterStartAt = null;
+    this.lastLetter = '';
+    this.captureUntilMs = 0;
   }
 
-  private commitPending(gapMs: number): void {
-    if (!this.pendingLetter) return;
-    const byGap = gapToChar(gapMs);
-    const expectedGap = gapForChar(this.pendingLetter.ch);
-    const expectedErr = expectedGap === null || !gapMs ? 0 : Math.abs(expectedGap - gapMs);
-    const shouldTrustGap = byGap && (expectedErr > 260 || this.pendingLetter.confidence < 0.45);
-    const ch = shouldTrustGap ? byGap.ch : this.pendingLetter.ch;
-    this.commitLetter(ch, gapMs);
-    this.pendingLetter = null;
-  }
-
-  private commitLetter(ch: string, gapMs: number): void {
+  private commitLetter(ch: string, gapMs: number, nowMs: number): void {
     if (ch === ' ' && this.decoded.endsWith(' ')) return;
-    if (gapMs > 0) {
+    if (gapMs > 0 && gapMs < CYCLE_BOUNDARY_GAP_MS) {
       this.recentGaps.push(gapMs);
       if (this.recentGaps.length > 12) this.recentGaps.shift();
     }
     this.decoded += ch;
     this.stream += ch;
-    if (this.finalMessage && !this.finalMessage.startsWith(this.decoded.trim())) {
-      this.finalMessage = '';
-    }
-    this.lastDecodedAt = performance.now();
+    if (this.finalMessage && !this.finalMessage.startsWith(this.decoded.trim())) this.finalMessage = '';
+    this.lastDecodedAt = nowMs;
     if (this.decoded.length > 120) this.decoded = this.decoded.slice(-120);
   }
 
@@ -201,63 +221,55 @@ export class TranslationDecoder {
   }
 }
 
-function detectLetter(samples: number[], sampleRate: number): LetterDetection {
-  const trimmed = trimBurst(samples);
-  let bestLow = LOW_FREQS[0];
-  let bestLowMag = 0;
-  let bestHigh = HIGH_FREQS[0];
-  let bestHighMag = 0;
-  for (const frequency of LOW_FREQS) {
-    const magnitude = goertzel(trimmed, sampleRate, frequency);
-    if (magnitude > bestLowMag) {
-      bestLow = frequency;
-      bestLowMag = magnitude;
+function letterInterval(ch: string): number {
+  const index = LETTERS.indexOf(ch);
+  return 0.22 + (ch === ' ' ? 1.04 : Math.max(0.09, (100 + index * 50) * 0.00065));
+}
+
+function detectTonePair(samples: Float32Array, sampleRate: number, _noiseFloorDb: number): TonePair | null {
+  const levelDb = rmsDb(samples);
+  // A quiet dual tone can sit below the room's overall RMS level; the spectral
+  // checks below decide whether it is a real signal.
+  if (levelDb < -90) return null;
+  const low = rankedPeaks(samples, sampleRate, LOW_FREQS);
+  const high = rankedPeaks(samples, sampleRate, HIGH_FREQS);
+  // Judge each carrier against nearby noise, independently. A small speaker
+  // and phone mic can attenuate the low carrier much more than the high one.
+  const lowNoise = localNoise(samples, sampleRate, low.frequency);
+  const highNoise = localNoise(samples, sampleRate, high.frequency);
+  if (low.best < lowNoise * 2.5 || high.best < highNoise * 2.5) return null;
+  if (low.best < low.second * 1.5 || high.best < high.second * 1.5) return null;
+  const lowIndex = LOW_FREQS.indexOf(low.frequency);
+  const highIndex = HIGH_FREQS.indexOf(high.frequency);
+  const ch = LETTERS[lowIndex * HIGH_FREQS.length + highIndex];
+  return ch ? {
+    ch, low: low.frequency, high: high.frequency,
+    strength: Math.sqrt(low.best * high.best),
+    confidence: Math.min(10, low.best / lowNoise, high.best / highNoise)
+  } : null;
+}
+
+function localNoise(samples: Float32Array, sampleRate: number, frequency: number): number {
+  return Math.max(1e-7,
+    goertzel(samples, sampleRate, frequency - 45),
+    goertzel(samples, sampleRate, frequency + 45));
+}
+
+function rankedPeaks(samples: Float32Array, sampleRate: number, frequencies: number[]): { frequency: number; best: number; second: number } {
+  let frequency = frequencies[0];
+  let best = 0;
+  let second = 0;
+  for (const current of frequencies) {
+    const magnitude = goertzel(samples, sampleRate, current);
+    if (magnitude > best) {
+      second = best;
+      best = magnitude;
+      frequency = current;
+    } else if (magnitude > second) {
+      second = magnitude;
     }
   }
-  for (const frequency of HIGH_FREQS) {
-    const magnitude = goertzel(trimmed, sampleRate, frequency);
-    if (magnitude > bestHighMag) {
-      bestHigh = frequency;
-      bestHighMag = magnitude;
-    }
-  }
-
-  let best = { ch: '?', err: Infinity };
-  for (const [ch, low, high] of CODEBOOK) {
-    const err = Math.abs(low - bestLow) + Math.abs(high - bestHigh);
-    if (err < best.err) best = { ch, err };
-  }
-  const confidence = Math.min(1, Math.max(0, (160 - best.err) / 160));
-  return { ch: best.ch, confidence, low: bestLow, high: bestHigh };
-}
-
-function trimBurst(samples: number[]): number[] {
-  let peak = 0;
-  for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
-  if (peak <= 0) return samples;
-  const threshold = peak * 0.18;
-  let start = 0;
-  let end = samples.length - 1;
-  while (start < samples.length && Math.abs(samples[start]) < threshold) start += 1;
-  while (end > start && Math.abs(samples[end]) < threshold) end -= 1;
-  return samples.slice(Math.max(0, start - 64), Math.min(samples.length, end + 65));
-}
-
-function gapToChar(gapMs: number): { ch: string; err: number } | null {
-  if (!gapMs || gapMs <= 0 || gapMs > 1300) return null;
-  let best: { ch: string; err: number } | null = null;
-  for (const [ch, , , gap] of CODEBOOK) {
-    const err = Math.abs(gap - gapMs);
-    if (!best || err < best.err) best = { ch, err };
-  }
-  if (!best) return null;
-  const tolerance = best.ch === ' ' ? 180 : 135;
-  return best.err <= tolerance ? best : null;
-}
-
-function gapForChar(ch: string): number | null {
-  const row = CODEBOOK.find(([entry]) => entry === ch);
-  return row ? row[3] : null;
+  return { frequency, best, second };
 }
 
 function classify(text: string, gaps: number[]): Pick<TranslationSnapshot, 'title' | 'verdict'> {
@@ -265,13 +277,7 @@ function classify(text: string, gaps: number[]): Pick<TranslationSnapshot, 'titl
   if (isPeriodic(gaps)) return { title: 'Clock signal', verdict: 'DEAD' };
   if (!clean) return { title: 'Listening', verdict: 'DEAD' };
   if (clean.length <= 2) return { title: 'Signal fragments', verdict: 'CLOCK' };
-  const compact = clean.replace(/ /g, '');
-  for (const word of COMMON_WORDS) {
-    if (word.length >= 3 && compact.includes(word)) {
-      return { title: 'Language lock', verdict: 'ALIVE' };
-    }
-  }
-  return { title: 'Structured signal', verdict: 'UNKNOWN' };
+  return { title: 'Language lock', verdict: 'ALIVE' };
 }
 
 function isPeriodic(gaps: number[]): boolean {

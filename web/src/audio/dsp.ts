@@ -1,3 +1,5 @@
+const hannWindows = new Map<number, Float32Array>();
+
 export function rmsDb(samples: Float32Array): number {
   let sum = 0;
   for (let i = 0; i < samples.length; i += 1) {
@@ -14,14 +16,21 @@ export function percentile(values: number[], ratio: number): number | null {
 }
 
 export function goertzel(samples: Float32Array | number[], sampleRate: number, frequency: number): number {
+  let window = hannWindows.get(samples.length);
+  if (!window) {
+    window = new Float32Array(samples.length);
+    for (let i = 0; i < samples.length; i += 1) {
+      window[i] = samples.length > 1 ? 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (samples.length - 1)) : 1;
+    }
+    hannWindows.set(samples.length, window);
+  }
   const omega = (2 * Math.PI * frequency) / sampleRate;
   const coeff = 2 * Math.cos(omega);
   let q0 = 0;
   let q1 = 0;
   let q2 = 0;
   for (let i = 0; i < samples.length; i += 1) {
-    const window = samples.length > 1 ? 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (samples.length - 1)) : 1;
-    q0 = coeff * q1 - q2 + samples[i] * window;
+    q0 = coeff * q1 - q2 + samples[i] * window[i];
     q2 = q1;
     q1 = q0;
   }
