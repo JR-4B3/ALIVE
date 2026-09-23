@@ -96,7 +96,7 @@ async function startMicrophone(): Promise<void> {
     });
     audioCtx = new AudioContext();
     sourceNode = audioCtx.createMediaStreamSource(micStream);
-    processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    processor = audioCtx.createScriptProcessor(2048, 1, 1);
     silentNode = audioCtx.createGain();
     silentNode.gain.value = 0;
     processor.onaudioprocess = (event) => {

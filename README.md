@@ -48,6 +48,8 @@ python emitter.py --device-output
 Open the printed URL on the phone and accept the local certificate warning. Tap **enable microphone**, wait for calibration, enter a prompt, and tap **send**. Keep the phone near the speaker. The ESP32 polls the laptop, plays each queued reply once, and the page shows the decoded text. **Play signal** queues the same reply again.
 
 For a demo without an API key, deterministic replies remain available. For example, `hello are you alive` produces `I AM HERE`.
+The laptop plays an encoded message as short dual-tone bursts. The phone listens through the microphone, calibrates against the local noise floor, accepts only stable dual-tone pairs from the codebook, decodes the bursts into text, and classifies the received signal. The default emitter uses a softly faded two-tone chime. Ordinary room noise and single-frequency sounds should stay blank; another source deliberately playing the same codebook tones can still be decoded by a single microphone.
+
 
 ## Run
 
@@ -80,13 +82,14 @@ curl -X POST http://127.0.0.1:8765/api/message \
 
 The generated reply is sanitized to A-Z plus spaces and capped at 20 characters. With `--device-output`, the ESP32 plays it once. Without that flag, the laptop speakers play it. It does not loop automatically. Use the web page's **play signal** button to replay the current signal; the button stays locked until the current audio duration has elapsed.
 
-Without `OPENAI_API_KEY`, the server uses deterministic fallback replies for local testing. With an API key:
+Without `OPENAI_API_KEY`, the server uses deterministic fallback replies for local testing. To use the model, put your key in the project-root `.env` file (copy `.env.example` if needed):
 
-```bash
-export OPENAI_API_KEY=...
-export ALIVE_OPENAI_MODEL=gpt-5.4-mini
-python emitter.py
+```dotenv
+OPENAI_API_KEY=your_key_here
+# ALIVE_OPENAI_MODEL=gpt-6-luna
 ```
+
+Then run `python emitter.py`. The file is ignored by Git, the key stays on the laptop server, and an existing shell environment variable takes precedence.
 
 The ESP32 I2S emitter polls this transport:
 
@@ -152,5 +155,5 @@ Microphone access usually requires HTTPS. Use `--http` only for local desktop te
 
 ```bash
 python test_audio_message.py
-cd web && bun run build
+cd web && bun test && bun run build
 ```

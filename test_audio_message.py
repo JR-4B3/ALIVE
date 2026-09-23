@@ -1,14 +1,21 @@
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 import numpy as np
+from unittest.mock import patch
 
 from audio_message import (
     LoopingMessagePlayer,
+    SAMPLE_RATE,
     encode_burst_signal,
     encode_clock_signal,
     encode_message,
     encoded_gap_ms,
+    make_burst,
     sanitize_message,
 )
-from reply_engine import fallback_reply, normalize_reply
+from reply_engine import fallback_reply, load_local_env, normalize_reply
 from emitter import DemoState
 
 
@@ -30,6 +37,17 @@ def test_language_signal_contains_bursts_and_gaps():
     assert np.min(np.abs(audio[-1000:])) == 0
 
 
+def test_default_tone_has_smooth_edges_and_both_carriers():
+    burst = make_burst("A")
+    assert abs(burst[0]) < 1e-6
+    assert abs(burst[-1]) < 1e-4
+    assert np.max(np.abs(burst)) <= 0.5
+    spectrum = np.abs(np.fft.rfft(burst * np.hanning(len(burst))))
+    frequencies = np.fft.rfftfreq(len(burst), 1 / SAMPLE_RATE)
+    for carrier in (400, 2000):
+        assert np.max(spectrum[np.abs(frequencies - carrier) < 10]) > 100
+
+
 def test_clock_and_burst_signals_are_distinct():
     clock = encode_clock_signal()
     burst = encode_burst_signal()
@@ -45,6 +63,16 @@ def test_player_configures_without_audio_device():
     assert snapshot["message"] == "HELLO"
     assert snapshot["signal"] == "clock"
     assert snapshot["active"] is False
+
+
+def test_local_env_loads_key_without_overriding_shell():
+    with TemporaryDirectory() as directory:
+        env_file = Path(directory) / ".env"
+        env_file.write_text("OPENAI_API_KEY=local-test-key\nALIVE_OPENAI_MODEL=test-model\n", encoding="utf-8")
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "shell-test-key"}, clear=True):
+            load_local_env(env_file)
+            assert os.environ["OPENAI_API_KEY"] == "shell-test-key"
+            assert os.environ["ALIVE_OPENAI_MODEL"] == "test-model"
 
 
 def test_reply_text_is_transport_safe():
@@ -74,10 +102,12 @@ def run_tests():
         test_sanitize_message_keeps_codebook_chars,
         test_encoded_gap_uses_transmission_scale,
         test_language_signal_contains_bursts_and_gaps,
+        test_default_tone_has_smooth_edges_and_both_carriers,
         test_clock_and_burst_signals_are_distinct,
         test_player_configures_without_audio_device,
         test_reply_text_is_transport_safe,
         test_device_output_queues_each_play_without_laptop_audio,
+        test_local_env_loads_key_without_overriding_shell,
     ]
     for test in tests:
         test()
