@@ -32,21 +32,16 @@ def make_burst(letter: str, mode: str = "laser") -> np.ndarray:
     t = np.linspace(0, BURST_LEN, int(SAMPLE_RATE * BURST_LEN), endpoint=False)
 
     if mode == "laser":
-        sweep_down = 6200 - 2600 * (t / BURST_LEN)
-        sweep_up = 2700 + 1800 * (t / BURST_LEN)
-        phase_down = 2 * np.pi * np.cumsum(sweep_down) / SAMPLE_RATE
-        phase_up = 2 * np.pi * np.cumsum(sweep_up) / SAMPLE_RATE
-        zap = np.sin(phase_down) * 0.55 + np.sin(phase_up) * 0.22
-        bite = np.sign(np.sin(2 * np.pi * 95 * t)) * 0.12
-        hiss = np.random.normal(0, 0.16, size=t.shape)
-        ring_env = np.exp(-t * 9)
-        texture = (zap + bite + hiss * 0.35) * ring_env
-        attack = int(0.003 * SAMPLE_RATE)
-        decay = int(0.045 * SAMPLE_RATE)
+        # A clean, softly shaped two-note chime keeps the encoded carriers easy
+        # to recognize at a distance without the former zap, hiss, and click.
+        carrier_low = np.sin(2 * np.pi * low_f * t)
+        carrier_high = np.sin(2 * np.pi * high_f * t)
+        burst = 0.48 * carrier_low + 0.42 * carrier_high
+        edge = int(0.024 * SAMPLE_RATE)
         envelope = np.ones_like(t)
-        envelope[:attack] = np.linspace(0, 1, attack)
-        envelope[-decay:] = np.linspace(1, 0, decay)
-        texture = texture * envelope
+        envelope[:edge] = np.sin(np.linspace(0, np.pi / 2, edge)) ** 2
+        envelope[-edge:] = np.sin(np.linspace(np.pi / 2, 0, edge)) ** 2
+        return (burst * envelope * BURST_AMP).astype(np.float32)
 
     elif mode == "vocal":
         f_start, f_end = 180, 140

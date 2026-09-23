@@ -5,14 +5,31 @@ import os
 import re
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from audio_message import sanitize_message
 
 
 MAX_REPLY_CHARS = 20
 DEFAULT_REPLY = "SIGNAL WEAK"
-DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_MODEL = "gpt-6-luna"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+LOCAL_ENV_FILE = Path(__file__).with_name(".env")
+
+
+def load_local_env(path: Path = LOCAL_ENV_FILE) -> None:
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        key = key.strip()
+        if not separator or key not in {"OPENAI_API_KEY", "ALIVE_OPENAI_MODEL"}:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"\"", "'"}:
+            value = value[1:-1]
+        if value:
+            os.environ.setdefault(key, value)
 
 
 def normalize_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:
@@ -30,6 +47,7 @@ def normalize_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:
 
 
 def generate_reply(player_text: str) -> str:
+    load_local_env()
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         return fallback_reply(player_text)
@@ -38,7 +56,8 @@ def generate_reply(player_text: str) -> str:
     payload = {
         "model": os.environ.get("ALIVE_OPENAI_MODEL", DEFAULT_MODEL),
         "input": prompt,
-        "max_output_tokens": 24,
+        "max_output_tokens": 48,
+        "reasoning": {"effort": "none"},
     }
     request = urllib.request.Request(
         OPENAI_RESPONSES_URL,
