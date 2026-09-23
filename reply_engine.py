@@ -7,13 +7,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from audio_message import sanitize_message
+from audio_message import BURST_LEN, LANGUAGE_LOOP_PAUSE_S, encoded_gap_ms, sanitize_message
 
 
-MAX_REPLY_CHARS = 20
-DEFAULT_REPLY = "SIGNAL WEAK"
+MAX_REPLY_CHARS = 12
+MAX_SIGNAL_SECONDS = 15.0
+DEVICE_LEAD_SECONDS = 0.25
 DEFAULT_MODEL = "gpt-6-luna"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+API_KEY_FILE = Path.home() / ".config" / "alive" / "openai_api_key"
 LOCAL_ENV_FILE = Path(__file__).with_name(".env")
 
 
@@ -32,32 +34,44 @@ def load_local_env(path: Path = LOCAL_ENV_FILE) -> None:
             os.environ.setdefault(key, value)
 
 
+class ReplyUnavailableError(RuntimeError):
+    """The requested model could not prepare a reply."""
+
+
+def signal_duration_seconds(text: str) -> float:
+    return DEVICE_LEAD_SECONDS + LANGUAGE_LOOP_PAUSE_S + sum(
+        BURST_LEN + encoded_gap_ms(char) / 1000 for char in text
+    )
+
+
 def normalize_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:
     cleaned = sanitize_message(text)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    if len(cleaned) <= max_chars:
-        return cleaned
-
-    truncated = cleaned[:max_chars].rstrip()
-    if " " in truncated:
-        by_word = truncated.rsplit(" ", 1)[0].strip()
-        if by_word:
-            return by_word
-    return truncated or DEFAULT_REPLY
+    while len(cleaned) > max_chars or signal_duration_seconds(cleaned) > MAX_SIGNAL_SECONDS:
+        if not cleaned:
+            break
+        shorter = cleaned.rsplit(" ", 1)[0] if " " in cleaned else cleaned[:-1]
+        cleaned = shorter.strip()
+    return cleaned
 
 
 def generate_reply(player_text: str) -> str:
     load_local_env()
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        return fallback_reply(player_text)
+        try:
+            api_key = API_KEY_FILE.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    if not api_key:
+        raise ReplyUnavailableError("OpenAI API key is not configured on the laptop")
 
-    prompt = build_prompt(player_text)
     payload = {
         "model": os.environ.get("ALIVE_OPENAI_MODEL", DEFAULT_MODEL),
-        "input": prompt,
-        "max_output_tokens": 48,
+        "instructions": build_prompt(),
+        "input": player_text.strip()[:240],
         "reasoning": {"effort": "none"},
+        "max_output_tokens": 40,
     }
     request = urllib.request.Request(
         OPENAI_RESPONSES_URL,
@@ -71,24 +85,31 @@ def generate_reply(player_text: str) -> str:
     try:
         with urllib.request.urlopen(request, timeout=12) as response:
             body = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            raise ReplyUnavailableError("OpenAI API key was rejected (HTTP 401)") from exc
+        raise ReplyUnavailableError(f"OpenAI request failed (HTTP {exc.code})") from exc
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        print(f"[LLM] Falling back after OpenAI request failed: {exc}")
-        return fallback_reply(player_text)
+        raise ReplyUnavailableError(f"OpenAI request failed: {type(exc).__name__}") from exc
 
     reply = extract_response_text(body)
     normalized = normalize_reply(reply)
-    return normalized or fallback_reply(player_text)
+    if not normalized:
+        raise ReplyUnavailableError("OpenAI returned no usable signal text")
+    return normalized
 
 
-def build_prompt(player_text: str) -> str:
-    player = player_text.strip()[:240]
+def build_prompt() -> str:
     return "\n".join(
         [
-            "You are a frightened survivor on a lost space station.",
-            "Reply in exactly one short sentence.",
-            f"Use only A-Z letters and spaces, maximum {MAX_REPLY_CHARS} characters.",
-            "Do not explain rules. Do not reveal puzzle answers.",
-            f"Player says: {player}",
+            "You are LANTERN, the last emergency beacon of the survey ship AURORA.",
+            "Your crew launched you decades ago to help anyone who crossed this route.",
+            "You remember fragments of their journey. Speak with calm urgency and a trace of longing.",
+            "Answer the visitor's message directly. Give useful guidance when you can; admit uncertainty briefly.",
+            "Your transmitter has room for only one tiny burst.",
+            f"Reply with one to three short words, at most {MAX_REPLY_CHARS} characters total.",
+            "Use only uppercase A to Z and spaces. No punctuation, numbers, labels, or explanation.",
+            "Examples of the required length: STAY CLOSE, SEEK SHELTER, WE ARE HERE.",
         ]
     )
 
@@ -112,14 +133,3 @@ def extract_response_text(body: dict[str, object]) -> str:
             if isinstance(part, dict) and isinstance(part.get("text"), str):
                 chunks.append(part["text"])
     return " ".join(chunks)
-
-
-def fallback_reply(player_text: str) -> str:
-    clean = normalize_reply(player_text)
-    if any(word in clean.split() for word in ("HELLO", "ALIVE", "HERE")):
-        return "I AM HERE"
-    if any(word in clean.split() for word in ("HELP", "SOS")):
-        return "FIND RING C"
-    if "?" in player_text:
-        return "SIGNAL WEAK"
-    return DEFAULT_REPLY

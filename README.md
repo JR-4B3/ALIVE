@@ -3,11 +3,11 @@
 ALIVE has a live hardware demo path:
 
 ```text
-phone prompt -> laptop LLM API -> ESP32 -> MAX98357 -> speaker
+phone prompt -> laptop reply API -> USB serial -> ESP32 -> MAX98357 -> speaker
                                              -> phone microphone -> browser decoder
 ```
 
-The phone sends a player prompt to the laptop. The laptop creates a reply of at most 20 characters, then queues it for an ESP32. The ESP32 synthesizes the reply as short dual-tone bursts through a MAX98357 I2S amplifier and speaker. The phone microphone decodes those bursts back into text.
+The phone sends a player prompt to the laptop. GPT-6 Luna prepares a reply of at most 12 characters. Pressing **Play signal** sends it once over USB serial to the ESP32. The ESP32 synthesizes short dual-tone bursts through a MAX98357 I2S amplifier and speaker. The phone microphone decodes those bursts back into text.
 
 ## ESP32 + MAX98357 live demo
 
@@ -22,34 +22,28 @@ Wire the boards with power disconnected:
 | `GPIO4` | `BCLK` |
 | `GPIO5` | `LRC` |
 | `GPIO6` | `DIN` |
+| `3V3` | `SD` |
 
-Connect the speaker directly to the green `+` and `-` terminals. Leave `GAIN` and `SD` unconnected for the first demo.
+Connect the speaker directly to the green `+` and `-` terminals. Leave `GAIN` unconnected. Check the printed pin labels on both boards before applying power.
 
-![ESP32-C3 to MAX98357 wiring with USB-C facing left](docs/alive-esp32-max98357-wiring-usb-left.svg)
-
-Configure and flash the device:
-
-```bash
-cp firmware/esp32_i2s_emitter/include/secrets.example.h \
-  firmware/esp32_i2s_emitter/include/secrets.h
-# Edit secrets.h: Wi-Fi details and this laptop's LAN IP.
-cd firmware/esp32_i2s_emitter
-pio run --target upload
-pio device monitor
-```
-
-Start the laptop service from the repository root:
+For the website-controlled demo, flash the `serial_message` environment. It stays silent until it receives a play command over USB. From the repository root:
 
 ```bash
-export OPENAI_API_KEY=...
-python emitter.py --device-output
+.tmp/platformio-venv/bin/platformio run --project-dir firmware/esp32_i2s_emitter -e serial_message -t upload --upload-port /dev/ttyACM0
+python emitter.py --serial-device /dev/ttyACM0 --message HELLO
 ```
 
-Open the printed URL on the phone and accept the local certificate warning. Tap **enable microphone**, wait for calibration, enter a prompt, and tap **send**. Keep the phone near the speaker. The ESP32 polls the laptop, plays each queued reply once, and the page shows the decoded text. **Play signal** queues the same reply again.
+Use the ESP32's actual serial port if it is not `/dev/ttyACM0`: check `ls -l /dev/serial/by-id/ /dev/ttyACM* /dev/ttyUSB*`. Keep the USB cable connected to the laptop. Open the printed HTTPS URL on the phone, accept the local certificate warning, enable the microphone, and press **Play signal**. Each press sends the prepared text once. The initial text is `HELLO`; entering a prompt and pressing **send** prepares a new reply without playing it. Playing preset text does not need an API key. Generating a new reply does.
 
-For a demo without an API key, deterministic replies remain available. For example, `hello are you alive` produces `I AM HERE`.
-The laptop plays an encoded message as short dual-tone bursts. The phone listens through the microphone, calibrates against the local noise floor, accepts only stable dual-tone pairs from the codebook, decodes the bursts into text, and classifies the received signal. The default emitter uses a softly faded two-tone chime. Ordinary room noise and single-frequency sounds should stay blank; another source deliberately playing the same codebook tones can still be decoded by a single microphone.
+For an independent repeating receiver test only, flash `message_test` instead. It repeatedly sends `HELLO` at the same quiet output level:
 
+```bash
+.tmp/platformio-venv/bin/platformio run --project-dir firmware/esp32_i2s_emitter -e message_test -t upload --upload-port /dev/ttyACM0
+```
+
+The phone receiver accepts stable pairs of codebook tones and filters ordinary room noise. The default laptop emitter uses softly faded dual-tone chimes. A single microphone can still decode another source that deliberately plays the same encoded tones.
+
+The model plays LANTERN, an emergency beacon sent by the lost crew of the survey ship AURORA decades ago. It answers in a few words. The server enforces both a 12-character limit and a 15-second maximum encoded duration, including the ESP32 lead and trailing pause.
 
 ## Run
 
@@ -75,23 +69,23 @@ Then scan/open the printed phone URL, accept the local HTTPS warning if needed, 
 The laptop server is the temporary signal API before the NAS exists. The phone page includes a contact form; when served from the laptop it posts to the same origin by default.
 
 ```bash
-curl -X POST http://127.0.0.1:8765/api/message \
+curl -k -X POST https://127.0.0.1:8765/api/message \
   -H 'content-type: application/json' \
   -d '{"message":"hello are you alive"}'
 ```
 
-The generated reply is sanitized to A-Z plus spaces and capped at 20 characters. With `--device-output`, the ESP32 plays it once. Without that flag, the laptop speakers play it. It does not loop automatically. Use the web page's **play signal** button to replay the current signal; the button stays locked until the current audio duration has elapsed.
+The generated reply is sanitized to A-Z plus spaces and capped at 12 characters and 15 seconds of encoded audio. Sending a prompt prepares the reply. Use the web page's **play signal** button to send it once; the button stays locked until the current audio duration has elapsed. With `--serial-device`, the ESP32 plays it. Without that flag, the laptop speakers play it.
 
-Without `OPENAI_API_KEY`, the server uses deterministic fallback replies for local testing. To use the model, put your key in the project-root `.env` file (copy `.env.example` if needed):
+The laptop server needs an API key to generate a new reply. Without it, **send** shows an explicit configuration error and preserves the previous prepared signal. You can put `OPENAI_API_KEY=your_key_here` in a project-root `.env` file, which Git ignores. Alternatively, run `python setup_api_key.py` from the repository root and enter the key at the hidden prompt. It saves the key in `~/.config/alive/openai_api_key` with file permissions `600`; the running server reads that file on each request. Keep the key out of source files. To use an environment variable instead:
 
-```dotenv
-OPENAI_API_KEY=your_key_here
-# ALIVE_OPENAI_MODEL=gpt-6-luna
+```bash
+read -rsp 'OpenAI API key: ' OPENAI_API_KEY; export OPENAI_API_KEY; echo
+python emitter.py --serial-device /dev/ttyACM0 --message HELLO
 ```
 
-Then run `python emitter.py`. The file is ignored by Git, the key stays on the laptop server, and an existing shell environment variable takes precedence.
+The default model is `gpt-6-luna`; set `ALIVE_OPENAI_MODEL` only to override it. Restart the server when changing its environment variables.
 
-The ESP32 I2S emitter polls this transport:
+The USB demo sends `PLAY <TEXT>` over serial when this endpoint is called. The older Wi-Fi firmware polls this transport:
 
 ```text
 GET /api/emitter/main/current
@@ -103,7 +97,7 @@ GET /api/emitter/main/current
   "revision": 1,
   "message": "I AM HERE",
   "mode": "language",
-  "maxChars": 20,
+  "maxChars": 12,
   "duration": 9.23,
   "active": true
 }
@@ -123,7 +117,7 @@ While `python emitter.py` is running:
 start                   start the current signal
 stop                    stop the current signal
 message <text>          change encoded message
-ask <text>              generate a max-20-char reply and play it
+ask <text>              generate a max-12-char reply for the next play
 language / clock / burst  change signal type
 status                  show current sender state
 quit                    stop the server
