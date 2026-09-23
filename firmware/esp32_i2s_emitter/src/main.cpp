@@ -5,6 +5,7 @@
 #include <WiFiClientSecure.h>
 #include <driver/i2s.h>
 #include <math.h>
+#include <time.h>
 
 #include "secrets.h"
 
@@ -20,7 +21,7 @@ static_assert(SAMPLE_RATE == 8000 || SAMPLE_RATE == 16000 ||
               SAMPLE_RATE == 32000 || SAMPLE_RATE == 44100 ||
               SAMPLE_RATE == 48000 || SAMPLE_RATE == 88200 ||
               SAMPLE_RATE == 96000, "Unsupported MAX98357 sample rate");
-constexpr uint32_t BURST_MS = 300;
+constexpr uint32_t BURST_MS = 220;
 constexpr float GAP_SCALE = 0.65f;
 constexpr uint32_t MIN_GAP_MS = 90;
 constexpr uint32_t POLL_MS = 300;
@@ -257,7 +258,7 @@ void writeContinuousMessageAudio() {
 
 void playMessage(const String &message) {
   Serial.printf("Playing revision %ld: %s\n", lastRevision, message.c_str());
-  writeSilence(500);
+  writeSilence(250);
   for (size_t i = 0; i < message.length(); ++i) {
     float low = 0;
     float high = 0;
@@ -272,21 +273,59 @@ void playMessage(const String &message) {
 
 void connectWifi() {
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  static bool eventLoggerInstalled = false;
+  if (!eventLoggerInstalled) {
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+      if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
+        Serial.printf("WiFi disconnected: reason %u\n",
+                      info.wifi_sta_disconnected.reason);
+    });
+    eventLoggerInstalled = true;
+  }
+  const int networkCount = WiFi.scanNetworks();
+  int bestTargetRssi = -127;
+  for (int i = 0; i < networkCount; ++i) {
+    if (WiFi.SSID(i) == ALIVE_WIFI_SSID)
+      bestTargetRssi = max(bestTargetRssi, static_cast<int>(WiFi.RSSI(i)));
+  }
+  WiFi.scanDelete();
+  if (bestTargetRssi == -127) Serial.println("Target WiFi not found in scan");
+  else Serial.printf("Target WiFi RSSI: %d dBm\n", bestTargetRssi);
   WiFi.begin(ALIVE_WIFI_SSID, ALIVE_WIFI_PASSWORD);
   Serial.printf("Connecting to %s", ALIVE_WIFI_SSID);
+  uint32_t lastReportAt = millis();
   while (WiFi.status() != WL_CONNECTED) {
     delay(300);
     Serial.print('.');
+    if (millis() - lastReportAt >= 5000) {
+      Serial.printf(" status=%d\n", WiFi.status());
+      lastReportAt = millis();
+    }
   }
   Serial.printf("\nWiFi ready: %s\n", WiFi.localIP().toString().c_str());
+#ifdef ALIVE_SERVER_CA_CERT
+  // Certificate verification needs a real clock after each power-up.
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+  for (int attempt = 0; attempt < 20 && time(nullptr) < 1700000000; ++attempt)
+    delay(500);
+  if (time(nullptr) < 1700000000) Serial.println("Time sync pending; HTTPS may fail");
+#endif
 }
 
 void pollForMessage() {
   WiFiClientSecure client;
-  client.setInsecure();  // The local demo server uses a short lived self signed cert.
+#ifdef ALIVE_SERVER_CA_CERT
+  client.setCACert(ALIVE_SERVER_CA_CERT);
+#else
+  client.setInsecure();  // Local test only; configure a trusted CA for the NAS.
+#endif
   HTTPClient http;
   const String url = String(ALIVE_SERVER_URL) + "/api/emitter/main/current";
   if (!http.begin(client, url)) return;
+#ifdef ALIVE_DEVICE_TOKEN
+  http.addHeader("Authorization", String("Bearer ") + ALIVE_DEVICE_TOKEN);
+#endif
   const int status = http.GET();
   if (status == HTTP_CODE_OK) {
     JsonDocument json;
@@ -294,7 +333,10 @@ void pollForMessage() {
     if (!error) {
       const long revision = json["revision"] | -1;
       const String message = json["message"] | "";
-      if (revision > lastRevision && message.length() > 0) {
+      if (lastRevision < 0 || revision < lastRevision) {
+        // Boot or server reset: observe the current command without replaying it.
+        lastRevision = revision;
+      } else if (revision > lastRevision && message.length() > 0) {
         lastRevision = revision;
         http.end();
         playMessage(message);
@@ -312,6 +354,11 @@ void pollForMessage() {
 void setup() {
   Serial.begin(115200);
   delay(500);
+#if defined(ALIVE_WIFI_DIAGNOSTIC)
+  Serial.println("Wi-Fi diagnostic: amplifier pins are not initialized");
+  connectWifi();
+  return;
+#endif
   pinMode(STATUS_LED, OUTPUT);
   // The ESP32-C3 Super Mini's blue onboard LED is active-low.
   digitalWrite(STATUS_LED, HIGH);
@@ -366,7 +413,11 @@ void setup() {
 }
 
 void loop() {
-#if defined(ALIVE_SILENCE_TEST)
+#if defined(ALIVE_WIFI_DIAGNOSTIC)
+  delay(5000);
+  Serial.printf("Wi-Fi diagnostic status=%d, IP=%s\n", WiFi.status(),
+                WiFi.localIP().toString().c_str());
+#elif defined(ALIVE_SILENCE_TEST)
   writeSilence(100);
   if (millis() - lastLedToggleAt >= 250) {
     statusLedOn = !statusLedOn;

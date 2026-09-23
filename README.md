@@ -1,6 +1,46 @@
 # ALIVE
 
-ALIVE has a live hardware demo path:
+## Phone + NAS + ESP32 (exhibition setup)
+
+For the full DS720+ setup and test sequence, open the [HTML guide](NAS_SETUP.html) or the [text version](NAS_SETUP.md).
+
+The live installation runs without a laptop:
+
+```text
+phone on GitHub Pages -> HTTPS NAS API -> ESP32 over venue Wi-Fi -> MAX98357 -> speaker
+         ^                                                     |
+         +--------------- phone microphone <-------------------+
+```
+
+The page's receiver and microphone processing run on the phone. The NAS generates the short LLM reply and queues a one-time play command. The ESP32 polls the API over Wi-Fi and creates the sound. The NAS cannot improve missed letters in the phone microphone; use the page's diagnostic recording to inspect those.
+
+The NAS API needs a **public, trusted HTTPS address** so both a visitor's phone and the ESP32 can reach it from the exhibition. A DSM reverse proxy with a domain and certificate works. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is another option: Funnel exposes the API at a public `https://...ts.net` address, and visitors do not need Tailscale. Ordinary Tailscale Serve is private to your tailnet and does not work for general visitors. The API has separate browser and device tokens; do not expose DSM administration.
+
+The NAS DS720+ can run the backend in Container Manager. On the NAS, copy this repository, copy `nas.env.example` to `.env`, replace all placeholders with independent private values, and start it with:
+
+```bash
+sudo /usr/local/bin/docker compose --env-file .env -f compose.nas.yml up -d --build
+```
+
+The container listens on host loopback port `8765`; route the public HTTPS address to `http://127.0.0.1:8765` with Funnel or the NAS reverse proxy. The container keeps the prepared reply, play revision, and optional microphone recordings in its `alive_state` volume. The OpenAI API key stays in the NAS environment. Use `python -c 'import secrets; print(secrets.token_urlsafe(32))'` twice for distinct web and device tokens. Set `ALIVE_WEB_ORIGIN` to the exact GitHub Pages origin, such as `https://jr-4b3.github.io` (no `/ALIVE` path).
+
+Build `web/` with `bun run build`, publish the `docs/` folder as GitHub Pages, then open the page on the phone. Enter the public NAS HTTPS address in **NAS API URL** and the web token in **API access token**. The web token stays in browser session storage. The page can receive sound on its own; **Send** and **Play signal** need the NAS API.
+
+Before the exhibition, copy `firmware/esp32_i2s_emitter/include/secrets.example.h` to ignored `secrets.h`. Put in the venue network SSID and password, the public HTTPS API address, the device token, and the API certificate authority PEM. Flash the `wifi_message` firmware once:
+
+```bash
+.tmp/platformio-venv/bin/platformio run --project-dir firmware/esp32_i2s_emitter -e wifi_message -t upload --upload-port /dev/ttyACM0
+```
+
+The computer is needed only for that one-time firmware upload. At the exhibition, power the ESP32 from a USB power supply. It uses outbound Wi-Fi; phone and ESP32 do not need to be on the same LAN. A dedicated hotspot or travel router with a known Wi-Fi password is useful when venue Wi-Fi requires a browser login or isolates devices. The installation still requires internet access to GitHub Pages, the NAS API, and OpenAI. Test the entire path at the venue before visitors arrive.
+
+For HfK / Nebenflut / FLUT, configure the ESP32 with the exhibition Wi-Fi or your own hotspot credentials, then set `ALIVE_SERVER_URL` to the NAS's **public HTTPS address**. A `192.168.x.x` address or an ordinary Tailscale IP will not work from an unrelated venue network. If you use Tailscale, choose **Funnel** on the NAS, which gives the API a public `https://...ts.net` URL; ordinary Tailscale Serve would require every visitor to join your private tailnet. The phone can use mobile data while the ESP32 uses a hotspot. Check that the venue network allows outbound internet and does not require a browser login from the ESP32. With certificate verification enabled, the ESP32 also needs internet time synchronization. If internet is unreliable, arrange a hotspot with enough data or bring a local backend as an exhibition fallback.
+
+The backend rejects **Play signal** while the ESP32 has not polled recently, so a disconnected device cannot silently queue a late beep. Its one-time commands survive NAS restarts through the state volume, and the ESP32 ignores an old command when it boots.
+
+## Earlier laptop demo
+
+The earlier local demo path is retained for development:
 
 ```text
 phone prompt -> laptop reply API -> USB serial -> ESP32 -> MAX98357 -> speaker

@@ -1,0 +1,10 @@
+.git
+.env
+.venv
+.tmp
+__pycache__
+*.pyc
+*.wav
+web/node_modules
+firmware/**/.pio
+firmware/**/include/secrets.h

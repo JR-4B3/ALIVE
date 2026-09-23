@@ -30,14 +30,21 @@ app.innerHTML = `
           <button id="send" class="min-h-11 px-3 text-xs uppercase tracking-[0.16em]">send</button>
           <button id="playSignal" type="button" class="min-h-11 px-3 text-xs uppercase tracking-[0.16em]">play signal</button>
         </div>
-        <label class="grid gap-1 text-xs uppercase tracking-[0.16em] text-neutral-400" for="apiBase">
-          Laptop server URL (leave blank on local page)
-          <input id="apiBase" class="min-h-11 px-3 text-base normal-case tracking-normal" type="url" placeholder="https://192.168.x.x:8765">
-        </label>
+        <details class="border-t border-neutral-700 pt-2 text-xs text-neutral-400">
+          <summary class="cursor-pointer uppercase tracking-[0.16em]">connection settings</summary>
+          <label class="mt-3 grid gap-1 uppercase tracking-[0.16em]" for="apiBase">
+            NAS API URL
+            <input id="apiBase" class="min-h-11 px-3 text-base normal-case tracking-normal" type="url" placeholder="https://api.example.com">
+          </label>
+          <label class="mt-3 grid gap-1 uppercase tracking-[0.16em]" for="apiToken">
+            Private operator token (leave empty at the exhibition)
+            <input id="apiToken" class="min-h-11 px-3 text-base normal-case tracking-normal" type="password" autocomplete="off" placeholder="optional">
+          </label>
+        </details>
         <div id="contactStatus" class="min-h-6 font-mono text-xs uppercase tracking-[0.16em] text-neutral-400">---</div>
         <label class="text-sm text-neutral-400">
           <input id="recordDiagnostic" type="checkbox">
-          Record next playback for diagnosis (up to 25 seconds of microphone and room sound, saved to this laptop).
+          Record next playback for diagnosis (up to 25 seconds of microphone and room sound, saved to the API server).
         </label>
         <div id="recordStatus" class="text-sm text-neutral-400"></div>
       </form>
@@ -54,6 +61,7 @@ const refs = {
   contactForm: requiredElement<HTMLFormElement>('#contactForm'),
   prompt: requiredElement<HTMLInputElement>('#prompt'),
   apiBase: requiredElement<HTMLInputElement>('#apiBase'),
+  apiToken: requiredElement<HTMLInputElement>('#apiToken'),
   contactStatus: requiredElement<HTMLDivElement>('#contactStatus'),
   playSignal: requiredElement<HTMLButtonElement>('#playSignal'),
   recordDiagnostic: requiredElement<HTMLInputElement>('#recordDiagnostic'),
@@ -61,7 +69,12 @@ const refs = {
 };
 
 const params = new URLSearchParams(location.search);
-refs.apiBase.value = params.get('api') ?? localStorage.getItem('aliveApiBase') ?? '';
+const exhibitionApi = location.hostname === 'jr-4b3.github.io' && location.pathname.startsWith('/ALIVE/')
+  ? 'https://ds720.tail688a7b.ts.net' : '';
+refs.apiBase.value = params.get('api') ?? (exhibitionApi
+  ? (localStorage.getItem('aliveExhibitionApi') || exhibitionApi)
+  : (localStorage.getItem('aliveApiBase') || ''));
+refs.apiToken.value = sessionStorage.getItem('aliveApiToken') ?? '';
 
 const levels = new SignalLevelTracker();
 const decoder = new TranslationDecoder();
@@ -177,7 +190,7 @@ async function sendContactMessage(): Promise<void> {
     const apiBase = requestApiBase();
     const response = await fetch(`${apiBase}/api/message`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...apiAuthHeaders() },
       body: JSON.stringify({ message })
     });
     if (!response.ok) {
@@ -214,10 +227,13 @@ async function playCurrentSignal(): Promise<void> {
     refs.contactStatus.textContent = 'playing';
     lockReplay(1);
     const response = await fetch(`${apiBase}/api/emitter/main/play`, {
-      method: 'POST'
+      method: 'POST', headers: apiAuthHeaders()
     });
-    if (response.status === 405) throw new Error('HTTP 405: enter the laptop server URL above, or open its local ALIVE page');
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (response.status === 405) throw new Error('HTTP 405: enter the NAS API URL above');
+    if (!response.ok) {
+      const failure = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(failure?.error ?? `HTTP ${response.status}`);
+    }
     const payload = (await response.json()) as { duration?: number; message?: string };
     if (recording) {
       recording.message = payload.message ?? '';
@@ -225,7 +241,7 @@ async function playCurrentSignal(): Promise<void> {
       recording.timer = window.setTimeout(() => void saveRecording(), Math.min(23, (payload.duration ?? 20) + 1.5) * 1000);
     }
     if (micActive && payload.duration) decoder.setCaptureDuration(performance.now(), payload.duration);
-    refs.contactStatus.textContent = 'ESP32 started signal';
+    refs.contactStatus.textContent = 'ESP32 signal queued';
     lockReplay(payload.duration);
   } catch (error) {
     cancelRecording();
@@ -246,15 +262,15 @@ async function saveRecording(): Promise<void> {
   if (!captured) return;
   recording = null;
   window.clearTimeout(captured.timer);
-  refs.recordStatus.textContent = 'Saving recording to laptop…';
+  refs.recordStatus.textContent = 'Saving recording to API server…';
   try {
     if (!captured.samples) throw new Error('No microphone samples recorded.');
     const response = await fetch(`${captured.api}/api/receiver/capture?message=${encodeURIComponent(captured.message)}`, {
-      method: 'POST', headers: { 'content-type': 'audio/wav' },
+      method: 'POST', headers: { 'content-type': 'audio/wav', ...apiAuthHeaders() },
       body: encodeRecording(captured.chunks, captured.rate)
     });
     if (!response.ok) throw new Error(`Recording upload failed: HTTP ${response.status}`);
-    refs.recordStatus.textContent = 'Recording saved to laptop.';
+    refs.recordStatus.textContent = 'Recording saved to API server.';
   } catch (error) {
     refs.recordStatus.textContent = error instanceof Error ? error.message : 'Could not save recording.';
   }
@@ -304,11 +320,22 @@ function normalizedApiBase(): string {
 function requestApiBase(): string {
   const apiBase = normalizedApiBase();
   localStorage.setItem('aliveApiBase', apiBase);
+  if (exhibitionApi) localStorage.setItem('aliveExhibitionApi', apiBase);
   if (apiBase) return apiBase;
   const host = location.hostname;
   if (host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.') ||
       host.startsWith('10.') || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) return location.origin;
-  throw new Error('Enter the laptop server URL above, or open its local ALIVE page');
+  throw new Error('Enter the NAS API URL above');
+}
+
+function apiAuthHeaders(): Record<string, string> {
+  const token = refs.apiToken.value.trim();
+  if (!token) {
+    sessionStorage.removeItem('aliveApiToken');
+    return {};
+  }
+  sessionStorage.setItem('aliveApiToken', token);
+  return { authorization: `Bearer ${token}` };
 }
 
 function renderStatus(status: ReceiverStatus): void {

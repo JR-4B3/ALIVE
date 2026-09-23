@@ -64,7 +64,7 @@ def generate_reply(player_text: str) -> str:
         except OSError:
             pass
     if not api_key:
-        raise ReplyUnavailableError("OpenAI API key is not configured on the laptop")
+        raise ReplyUnavailableError("OpenAI API key is not configured on the API server")
 
     payload = {
         "model": os.environ.get("ALIVE_OPENAI_MODEL", DEFAULT_MODEL),
