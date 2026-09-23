@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import io
+import hmac
 import json
 import mimetypes
+import os
 import socket
 import ssl
 import subprocess
@@ -88,6 +90,7 @@ class DemoState:
         player: LoopingMessagePlayer,
         device_output: bool = False,
         serial_device: SerialMessageTransport | None = None,
+        state_file: Path | None = None,
     ) -> None:
         self.player = player
         self.device_output = device_output
@@ -96,9 +99,60 @@ class DemoState:
         self.latest_reply = normalize_reply(player.message) or "ALIVE"
         self.reply_revision = 0
         self._lock = threading.Lock()
+        self._device_last_seen_at = 0.0
+        self._public_message_window_at = time.monotonic()
+        self._public_message_count = 0
+        self._public_message_last_at = 0.0
+        self._public_play_ready_at = 0.0
+        self.state_file = state_file
+        if state_file and state_file.is_file():
+            saved = json.loads(state_file.read_text(encoding="utf-8"))
+            if isinstance(saved, dict):
+                self.latest_reply = normalize_reply(str(saved.get("message", ""))) or self.latest_reply
+                self.reply_revision = max(0, int(saved.get("revision", 0)))
+                self.player.configure(message=self.latest_reply, signal_type="language")
+
+    def _save_state(self) -> None:
+        if self.state_file is None:
+            return
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.state_file.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"message": self.latest_reply, "revision": self.reply_revision}),
+                             encoding="utf-8")
+        os.replace(temporary, self.state_file)
 
     def snapshot(self) -> dict[str, object]:
         return self.player.snapshot()
+
+    def note_device_poll(self) -> None:
+        with self._lock:
+            self._device_last_seen_at = time.monotonic()
+
+    def reserve_public_message(self) -> int:
+        """Bound public LLM usage even when callers bypass the browser UI."""
+        with self._lock:
+            now = time.monotonic()
+            if now - self._public_message_window_at >= 86400:
+                self._public_message_window_at = now
+                self._public_message_count = 0
+            if self._public_message_count >= 300:
+                return -1
+            wait = 10 - (now - self._public_message_last_at)
+            if self._public_message_count and wait > 0:
+                return max(1, int(wait + 0.999))
+            self._public_message_last_at = now
+            self._public_message_count += 1
+            return 0
+
+    def reserve_public_play(self) -> int:
+        duration = float(self.player.public_snapshot()["duration"])
+        with self._lock:
+            now = time.monotonic()
+            wait = self._public_play_ready_at - now
+            if wait > 0:
+                return max(1, int(wait + 0.999))
+            self._public_play_ready_at = now + max(2.0, duration + 1.0)
+            return 0
 
     def public_snapshot(self) -> dict[str, object]:
         return self.player.public_snapshot()
@@ -115,6 +169,8 @@ class DemoState:
                 "duration": player_state["duration"],
                 "active": player_state["active"],
                 "output": "esp32" if self.device_output else "laptop",
+                "deviceOnline": bool(self.serial_device) or
+                    (self.device_output and time.monotonic() - self._device_last_seen_at < 5),
             }
 
     def set_reply(self, reply: str) -> dict[str, object]:
@@ -123,6 +179,7 @@ class DemoState:
         player_state = self.player.public_snapshot()
         with self._lock:
             self.latest_reply = cleaned
+            self._save_state()
             return {
                 "emitterId": "main",
                 "revision": self.reply_revision,
@@ -136,6 +193,8 @@ class DemoState:
 
     def play_current_once(self) -> dict[str, object]:
         with self._lock:
+            if self.device_output and self.serial_device is None and time.monotonic() - self._device_last_seen_at >= 5:
+                raise TimeoutError("ESP32 is offline; check its Wi-Fi connection")
             message = self.latest_reply
         if self.serial_device is not None:
             self.serial_device.play(message)
@@ -143,6 +202,7 @@ class DemoState:
             self.player.play_once()
         with self._lock:
             self.reply_revision += 1
+            self._save_state()
         return self.current_emitter_message()
 
 
@@ -160,6 +220,13 @@ def make_handler(state: DemoState):
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/api/emitter/main/current":
+                if self._authorized("ALIVE_DEVICE_TOKEN"):
+                    state.note_device_poll()
+                    self._send_json(state.current_emitter_message())
+                return
+            if (parsed.path.startswith("/api/") or parsed.path == "/events") and not self._authorized("ALIVE_WEB_TOKEN"):
+                return
             if parsed.path in {"/", "/index.html"}:
                 self._send_text(make_static_phone_html(), "text/html; charset=utf-8")
                 return
@@ -168,9 +235,6 @@ def make_handler(state: DemoState):
                 return
             if parsed.path == "/api/state":
                 self._send_json(state.public_snapshot())
-                return
-            if parsed.path == "/api/emitter/main/current":
-                self._send_json(state.current_emitter_message())
                 return
             if parsed.path == "/api/configure":
                 self._handle_configure(parsed.query)
@@ -184,11 +248,15 @@ def make_handler(state: DemoState):
             self.send_response(HTTPStatus.NO_CONTENT)
             self._send_cors_headers()
             self.send_header("access-control-allow-methods", "GET, POST, OPTIONS")
-            self.send_header("access-control-allow-headers", "content-type")
+            self.send_header("access-control-allow-headers", "content-type, authorization")
             self.end_headers()
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
+            public_action = parsed.path in {"/api/message", "/api/emitter/main/play"} and \
+                os.environ.get("ALIVE_PUBLIC_DEMO") == "1"
+            if parsed.path.startswith("/api/") and not public_action and not self._authorized("ALIVE_WEB_TOKEN"):
+                return
             if parsed.path == "/api/receiver/capture":
                 try:
                     length = int(self.headers.get("content-length", "0"))
@@ -205,18 +273,35 @@ def make_handler(state: DemoState):
                     self._send_json({"error": "Could not save recording"}, HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
             if parsed.path == "/api/message":
-                self._handle_message_post()
+                self._handle_message_post(public_action)
                 return
             if parsed.path == "/api/emitter/main/play":
                 try:
+                    if public_action:
+                        if not state.current_emitter_message()["deviceOnline"]:
+                            raise TimeoutError("ESP32 is offline; check its Wi-Fi connection")
+                        wait = state.reserve_public_play()
+                        if wait:
+                            self._send_json({"error": f"Wait {wait}s before replaying"}, HTTPStatus.TOO_MANY_REQUESTS)
+                            return
                     self._send_json(state.play_current_once())
                 except (OSError, TimeoutError) as exc:
-                    self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
+                    self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
         def log_message(self, format: str, *args: object) -> None:
             return
+
+        def _authorized(self, token_name: str) -> bool:
+            expected = os.environ.get(token_name, "")
+            if not expected:
+                return True
+            supplied = self.headers.get("authorization", "").removeprefix("Bearer ")
+            if hmac.compare_digest(supplied, expected):
+                return True
+            self._send_json({"error": "Invalid API access token"}, HTTPStatus.UNAUTHORIZED)
+            return False
 
         def _handle_configure(self, query: str) -> None:
             params = parse_qs(query)
@@ -232,12 +317,25 @@ def make_handler(state: DemoState):
             state.player.configure(message=message, mode=mode, signal_type=signal_type)
             self._send_json(state.public_snapshot())
 
-        def _handle_message_post(self) -> None:
-            payload = self._read_json()
+        def _handle_message_post(self, public_action: bool = False) -> None:
+            try:
+                payload = self._read_json()
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                return
             player_text = str(payload.get("message") or payload.get("playerText") or "")
             if not player_text.strip():
                 self.send_error(HTTPStatus.BAD_REQUEST, "message is required")
                 return
+            if len(player_text) > 120:
+                self._send_json({"error": "Message must be at most 120 characters"}, HTTPStatus.BAD_REQUEST)
+                return
+            if public_action:
+                wait = state.reserve_public_message()
+                if wait:
+                    message = "Daily message limit reached" if wait < 0 else f"Wait {wait}s before sending again"
+                    self._send_json({"error": message}, HTTPStatus.TOO_MANY_REQUESTS)
+                    return
             try:
                 reply = generate_reply(player_text)
             except ReplyUnavailableError as exc:
@@ -250,6 +348,9 @@ def make_handler(state: DemoState):
             length = int(self.headers.get("content-length", "0") or "0")
             if length <= 0:
                 return {}
+            if length > 4096:
+                self.close_connection = True
+                raise ValueError("Message request is too large")
             try:
                 payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
             except json.JSONDecodeError:
@@ -257,7 +358,12 @@ def make_handler(state: DemoState):
             return payload if isinstance(payload, dict) else {}
 
         def _send_cors_headers(self) -> None:
-            self.send_header("access-control-allow-origin", "*")
+            origin = os.environ.get("ALIVE_WEB_ORIGIN", "")
+            if not origin:
+                self.send_header("access-control-allow-origin", "*")
+            elif self.headers.get("origin") == origin:
+                self.send_header("access-control-allow-origin", origin)
+                self.send_header("vary", "Origin")
             self.send_header("access-control-allow-private-network", "true")
 
         def _send_text(self, text: str, content_type: str) -> None:
@@ -465,11 +571,14 @@ def main() -> int:
     tone.add_argument("--vocal", dest="mode", action="store_const", const="vocal")
     parser.add_argument("--signal", choices=VALID_SIGNAL_TYPES, default="language")
     parser.add_argument("--http", action="store_true", help="Use HTTP instead of local HTTPS")
+    parser.add_argument("--serve-only", action="store_true", help="Run the API without the terminal controls")
     parser.add_argument(
         "--device-output",
         action="store_true",
         help="Queue replies for the ESP32 I2S emitter instead of laptop audio",
     )
+    parser.add_argument("--wifi-device", action="store_true",
+                        help="Queue one-shot commands for the Wi-Fi ESP32 without laptop audio")
     parser.add_argument(
         "--serial-device",
         metavar="PORT",
@@ -479,14 +588,16 @@ def main() -> int:
 
     player = LoopingMessagePlayer(normalize_reply(args.message) or "ALIVE", args.mode, args.signal)
     serial_device = SerialMessageTransport(args.serial_device) if args.serial_device else None
-    state = DemoState(player, device_output=args.device_output or bool(serial_device),
-                      serial_device=serial_device)
+    state_path = os.environ.get("ALIVE_STATE_FILE")
+    state = DemoState(player, device_output=args.device_output or args.wifi_device or bool(serial_device),
+                      serial_device=serial_device, state_file=Path(state_path) if state_path else None)
     ip = local_ip()
     server = QuietThreadingHTTPServer((args.host, args.port), make_handler(state))
     https_active = False
     if not args.http:
         https_active = apply_https(server, ip)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    if not args.serve_only:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
 
     scheme = "https" if https_active else "http"
     url = f"{scheme}://{ip}:{args.port}/"
@@ -498,7 +609,9 @@ def main() -> int:
     print(f"Sound style: {player.mode}")
     print(f"Signal type: {player.signal_type}")
     print(f"Audio output: {'ESP32 / MAX98357' if state.device_output else 'laptop'}")
-    if serial_device is not None:
+    if args.wifi_device:
+        print("Wi-Fi ESP32: waiting for one-shot play requests; no laptop audio")
+    elif serial_device is not None:
         print(f"USB serial: {serial_device.port_name}; Play signal sends once")
     else:
         print("Audio loop: stopped; type start to play the current signal")
@@ -509,7 +622,10 @@ def main() -> int:
     print_qr_hint(url)
 
     try:
-        controller_loop(state)
+        if args.serve_only:
+            server.serve_forever()
+        else:
+            controller_loop(state)
     finally:
         state.running = False
         player.stop()

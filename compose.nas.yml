@@ -1,0 +1,19 @@
+services:
+  alive-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.nas
+    restart: unless-stopped
+    environment:
+      ALIVE_WEB_ORIGIN: ${ALIVE_WEB_ORIGIN:?Set the GitHub Pages origin}
+      ALIVE_WEB_TOKEN: ${ALIVE_WEB_TOKEN:?Set a private browser access token}
+      ALIVE_DEVICE_TOKEN: ${ALIVE_DEVICE_TOKEN:?Set a separate ESP32 token}
+      ALIVE_PUBLIC_DEMO: ${ALIVE_PUBLIC_DEMO:-0}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set the OpenAI API key on the NAS}
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - alive_state:/data
+
+volumes:
+  alive_state:

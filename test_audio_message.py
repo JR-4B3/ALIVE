@@ -129,6 +129,7 @@ def test_device_output_queues_each_play_without_laptop_audio():
     state = DemoState(player, device_output=True)
 
     first = state.set_reply("I AM HERE")
+    state.note_device_poll()
     replay = state.play_current_once()
 
     assert first["revision"] == 0
