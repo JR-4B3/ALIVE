@@ -192,9 +192,9 @@ Microphone access usually requires HTTPS. Use `--http` only for local desktop te
 The same receiver exists in two builds. The visitor page is what GitHub Pages
 serves and keeps the exhibition flow to a minimum: translation display,
 microphone toggle, and the contact form. The debugging page keeps the extra
-instrumentation hidden from visitors: the `RX V5` microphone/room/tone readout,
+instrumentation hidden from visitors: the `RX V6` microphone/room/tone readout,
 the connection settings disclosure (NAS API URL and operator token), the
-per-play status line, and the diagnostic recording upload.
+per-play status line, and diagnostic recording controls.
 
 ```bash
 cd web
@@ -203,9 +203,16 @@ bun run build:debug   # debugging page -> docs/debug/
 ```
 
 Open `https://jr-4b3.github.io/ALIVE/debug/` for diagnostics. It is separate
-from the visitor QR page. Recordings require the private operator token for
-NAS upload; without it the debug page downloads the WAV locally so it can be
-shared for analysis. No token is included in either published page.
+from the visitor QR page. The debug page prepares a local WAV download before
+any optional NAS upload. Without an operator token, it downloads the WAV on
+the phone and skips the upload. With a token, the local download link stays
+available if the upload fails. No token is included in either published page.
+
+The receiver combines carrier frequencies with the timing between letters
+when reflections make two low tones plausible. In the two supplied phone
+recordings, both the close microphone position and the 30–40 cm position
+decode the full message. Test the actual exhibition placement with different
+phones; these two recordings cannot establish reliability at every angle.
 
 The debugging page can also be served from a laptop on the local network:
 

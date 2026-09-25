@@ -2,6 +2,7 @@ import './styles.css';
 import { SignalLevelTracker } from './sensing/signalLevelTracker';
 import { TranslationDecoder } from './sensing/translationDecoder';
 import { encodeRecording } from './audio/recording';
+import { uploadRecording } from './audio/recordingUpload';
 import type { ReceiverStatus } from './types';
 
 // Set at build time: `bun run build` publishes the clean visitor page to docs/,
@@ -29,7 +30,7 @@ app.innerHTML = `
 
     <section class="grid gap-3">
       <button id="mic" class="min-h-14 px-4 text-base uppercase tracking-[0.18em]">enable microphone</button>
-      ${DEBUG_UI ? `<div id="micDiagnostics" class="break-words font-mono text-xs text-neutral-400">RX V5 · MIC OFF</div>` : ''}
+      ${DEBUG_UI ? `<div id="micDiagnostics" class="break-words font-mono text-xs text-neutral-400">RX V6 · MIC OFF</div>` : ''}
       <form id="contactForm" class="grid gap-3 border border-white px-3 py-3">
         <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">contact</div>
         <input id="prompt" class="min-h-11 px-3 text-base" maxlength="120" placeholder="message">
@@ -52,7 +53,7 @@ app.innerHTML = `
         <div id="contactStatus" class="min-h-6 font-mono text-xs uppercase tracking-[0.16em] text-neutral-400">---</div>
         <label class="text-sm text-neutral-400">
           <input id="recordDiagnostic" type="checkbox">
-          Record next playback for diagnosis (up to 25 seconds of microphone and room sound). If the API requires a private token, download the WAV file on this phone.
+          Record next playback for diagnosis (up to 25 seconds of microphone and room sound). A WAV download is kept on this phone; NAS upload is optional and requires the operator token.
         </label>
         <div id="recordStatus" class="text-sm text-neutral-400"></div>` : ''}
       </form>
@@ -287,28 +288,22 @@ async function saveRecording(): Promise<void> {
   if (!captured) return;
   recording = null;
   window.clearTimeout(captured.timer);
-  setRecordStatus('Saving recording to API server…');
+  setRecordStatus('Preparing recording…');
   try {
     if (!captured.samples) throw new Error('No microphone samples recorded.');
     const wav = encodeRecording(captured.chunks, captured.rate);
-    const response = await fetch(`${captured.api}/api/receiver/capture?message=${encodeURIComponent(captured.message)}`, {
-      method: 'POST', headers: { 'content-type': 'audio/wav', ...apiAuthHeaders() },
-      body: wav
-    });
-    if (response.status === 401) {
-      if (recordingDownloadUrl) URL.revokeObjectURL(recordingDownloadUrl);
-      const link = document.createElement('a');
-      recordingDownloadUrl = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
-      link.href = recordingDownloadUrl;
-      link.download = `alive-diagnostic-${Date.now()}.wav`;
-      link.textContent = 'Download WAV recording';
-      link.className = 'underline';
-      debugRefs!.recordStatus.replaceChildren('Private NAS upload requires a token. ', link, ' Attach the WAV in chat for analysis.');
-      link.click();
-      return;
-    }
-    if (!response.ok) throw new Error(`Recording upload failed: HTTP ${response.status}`);
-    setRecordStatus('Recording saved to API server.');
+    if (recordingDownloadUrl) URL.revokeObjectURL(recordingDownloadUrl);
+    const link = document.createElement('a');
+    recordingDownloadUrl = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+    link.href = recordingDownloadUrl;
+    link.download = `alive-diagnostic-${Date.now()}-${captured.message.replace(/[^A-Z ]/g, '').trim().replaceAll(' ', '-') || 'signal'}.wav`;
+    link.textContent = 'Download WAV recording';
+    link.className = 'underline';
+    const status = document.createTextNode('Recording ready. ');
+    debugRefs!.recordStatus.replaceChildren(status, link);
+    const headers = apiAuthHeaders();
+    if (!headers.authorization) link.click();
+    status.textContent = `${await uploadRecording(wav, captured.api, captured.message, headers)} `;
   } catch (error) {
     setRecordStatus(error instanceof Error ? error.message : 'Could not save recording.');
   }
@@ -349,8 +344,8 @@ function render(): void {
     const diagnostics = debugRefs?.micDiagnostics;
     if (diagnostics) {
       diagnostics.textContent = micActive
-        ? `RX V5 · MIC ${Math.round(levelSnapshot.levelDb)} dB · ROOM ${Math.round(levelSnapshot.noiseFloorDb)} dB · TONE ${translationSnapshot.pair} · RX ${translationSnapshot.stream}`
-        : 'RX V5 · MIC OFF — enable microphone before play to decode';
+        ? `RX V6 · MIC ${Math.round(levelSnapshot.levelDb)} dB · ROOM ${Math.round(levelSnapshot.noiseFloorDb)} dB · TONE ${translationSnapshot.pair} · RX ${translationSnapshot.stream}`
+        : 'RX V6 · MIC OFF — enable microphone before play to decode';
     }
   }
   renderStatus(levelSnapshot.status);

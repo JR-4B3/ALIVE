@@ -19,6 +19,7 @@ interface TonePair {
   high: number;
   strength: number;
   confidence: number;
+  alternatives?: TonePair[];
 }
 
 export class TranslationDecoder {
@@ -34,6 +35,7 @@ export class TranslationDecoder {
   private lastBurstEndAt = 0;
   private lastLetterStartAt: number | null = null;
   private lastLetter = '';
+  private lastLetterOptions: string[] = [];
   private decoded = '';
   private finalMessage = '';
   private stream = '';
@@ -93,6 +95,7 @@ export class TranslationDecoder {
     this.lastBurstEndAt = 0;
     this.lastLetterStartAt = null;
     this.lastLetter = '';
+    this.lastLetterOptions = [];
     this.decoded = '';
     this.finalMessage = '';
     this.stream = reason;
@@ -134,10 +137,12 @@ export class TranslationDecoder {
     this.burstLastAt = endAt;
     this.burstPeak = Math.max(this.burstPeak, detected.strength);
     this.releaseFrames = 0;
-    const vote = this.votes.get(detected.ch) ?? { pair: detected, score: 0, frames: 0 };
-    vote.score += detected.confidence;
-    vote.frames += 1;
-    this.votes.set(detected.ch, vote);
+    for (const option of detected.alternatives ?? [detected]) {
+      const vote = this.votes.get(option.ch) ?? { pair: option, score: 0, frames: 0 };
+      vote.score += option.confidence;
+      vote.frames += 1;
+      this.votes.set(option.ch, vote);
+    }
   }
 
   private finishBurst(endAt: number, nowMs: number, sampleRate: number): void {
@@ -152,12 +157,16 @@ export class TranslationDecoder {
       if (!duplicate) {
         const gapMs = this.lastBurstEndAt ? (this.burstStartAt - this.lastBurstEndAt) * 1000 : 0;
         if (nowMs >= this.captureUntilMs && gapMs > CYCLE_BOUNDARY_GAP_MS && this.decoded.trim()) this.finishCycle();
-        this.correctOctaveFromTiming(separation);
+        this.resolvePreviousFromTiming(separation);
         this.commitLetter(winner.pair.ch, gapMs, nowMs);
         this.pair = `${winner.pair.low}/${winner.pair.high} Hz`;
         this.lastBurstEndAt = endAt;
         this.lastLetterStartAt = this.burstStartAt;
         this.lastLetter = winner.pair.ch;
+        this.lastLetterOptions = [...this.votes.values()]
+          .filter(v => v.frames * FRAME_HOP / sampleRate >= MIN_EVIDENCE_SECONDS &&
+            v.score >= winner.score * 0.25 && v.pair.high === winner.pair.high)
+          .map(v => v.pair.ch);
       }
     }
     this.candidate = null;
@@ -166,8 +175,22 @@ export class TranslationDecoder {
     this.releaseFrames = 0;
   }
 
-  private correctOctaveFromTiming(separation: number): void {
+  private resolvePreviousFromTiming(separation: number): void {
     if (!this.decoded || !Number.isFinite(separation)) return;
+    // Resolve only frequencies actually observed in the previous burst.
+    // The following onset provides an independent, text-agnostic rhythm code.
+    const errorFor = (ch: string) => Math.min(
+      Math.abs(separation - letterInterval(ch)),
+      Math.abs(separation - Math.max(0.44, letterInterval(ch))));
+    const options = this.lastLetterOptions.map(ch => ({ ch, error: errorFor(ch) }))
+      .sort((a, b) => a.error - b.error);
+    if (options.length > 1 && options[0].ch !== this.lastLetter &&
+        options[0].error < 0.065 && options[1].error - options[0].error > 0.05 &&
+        errorFor(this.lastLetter) > 0.10) {
+      this.decoded = this.decoded.slice(0, -1) + options[0].ch;
+      this.stream = this.stream.slice(0, -1) + options[0].ch;
+      this.lastLetter = options[0].ch;
+    }
     const index = LETTERS.indexOf(this.lastLetter);
     const low = LOW_FREQS[Math.floor(index / 4)];
     // The gaps also encode the letter. Use that independent evidence only
@@ -197,6 +220,7 @@ export class TranslationDecoder {
     this.lastBurstEndAt = 0;
     this.lastLetterStartAt = null;
     this.lastLetter = '';
+    this.lastLetterOptions = [];
     this.captureUntilMs = 0;
   }
 
@@ -253,18 +277,35 @@ function detectTonePair(samples: Float32Array, sampleRate: number, _noiseFloorDb
   // A real room recording can put a second low carrier close to the intended
   // one. When the high carrier is very clear, accept a smaller low margin,
   // provided the chosen low tone is also well above its own noise band.
+  const strongHigh = high.best >= high.second * 3 && high.best >= highNoise * 5;
   const lowDistinct = low.best >= low.second * 1.5 ||
-    (low.best >= low.second * 1.2 && low.best >= lowNoise * 5 &&
-      high.best >= high.second * 3);
+    (low.best >= lowNoise * 5 && strongHigh);
   if (!lowDistinct || high.best < high.second * 1.5) return null;
   const lowIndex = LOW_FREQS.indexOf(low.frequency);
   const highIndex = HIGH_FREQS.indexOf(high.frequency);
   const ch = LETTERS[lowIndex * HIGH_FREQS.length + highIndex];
-  return ch ? {
+  const pair: TonePair | null = ch ? {
     ch, low: low.frequency, high: high.frequency,
     strength: Math.sqrt(low.best * high.best),
     confidence: Math.min(10, low.best / lowNoise, high.best / highNoise)
   } : null;
+  if (pair && strongHigh) {
+    const alternatives: TonePair[] = [];
+    for (let index = 0; index < LOW_FREQS.length; index++) {
+      const frequency = LOW_FREQS[index];
+      const energy = goertzel(samples, sampleRate, frequency);
+      const noise = localNoise(samples, sampleRate, frequency);
+      const candidate = LETTERS[index * HIGH_FREQS.length + highIndex];
+      if (!candidate || energy < low.best * 0.35 || energy < noise * 5) continue;
+      // Keep the octave decision made above as the primary spectral vote.
+      const weight = frequency === low.frequency ? 1 : Math.min(0.95, energy / low.best);
+      alternatives.push({ ch: candidate, low: frequency, high: high.frequency,
+        strength: Math.sqrt(energy * high.best),
+        confidence: Math.min(10, energy / noise, high.best / highNoise) * weight });
+    }
+    if (alternatives.some(a => a.ch === pair.ch)) pair.alternatives = alternatives;
+  }
+  return pair;
 }
 
 function localNoise(samples: Float32Array, sampleRate: number, frequency: number): number {
