@@ -250,7 +250,13 @@ function detectTonePair(samples: Float32Array, sampleRate: number, _noiseFloorDb
   const lowNoise = localNoise(samples, sampleRate, low.frequency);
   const highNoise = localNoise(samples, sampleRate, high.frequency);
   if (low.best < lowNoise * 2.5 || high.best < highNoise * 2.5) return null;
-  if (low.best < low.second * 1.5 || high.best < high.second * 1.5) return null;
+  // A real room recording can put a second low carrier close to the intended
+  // one. When the high carrier is very clear, accept a smaller low margin,
+  // provided the chosen low tone is also well above its own noise band.
+  const lowDistinct = low.best >= low.second * 1.5 ||
+    (low.best >= low.second * 1.2 && low.best >= lowNoise * 5 &&
+      high.best >= high.second * 3);
+  if (!lowDistinct || high.best < high.second * 1.5) return null;
   const lowIndex = LOW_FREQS.indexOf(low.frequency);
   const highIndex = HIGH_FREQS.indexOf(high.frequency);
   const ch = LETTERS[lowIndex * HIGH_FREQS.length + highIndex];

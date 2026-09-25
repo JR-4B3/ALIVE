@@ -253,3 +253,11 @@ test('keeps a genuine final Y despite weak energy at 500 Hz', () => {
   for (let i = 0; i < signal.length; i++) signal[i] += background[i];
   expect(decode(concat(noise(0.25, 0.001), signal, noise(1, 0.001)), -50)).toBe('Y');
 });
+
+test('recognizes N with a strong competing 900 Hz tone', () => {
+  const signal = tone(700, 2300, 0.22, 0.012);
+  for (let i = 0; i < signal.length; i++) {
+    signal[i] += 0.012 * 0.48 * 0.75 * Math.sin(2 * Math.PI * 900 * i / SAMPLE_RATE);
+  }
+  expect(decode(concat(noise(0.25, 0.001), signal, noise(0.5, 0.001)), -50)).toBe('N');
+});
