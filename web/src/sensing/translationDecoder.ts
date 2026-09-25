@@ -231,7 +231,19 @@ function detectTonePair(samples: Float32Array, sampleRate: number, _noiseFloorDb
   // A quiet dual tone can sit below the room's overall RMS level; the spectral
   // checks below decide whether it is a real signal.
   if (levelDb < -90) return null;
-  const low = rankedPeaks(samples, sampleRate, LOW_FREQS);
+  let low = rankedPeaks(samples, sampleRate, LOW_FREQS);
+  // Small speakers can make the second harmonic stronger than its fundamental.
+  // Require measurable fundamental energy; never infer it from an octave alone.
+  const fundamental = low.frequency / 2;
+  if (LOW_FREQS.includes(fundamental)) {
+    const energy = goertzel(samples, sampleRate, fundamental);
+    if (energy >= low.best * 0.2 &&
+        energy >= localNoise(samples, sampleRate, fundamental) * 5) {
+      const competitors = LOW_FREQS.filter(f => f !== fundamental && f !== low.frequency);
+      low = { frequency: fundamental, best: energy,
+        second: rankedPeaks(samples, sampleRate, competitors).best };
+    }
+  }
   const high = rankedPeaks(samples, sampleRate, HIGH_FREQS);
   // Judge each carrier against nearby noise, independently. A small speaker
   // and phone mic can attenuate the low carrier much more than the high one.

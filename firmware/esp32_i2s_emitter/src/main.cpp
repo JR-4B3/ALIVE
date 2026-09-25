@@ -23,7 +23,8 @@ static_assert(SAMPLE_RATE == 8000 || SAMPLE_RATE == 16000 ||
               SAMPLE_RATE == 96000, "Unsupported MAX98357 sample rate");
 constexpr uint32_t BURST_MS = 220;
 constexpr float GAP_SCALE = 0.65f;
-constexpr uint32_t MIN_GAP_MS = 90;
+// Leave time for room reflections and the receiver's 4096-sample window to clear.
+constexpr uint32_t MIN_GAP_MS = 220;
 constexpr uint32_t POLL_MS = 300;
 // GAIN stays open. 1200 is +6 dB over 600, with ample digital headroom.
 constexpr int16_t AMPLITUDE = 1200;
@@ -36,7 +37,7 @@ uint32_t testFrameCursor = 0;
 int16_t testSine[TEST_SINE_FRAMES];
 #endif
 constexpr uint32_t MESSAGE_BURST_FRAMES = SAMPLE_RATE * 220 / 1000;
-constexpr uint32_t MESSAGE_FADE_FRAMES = SAMPLE_RATE / 200;
+constexpr uint32_t MESSAGE_FADE_FRAMES = SAMPLE_RATE * 24 / 1000;
 constexpr uint32_t MESSAGE_SINE_FRAMES = SAMPLE_RATE / 100;
 enum class MessageSegment { Idle, Lead, Tone, Gap, Pause };
 #if defined(ALIVE_MESSAGE_TEST)
@@ -144,7 +145,9 @@ void advanceMessageSegment() {
       return;
     }
     messageSegment = MessageSegment::Pause;
-    messageSegmentLength = SAMPLE_RATE * 3;
+    // Trade trailing silence for clearer letter separation. For NAS replies
+    // (<=12 characters), total playback still fits its legacy duration budget.
+    messageSegmentLength = SAMPLE_RATE;
   } else if (messageSegment == MessageSegment::Pause) {
 #if defined(ALIVE_MESSAGE_TEST)
     messageLetterIndex = 0;
