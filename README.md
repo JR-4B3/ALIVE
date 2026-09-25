@@ -184,7 +184,7 @@ Microphone access usually requires HTTPS. Use `--http` only for local desktop te
 - `simple_qr.py` prints the terminal QR code.
 - `web/` contains the Vite/TypeScript phone receiver source.
 - `docs/` contains the built clean visitor page for GitHub Pages.
-- `web/dist-debug/` contains the built debugging page (git-ignored).
+- `docs/debug/` contains the separate debugging page.
 - `firmware/esp32_i2s_emitter/` contains the MAX98357 live demo firmware.
 
 ## Visitor Page and Debugging Page
@@ -199,10 +199,15 @@ per-play status line, and the diagnostic recording upload.
 ```bash
 cd web
 bun run build         # visitor page -> docs/ (GitHub Pages)
-bun run build:debug   # debugging page -> web/dist-debug/
+bun run build:debug   # debugging page -> docs/debug/
 ```
 
-Serve the debugging page from a laptop on the exhibition network:
+Open `https://jr-4b3.github.io/ALIVE/debug/` for diagnostics. It is separate
+from the visitor QR page. Recordings require the private operator token for
+NAS upload; without it the debug page downloads the WAV locally so it can be
+shared for analysis. No token is included in either published page.
+
+The debugging page can also be served from a laptop on the local network:
 
 ```bash
 python debug_host.py                    # proxies /api/* to the laptop emitter
@@ -212,7 +217,7 @@ python debug_host.py --api https://ds720.tail688a7b.ts.net   # or the NAS API
 It prints the phone URL and IP plus a terminal QR code to scan. Requests the
 page sends to `/api/*` are proxied to the chosen upstream, so the phone only
 ever talks to the debug host and needs no separate CORS or certificate setup.
-Use `--rebuild` to rebuild `web/dist-debug/` first, and `--http` only for
+Use `--rebuild` to rebuild `docs/debug/` first, and `--http` only for
 desktop testing (microphone access normally needs HTTPS).
 
 ## Tests

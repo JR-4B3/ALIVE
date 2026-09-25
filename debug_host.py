@@ -2,7 +2,7 @@
 """Serve the ALIVE debugging page on the local network and print its QR code.
 
 GitHub Pages stays the clean visitor page. For testing, this script hosts the
-debugging build of the same page (web/dist-debug) from this computer: microphone
+debugging build of the same page (docs/debug) from this computer: microphone
 and room levels, tone/stream diagnostics, connection settings, and the
 diagnostic recording upload. Run it, then scan the printed QR code or type the
 printed URL/IP with the phone.
@@ -34,7 +34,7 @@ from urllib.parse import urlparse
 from simple_qr import terminal_qr
 
 ROOT = Path(__file__).resolve().parent
-DEBUG_APP_DIR = ROOT / "web" / "dist-debug"
+DEBUG_APP_DIR = ROOT / "docs" / "debug"
 DEBUG_APP = DEBUG_APP_DIR / "index.html"
 DEFAULT_API = "https://127.0.0.1:8765"
 MAX_REQUEST_BYTES = 12_000_000
@@ -251,7 +251,7 @@ def main() -> int:
     parser.add_argument("--http", action="store_true",
                         help="serve plain HTTP; phone microphone access usually needs HTTPS")
     parser.add_argument("--rebuild", action="store_true",
-                        help="rebuild web/dist-debug before serving")
+                        help="rebuild docs/debug before serving")
     args = parser.parse_args()
 
     if args.rebuild or not DEBUG_APP.exists():

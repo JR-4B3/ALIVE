@@ -26,7 +26,7 @@ A deterministic two-reflection simulation lost letters from `STAY CALM` with the
 
 ## 1. Publish the matching phone page
 
-GitHub Pages for `JR-4B3/ALIVE` is set to the `main` branch's `/docs` folder, at <https://jr-4b3.github.io/ALIVE/>. Include the built `docs/` files when publishing. The printable [exhibition QR](docs/ALIVE-QR.svg) points to that page. On the published page, the NAS address is already filled in and visitors do not enter a token. Connection settings are tucked under a disclosure for the operator.
+GitHub Pages for `JR-4B3/ALIVE` is set to the `main` branch's `/docs` folder, at <https://jr-4b3.github.io/ALIVE/>. Include the built `docs/` files when publishing. The printable [exhibition QR](docs/ALIVE-QR.svg) points to the visitor page. The separate [debug page](https://jr-4b3.github.io/ALIVE/debug/) has microphone diagnostics, connection settings and recording controls. The NAS address is prefilled; neither page includes a private token. A protected diagnostic upload returns HTTP 401 without the operator token, so the debug page offers the WAV recording as a local download instead.
 
 Do not put `.env`, `secrets.h`, the OpenAI API key, or either private access token in GitHub. Public exhibition mode allows only sending a short message and requesting playback without a token. It limits messages to one every 10 seconds and 300 per running 24-hour window, and prevents overlapping playback requests. The ESP32 device endpoint and operator endpoints remain private. These limits bound normal use and basic abuse; monitor API usage during the exhibition.
 

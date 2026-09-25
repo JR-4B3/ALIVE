@@ -52,7 +52,7 @@ app.innerHTML = `
         <div id="contactStatus" class="min-h-6 font-mono text-xs uppercase tracking-[0.16em] text-neutral-400">---</div>
         <label class="text-sm text-neutral-400">
           <input id="recordDiagnostic" type="checkbox">
-          Record next playback for diagnosis (up to 25 seconds of microphone and room sound, saved to the API server).
+          Record next playback for diagnosis (up to 25 seconds of microphone and room sound). If the API requires a private token, download the WAV file on this phone.
         </label>
         <div id="recordStatus" class="text-sm text-neutral-400"></div>` : ''}
       </form>
@@ -107,6 +107,7 @@ let micActive = false;
 let replayReadyAt = 0;
 let replayTimer: number | null = null;
 let recording: { chunks: Float32Array[]; samples: number; rate: number; api: string; message: string; timer: number } | null = null;
+let recordingDownloadUrl: string | null = null;
 
 refs.mic.addEventListener('click', () => {
   void toggleMicrophone();
@@ -289,10 +290,23 @@ async function saveRecording(): Promise<void> {
   setRecordStatus('Saving recording to API server…');
   try {
     if (!captured.samples) throw new Error('No microphone samples recorded.');
+    const wav = encodeRecording(captured.chunks, captured.rate);
     const response = await fetch(`${captured.api}/api/receiver/capture?message=${encodeURIComponent(captured.message)}`, {
       method: 'POST', headers: { 'content-type': 'audio/wav', ...apiAuthHeaders() },
-      body: encodeRecording(captured.chunks, captured.rate)
+      body: wav
     });
+    if (response.status === 401) {
+      if (recordingDownloadUrl) URL.revokeObjectURL(recordingDownloadUrl);
+      const link = document.createElement('a');
+      recordingDownloadUrl = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+      link.href = recordingDownloadUrl;
+      link.download = `alive-diagnostic-${Date.now()}.wav`;
+      link.textContent = 'Download WAV recording';
+      link.className = 'underline';
+      debugRefs!.recordStatus.replaceChildren('Private NAS upload requires a token. ', link, ' Attach the WAV in chat for analysis.');
+      link.click();
+      return;
+    }
     if (!response.ok) throw new Error(`Recording upload failed: HTTP ${response.status}`);
     setRecordStatus('Recording saved to API server.');
   } catch (error) {
