@@ -4,13 +4,20 @@ import { TranslationDecoder } from './sensing/translationDecoder';
 import { encodeRecording } from './audio/recording';
 import type { ReceiverStatus } from './types';
 
+// Set at build time: `bun run build` publishes the clean visitor page to docs/,
+// `bun run build:debug` keeps every diagnostic control for local testing.
+declare const __DEBUG_UI__: boolean;
+const DEBUG_UI = __DEBUG_UI__;
+
+if (DEBUG_UI) document.title = 'ALIVE Receiver · debug';
+
 const app = requiredElement<HTMLDivElement>('#app');
 app.innerHTML = `
   <main class="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-4 px-4 py-4">
     <section class="flex flex-1 flex-col border border-white">
       <div class="flex items-center justify-between border-b border-white px-3 py-2">
         <div>
-          <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">translation</div>
+          <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">translation${DEBUG_UI ? ' · debug' : ''}</div>
           <div id="translationState" class="mt-1 text-xs uppercase tracking-[0.16em]">Listening</div>
         </div>
         <button id="clear" class="px-3 py-2 text-xs uppercase tracking-[0.16em]">clear</button>
@@ -22,7 +29,7 @@ app.innerHTML = `
 
     <section class="grid gap-3">
       <button id="mic" class="min-h-14 px-4 text-base uppercase tracking-[0.18em]">enable microphone</button>
-      <div id="micDiagnostics" class="break-words font-mono text-xs text-neutral-400">RX V5 · MIC OFF</div>
+      ${DEBUG_UI ? `<div id="micDiagnostics" class="break-words font-mono text-xs text-neutral-400">RX V5 · MIC OFF</div>` : ''}
       <form id="contactForm" class="grid gap-3 border border-white px-3 py-3">
         <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">contact</div>
         <input id="prompt" class="min-h-11 px-3 text-base" maxlength="120" placeholder="message">
@@ -30,6 +37,7 @@ app.innerHTML = `
           <button id="send" class="min-h-11 px-3 text-xs uppercase tracking-[0.16em]">send</button>
           <button id="playSignal" type="button" class="min-h-11 px-3 text-xs uppercase tracking-[0.16em]">play signal</button>
         </div>
+        ${DEBUG_UI ? `
         <details class="border-t border-neutral-700 pt-2 text-xs text-neutral-400">
           <summary class="cursor-pointer uppercase tracking-[0.16em]">connection settings</summary>
           <label class="mt-3 grid gap-1 uppercase tracking-[0.16em]" for="apiBase">
@@ -44,9 +52,9 @@ app.innerHTML = `
         <div id="contactStatus" class="min-h-6 font-mono text-xs uppercase tracking-[0.16em] text-neutral-400">---</div>
         <label class="text-sm text-neutral-400">
           <input id="recordDiagnostic" type="checkbox">
-          Record next playback for diagnosis (up to 25 seconds of microphone and room sound, saved to the API server).
+          Record next playback for diagnosis (up to 25 seconds of microphone and room sound). If the API requires a private token, download the WAV file on this phone.
         </label>
-        <div id="recordStatus" class="text-sm text-neutral-400"></div>
+        <div id="recordStatus" class="text-sm text-neutral-400"></div>` : ''}
       </form>
     </section>
   </main>
@@ -56,25 +64,35 @@ const refs = {
   translationState: requiredElement<HTMLDivElement>('#translationState'),
   message: requiredElement<HTMLDivElement>('#message'),
   mic: requiredElement<HTMLButtonElement>('#mic'),
-  micDiagnostics: requiredElement<HTMLDivElement>('#micDiagnostics'),
   clear: requiredElement<HTMLButtonElement>('#clear'),
   contactForm: requiredElement<HTMLFormElement>('#contactForm'),
   prompt: requiredElement<HTMLInputElement>('#prompt'),
+  send: requiredElement<HTMLButtonElement>('#send'),
+  playSignal: requiredElement<HTMLButtonElement>('#playSignal')
+};
+
+// Debug-only controls. In the visitor build DEBUG_UI is false, so this object
+// (and every diagnostic string in it) is removed from the bundle entirely.
+const debugRefs = DEBUG_UI ? {
+  micDiagnostics: requiredElement<HTMLDivElement>('#micDiagnostics'),
   apiBase: requiredElement<HTMLInputElement>('#apiBase'),
   apiToken: requiredElement<HTMLInputElement>('#apiToken'),
   contactStatus: requiredElement<HTMLDivElement>('#contactStatus'),
-  playSignal: requiredElement<HTMLButtonElement>('#playSignal'),
   recordDiagnostic: requiredElement<HTMLInputElement>('#recordDiagnostic'),
   recordStatus: requiredElement<HTMLDivElement>('#recordStatus')
-};
+} : null;
 
 const params = new URLSearchParams(location.search);
 const exhibitionApi = location.hostname === 'jr-4b3.github.io' && location.pathname.startsWith('/ALIVE/')
   ? 'https://ds720.tail688a7b.ts.net' : '';
-refs.apiBase.value = params.get('api') ?? (exhibitionApi
+const initialApiBase = params.get('api') ?? (exhibitionApi
   ? (localStorage.getItem('aliveExhibitionApi') || exhibitionApi)
   : (localStorage.getItem('aliveApiBase') || ''));
-refs.apiToken.value = sessionStorage.getItem('aliveApiToken') ?? '';
+const initialApiToken = params.get('token') ?? (sessionStorage.getItem('aliveApiToken') ?? '');
+if (debugRefs) {
+  debugRefs.apiBase.value = initialApiBase;
+  debugRefs.apiToken.value = initialApiToken;
+}
 
 const levels = new SignalLevelTracker();
 const decoder = new TranslationDecoder();
@@ -89,6 +107,7 @@ let micActive = false;
 let replayReadyAt = 0;
 let replayTimer: number | null = null;
 let recording: { chunks: Float32Array[]; samples: number; rate: number; api: string; message: string; timer: number } | null = null;
+let recordingDownloadUrl: string | null = null;
 
 refs.mic.addEventListener('click', () => {
   void toggleMicrophone();
@@ -129,7 +148,7 @@ async function startMicrophone(): Promise<void> {
     processor.onaudioprocess = (event) => {
       if (!audioCtx) return;
       const input = event.inputBuffer.getChannelData(0);
-      if (recording && recording.samples < recording.rate * 25) {
+      if (DEBUG_UI && recording && recording.samples < recording.rate * 25) {
         const chunk = input.slice(0, recording.rate * 25 - recording.samples);
         recording.chunks.push(chunk);
         recording.samples += chunk.length;
@@ -184,7 +203,7 @@ async function stopMicrophone(): Promise<void> {
 async function sendContactMessage(): Promise<void> {
   const message = refs.prompt.value.trim();
   if (!message) return;
-  refs.contactStatus.textContent = 'sending';
+  reportStatus('sending', refs.send, 'send');
   refs.prompt.disabled = true;
   try {
     const apiBase = requestApiBase();
@@ -198,10 +217,10 @@ async function sendContactMessage(): Promise<void> {
       throw new Error(failure?.error ?? `HTTP ${response.status}`);
     }
     const payload = (await response.json()) as { reply?: string; message?: string; duration?: number };
-    refs.contactStatus.textContent = payload.reply ?? payload.message ?? 'sent';
+    reportStatus(payload.reply ?? payload.message ?? 'sent', refs.send, 'send');
     refs.prompt.value = '';
   } catch (error) {
-    refs.contactStatus.textContent = error instanceof Error ? error.message : 'send failed';
+    reportStatus(error instanceof Error ? error.message : 'send failed', refs.send, 'send');
   } finally {
     refs.prompt.disabled = false;
     refs.prompt.focus();
@@ -212,67 +231,86 @@ async function playCurrentSignal(): Promise<void> {
   if (Date.now() < replayReadyAt) return;
   try {
     const apiBase = requestApiBase();
-    if (refs.recordDiagnostic.checked) {
-      if (!micActive || !audioCtx) throw new Error('Enable microphone before recording a diagnostic.');
-      cancelRecording();
-      recording = { chunks: [], samples: 0, rate: audioCtx.sampleRate, api: apiBase, message: '',
-        timer: window.setTimeout(() => void saveRecording(), 25000) };
-      refs.recordDiagnostic.checked = false;
-      refs.recordStatus.textContent = 'Recording microphone for diagnosis…';
+    if (DEBUG_UI) {
+      const recordToggle = debugRefs?.recordDiagnostic;
+      if (recordToggle?.checked) {
+        if (!micActive || !audioCtx) throw new Error('Enable microphone before recording a diagnostic.');
+        cancelRecording();
+        recording = { chunks: [], samples: 0, rate: audioCtx.sampleRate, api: apiBase, message: '',
+          timer: window.setTimeout(() => void saveRecording(), 25000) };
+        recordToggle.checked = false;
+        setRecordStatus('Recording microphone for diagnosis…');
+      }
     }
     if (micActive) {
       translationSnapshot = decoder.beginCapture(performance.now());
       render();
     }
-    refs.contactStatus.textContent = 'playing';
+    setContactStatus('playing');
     lockReplay(1);
     const response = await fetch(`${apiBase}/api/emitter/main/play`, {
       method: 'POST', headers: apiAuthHeaders()
     });
-    if (response.status === 405) throw new Error('HTTP 405: enter the NAS API URL above');
+    if (response.status === 405) throw new Error(DEBUG_UI ? 'HTTP 405: enter the NAS API URL above' : 'HTTP 405: no signal API');
     if (!response.ok) {
       const failure = (await response.json().catch(() => null)) as { error?: string } | null;
       throw new Error(failure?.error ?? `HTTP ${response.status}`);
     }
     const payload = (await response.json()) as { duration?: number; message?: string };
-    if (recording) {
-      recording.message = payload.message ?? '';
-      window.clearTimeout(recording.timer);
-      recording.timer = window.setTimeout(() => void saveRecording(), Math.min(23, (payload.duration ?? 20) + 1.5) * 1000);
+    if (DEBUG_UI) {
+      if (recording) {
+        recording.message = payload.message ?? '';
+        window.clearTimeout(recording.timer);
+        recording.timer = window.setTimeout(() => void saveRecording(), Math.min(23, (payload.duration ?? 20) + 1.5) * 1000);
+      }
     }
     if (micActive && payload.duration) decoder.setCaptureDuration(performance.now(), payload.duration);
-    refs.contactStatus.textContent = 'ESP32 signal queued';
+    setContactStatus('ESP32 signal queued');
     lockReplay(payload.duration);
   } catch (error) {
     cancelRecording();
     unlockReplay();
-    refs.contactStatus.textContent = error instanceof Error ? error.message : 'play failed';
+    reportStatus(error instanceof Error ? error.message : 'play failed', refs.playSignal, 'play signal');
   }
 }
 
 function cancelRecording(): void {
-  if (!recording) return;
+  if (!DEBUG_UI || !recording) return;
   window.clearTimeout(recording.timer);
   recording = null;
-  refs.recordStatus.textContent = 'Diagnostic recording cancelled.';
+  setRecordStatus('Diagnostic recording cancelled.');
 }
 
 async function saveRecording(): Promise<void> {
+  if (!DEBUG_UI) return;
   const captured = recording;
   if (!captured) return;
   recording = null;
   window.clearTimeout(captured.timer);
-  refs.recordStatus.textContent = 'Saving recording to API server…';
+  setRecordStatus('Saving recording to API server…');
   try {
     if (!captured.samples) throw new Error('No microphone samples recorded.');
+    const wav = encodeRecording(captured.chunks, captured.rate);
     const response = await fetch(`${captured.api}/api/receiver/capture?message=${encodeURIComponent(captured.message)}`, {
       method: 'POST', headers: { 'content-type': 'audio/wav', ...apiAuthHeaders() },
-      body: encodeRecording(captured.chunks, captured.rate)
+      body: wav
     });
+    if (response.status === 401) {
+      if (recordingDownloadUrl) URL.revokeObjectURL(recordingDownloadUrl);
+      const link = document.createElement('a');
+      recordingDownloadUrl = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+      link.href = recordingDownloadUrl;
+      link.download = `alive-diagnostic-${Date.now()}.wav`;
+      link.textContent = 'Download WAV recording';
+      link.className = 'underline';
+      debugRefs!.recordStatus.replaceChildren('Private NAS upload requires a token. ', link, ' Attach the WAV in chat for analysis.');
+      link.click();
+      return;
+    }
     if (!response.ok) throw new Error(`Recording upload failed: HTTP ${response.status}`);
-    refs.recordStatus.textContent = 'Recording saved to API server.';
+    setRecordStatus('Recording saved to API server.');
   } catch (error) {
-    refs.recordStatus.textContent = error instanceof Error ? error.message : 'Could not save recording.';
+    setRecordStatus(error instanceof Error ? error.message : 'Could not save recording.');
   }
 }
 
@@ -307,29 +345,63 @@ function unlockReplay(): void {
 function render(): void {
   refs.translationState.textContent = `${translationSnapshot.title} · ${translationSnapshot.verdict}`;
   refs.message.textContent = translationSnapshot.message;
-  refs.micDiagnostics.textContent = micActive
-    ? `RX V5 · MIC ${Math.round(levelSnapshot.levelDb)} dB · ROOM ${Math.round(levelSnapshot.noiseFloorDb)} dB · TONE ${translationSnapshot.pair} · RX ${translationSnapshot.stream}`
-    : 'RX V5 · MIC OFF — enable microphone before play to decode';
+  if (DEBUG_UI) {
+    const diagnostics = debugRefs?.micDiagnostics;
+    if (diagnostics) {
+      diagnostics.textContent = micActive
+        ? `RX V5 · MIC ${Math.round(levelSnapshot.levelDb)} dB · ROOM ${Math.round(levelSnapshot.noiseFloorDb)} dB · TONE ${translationSnapshot.pair} · RX ${translationSnapshot.stream}`
+        : 'RX V5 · MIC OFF — enable microphone before play to decode';
+    }
+  }
   renderStatus(levelSnapshot.status);
 }
 
+function setContactStatus(text: string): void {
+  if (DEBUG_UI) debugRefs?.contactStatus && (debugRefs.contactStatus.textContent = text);
+}
+
+function setRecordStatus(text: string): void {
+  if (DEBUG_UI) debugRefs?.recordStatus && (debugRefs.recordStatus.textContent = text);
+}
+
+const flashTimers = new Map<HTMLButtonElement, number>();
+
+// The clean visitor page has no status line, so send/play results flash on the
+// button that caused them and return to its normal label.
+function reportStatus(text: string, button: HTMLButtonElement, restoreLabel: string): void {
+  const statusLine = debugRefs?.contactStatus;
+  if (statusLine) {
+    statusLine.textContent = text;
+    return;
+  }
+  const previous = flashTimers.get(button);
+  if (previous !== undefined) window.clearTimeout(previous);
+  const flashed = text.length > 24 ? `${text.slice(0, 23)}…` : text;
+  button.textContent = flashed;
+  flashTimers.set(button, window.setTimeout(() => {
+    flashTimers.delete(button);
+    // A replay lock may have started meanwhile; it owns the label now.
+    if (button.textContent === flashed) button.textContent = restoreLabel;
+  }, 3000));
+}
+
 function normalizedApiBase(): string {
-  return refs.apiBase.value.trim().replace(/\/+$/, '');
+  return (debugRefs?.apiBase.value ?? initialApiBase).trim().replace(/\/+$/, '');
 }
 
 function requestApiBase(): string {
   const apiBase = normalizedApiBase();
-  localStorage.setItem('aliveApiBase', apiBase);
-  if (exhibitionApi) localStorage.setItem('aliveExhibitionApi', apiBase);
-  if (apiBase) return apiBase;
-  const host = location.hostname;
-  if (host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.') ||
-      host.startsWith('10.') || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) return location.origin;
-  throw new Error('Enter the NAS API URL above');
+  if (debugRefs) {
+    localStorage.setItem('aliveApiBase', apiBase);
+    if (exhibitionApi) localStorage.setItem('aliveExhibitionApi', apiBase);
+  }
+  // An explicit URL wins; otherwise the API lives at this page's own origin
+  // (NAS container, laptop emitter, or the debug host's /api proxy).
+  return apiBase || location.origin;
 }
 
 function apiAuthHeaders(): Record<string, string> {
-  const token = refs.apiToken.value.trim();
+  const token = (debugRefs?.apiToken.value ?? initialApiToken).trim();
   if (!token) {
     sessionStorage.removeItem('aliveApiToken');
     return {};

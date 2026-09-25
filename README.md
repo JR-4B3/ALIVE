@@ -24,7 +24,7 @@ sudo /usr/local/bin/docker compose --env-file .env -f compose.nas.yml up -d --bu
 
 The container listens on host loopback port `8765`; route the public HTTPS address to `http://127.0.0.1:8765` with Funnel or the NAS reverse proxy. The container keeps the prepared reply, play revision, and optional microphone recordings in its `alive_state` volume. The OpenAI API key stays in the NAS environment. Use `python -c 'import secrets; print(secrets.token_urlsafe(32))'` twice for distinct web and device tokens. Set `ALIVE_WEB_ORIGIN` to the exact GitHub Pages origin, such as `https://jr-4b3.github.io` (no `/ALIVE` path).
 
-Build `web/` with `bun run build`, publish the `docs/` folder as GitHub Pages, then open the page on the phone. Enter the public NAS HTTPS address in **NAS API URL** and the web token in **API access token**. The web token stays in browser session storage. The page can receive sound on its own; **Send** and **Play signal** need the NAS API.
+Build `web/` with `bun run build`, publish the `docs/` folder as GitHub Pages, then open the page on the phone. The published visitor page never shows connection settings: on the `jr-4b3.github.io/ALIVE/` address it fills in the NAS API automatically (or read an override from an `?api=` query parameter). Operator tokens and hand-edited API URLs live on the debugging page below. The page can receive sound on its own; **Send** and **Play signal** need the NAS API.
 
 Before the exhibition, copy `firmware/esp32_i2s_emitter/include/secrets.example.h` to ignored `secrets.h`. Put in the venue network SSID and password, the public HTTPS API address, the device token, and the API certificate authority PEM. Flash the `wifi_message` firmware once:
 
@@ -178,12 +178,47 @@ Microphone access usually requires HTTPS. Use `--http` only for local desktop te
 ## Project Layout
 
 - `emitter.py` serves the built phone app and controls the laptop audio emitter.
+- `debug_host.py` serves the debugging page on the local network and prints its QR code.
 - `audio_message.py` generates and loops encoded language, clock, and burst signals.
 - `codebook.py` defines the dual-tone character map and timing map.
 - `simple_qr.py` prints the terminal QR code.
 - `web/` contains the Vite/TypeScript phone receiver source.
-- `docs/` contains the built static phone app for GitHub Pages.
+- `docs/` contains the built clean visitor page for GitHub Pages.
+- `docs/debug/` contains the separate debugging page.
 - `firmware/esp32_i2s_emitter/` contains the MAX98357 live demo firmware.
+
+## Visitor Page and Debugging Page
+
+The same receiver exists in two builds. The visitor page is what GitHub Pages
+serves and keeps the exhibition flow to a minimum: translation display,
+microphone toggle, and the contact form. The debugging page keeps the extra
+instrumentation hidden from visitors: the `RX V5` microphone/room/tone readout,
+the connection settings disclosure (NAS API URL and operator token), the
+per-play status line, and the diagnostic recording upload.
+
+```bash
+cd web
+bun run build         # visitor page -> docs/ (GitHub Pages)
+bun run build:debug   # debugging page -> docs/debug/
+```
+
+Open `https://jr-4b3.github.io/ALIVE/debug/` for diagnostics. It is separate
+from the visitor QR page. Recordings require the private operator token for
+NAS upload; without it the debug page downloads the WAV locally so it can be
+shared for analysis. No token is included in either published page.
+
+The debugging page can also be served from a laptop on the local network:
+
+```bash
+python debug_host.py                    # proxies /api/* to the laptop emitter
+python debug_host.py --api https://ds720.tail688a7b.ts.net   # or the NAS API
+```
+
+It prints the phone URL and IP plus a terminal QR code to scan. Requests the
+page sends to `/api/*` are proxied to the chosen upstream, so the phone only
+ever talks to the debug host and needs no separate CORS or certificate setup.
+Use `--rebuild` to rebuild `docs/debug/` first, and `--http` only for
+desktop testing (microphone access normally needs HTTPS).
 
 ## Tests
 

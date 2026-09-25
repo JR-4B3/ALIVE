@@ -196,3 +196,60 @@ describe('microphone tone decoding', () => {
     });
   }
 });
+
+// Firmware waveform through a deterministic two-reflection room model.
+function beaconWithEcho(text: string, minGap: number, rate: number): Float32Array {
+  const parts = [new Float32Array(Math.round(rate * 0.25))];
+  for (const ch of text) {
+    const index = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ '.indexOf(ch);
+    const low = 400 + Math.floor(index / 4) * 100;
+    const high = 2000 + index % 4 * 300;
+    const signal = new Float32Array(Math.round(rate * 0.22));
+    for (let i = 0; i < signal.length; i++) {
+      const envelope = Math.min(1, i / (rate * 0.024), (signal.length - i) / (rate * 0.024));
+      signal[i] = envelope * (0.008 * Math.sin(2 * Math.PI * low * i / rate) +
+        0.025 * Math.sin(2 * Math.PI * high * i / rate));
+    }
+    const gap = ch === ' ' ? 1.04 : Math.max(minGap, (100 + index * 50) * 0.00065);
+    parts.push(signal, new Float32Array(Math.round(rate * gap)));
+  }
+  parts.push(new Float32Array(rate));
+  const dry = concat(...parts);
+  const wet = dry.slice();
+  for (const [seconds, gain] of [[0.06, 0.55], [0.12, 0.25]]) {
+    const delay = Math.round(rate * seconds);
+    for (let i = delay; i < wet.length; i++) wet[i] += dry[i - delay] * gain;
+  }
+  return wet;
+}
+
+for (const rate of [44100, 48000]) {
+  for (const message of ['STAY CALM', 'WE ARE HERE', 'I AM HERE', 'I HEAR YOU', 'HELLO']) {
+    test(`separates ${message} through room reflections at ${rate} Hz`, () => {
+      expect(decode(beaconWithEcho(message, 0.22, rate), -50, rate)).toBe(message);
+    });
+  }
+}
+
+// A real fundamental must survive a stronger speaker-generated second harmonic,
+// including the final letter where no following gap can correct the choice.
+test('recognizes a final E with a stronger second harmonic', () => {
+  const signal = tone(500, 2000, 0.22, 0.03);
+  const harmonic = tone(1000, 2000, 0.22, 0.06);
+  for (let i = 0; i < signal.length; i++) signal[i] += harmonic[i];
+  expect(decode(concat(noise(0.25, 0.001), signal, noise(1, 0.001)), -50)).toBe('E');
+});
+
+test('recognizes A when its 800 Hz harmonic is stronger than 400 Hz', () => {
+  const signal = tone(400, 2000, 0.22, 0.03);
+  const harmonic = tone(800, 2000, 0.22, 0.06);
+  for (let i = 0; i < signal.length; i++) signal[i] += harmonic[i];
+  expect(decode(concat(noise(0.25, 0.001), signal, noise(1, 0.001)), -50)).toBe('A');
+});
+
+test('keeps a genuine final Y despite weak energy at 500 Hz', () => {
+  const signal = tone(1000, 2000, 0.22, 0.06);
+  const background = tone(500, 2000, 0.22, 0.001);
+  for (let i = 0; i < signal.length; i++) signal[i] += background[i];
+  expect(decode(concat(noise(0.25, 0.001), signal, noise(1, 0.001)), -50)).toBe('Y');
+});
