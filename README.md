@@ -210,8 +210,8 @@ shared for analysis. No token is included in either published page.
 The debugging page can also be served from a laptop on the local network:
 
 ```bash
-python debug_host.py                    # proxies /api/* to the laptop emitter
-python debug_host.py --api https://ds720.tail688a7b.ts.net   # or the NAS API
+python debug_host.py                    # proxies /api/* to the NAS
+python debug_host.py --api https://127.0.0.1:8765   # optional local emitter
 ```
 
 It prints the phone URL and IP plus a terminal QR code to scan. Requests the

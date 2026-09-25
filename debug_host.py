@@ -7,8 +7,8 @@ and room levels, tone/stream diagnostics, connection settings, and the
 diagnostic recording upload. Run it, then scan the printed QR code or type the
 printed URL/IP with the phone.
 
-    python debug_host.py                                        # laptop emitter API
-    python debug_host.py --api https://ds720.tail688a7b.ts.net  # NAS API
+    python debug_host.py                                        # NAS API
+    python debug_host.py --api https://127.0.0.1:8765           # local emitter API
 
 Requests the page sends to /api/* are proxied to that upstream, so the phone
 talks to this one origin only: no CORS setup and no certificate problems
@@ -17,6 +17,7 @@ between the phone and the API.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import mimetypes
 import shutil
@@ -36,7 +37,7 @@ from simple_qr import terminal_qr
 ROOT = Path(__file__).resolve().parent
 DEBUG_APP_DIR = ROOT / "docs" / "debug"
 DEBUG_APP = DEBUG_APP_DIR / "index.html"
-DEFAULT_API = "https://127.0.0.1:8765"
+DEFAULT_API = "https://ds720.tail688a7b.ts.net"
 MAX_REQUEST_BYTES = 12_000_000
 
 
@@ -259,7 +260,13 @@ def main() -> int:
             return 1
 
     ip = local_ip()
-    server = QuietThreadingHTTPServer((args.host, args.port), make_handler(args.api))
+    try:
+        server = QuietThreadingHTTPServer((args.host, args.port), make_handler(args.api))
+    except OSError as error:
+        if error.errno != errno.EADDRINUSE:
+            raise
+        print(f"Port {args.port} is already in use. The debug server may already be running; open its URL or stop it before starting another copy.", file=sys.stderr)
+        return 1
     https_active = False
     if not args.http:
         https_active = apply_https(server, ip)
