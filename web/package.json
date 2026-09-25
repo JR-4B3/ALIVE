@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
+    "build:debug": "tsc --noEmit && vite build --mode debug",
     "test": "bun test",
     "preview": "vite preview --host 0.0.0.0"
   },

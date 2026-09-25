@@ -15,5 +15,6 @@ transmission*
 node_modules/
 web/node_modules/
 web/dist/
+web/dist-debug/
 firmware/**/.pio/
 firmware/**/include/secrets.h
