@@ -38,7 +38,7 @@
   height: 7px;
   background: currentColor;
   opacity: 0;
-  animation: play-loading-first 2.8s steps(1, end) infinite;
+  animation: play-loading-first 2.4s steps(1, end) infinite;
 }
 
 .play-loading span:nth-child(2) { animation-name: play-loading-second; }
