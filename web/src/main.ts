@@ -251,7 +251,7 @@ async function playCurrentSignal(): Promise<void> {
     }
     setContactStatus('playing');
     lockReplay(1);
-    const response = await requestPlayWithOfflineRetry(apiBase);
+    const response = await requestPlayWhenReady(apiBase);
     const payload = (await response.json()) as { duration?: number; message?: string };
     if (DEBUG_UI) {
       if (recording) {
@@ -262,7 +262,7 @@ async function playCurrentSignal(): Promise<void> {
     }
     if (micActive && payload.duration) decoder.setCaptureDuration(performance.now(), payload.duration);
     setContactStatus('ESP32 signal queued');
-    lockReplay(payload.duration, DEBUG_UI ? 0 : 1000);
+    lockReplay(payload.duration);
   } catch (error) {
     cancelRecording();
     unlockReplay();
@@ -272,7 +272,7 @@ async function playCurrentSignal(): Promise<void> {
   }
 }
 
-async function requestPlayWithOfflineRetry(apiBase: string): Promise<Response> {
+async function requestPlayWhenReady(apiBase: string): Promise<Response> {
   const retryUntil = Date.now() + 5000;
   while (true) {
     const response = await fetch(`${apiBase}/api/emitter/main/play`, {
@@ -282,6 +282,13 @@ async function requestPlayWithOfflineRetry(apiBase: string): Promise<Response> {
     if (response.status === 405) throw new Error(DEBUG_UI ? 'HTTP 405: enter the NAS API URL above' : 'HTTP 405: no signal API');
     const failure = (await response.json().catch(() => null)) as { error?: string } | null;
     const error = failure?.error ?? `HTTP ${response.status}`;
+    const replayWait = response.status === 429 ? /^Wait (\d+)s before replaying$/.exec(error) : null;
+    if (!DEBUG_UI && replayWait && Date.now() + Number(replayWait[1]) * 1000 <= retryUntil) {
+      const waitSeconds = Number(replayWait[1]);
+      lockReplay(waitSeconds);
+      await new Promise<void>((resolve) => window.setTimeout(resolve, waitSeconds * 1000));
+      continue;
+    }
     if (DEBUG_UI || response.status !== 503 || !error.startsWith('ESP32 is offline') || Date.now() >= retryUntil) {
       throw new Error(error);
     }
@@ -324,8 +331,8 @@ async function saveRecording(): Promise<void> {
   }
 }
 
-function lockReplay(durationSeconds = 0, extraWaitMs = 0): void {
-  const durationMs = Math.max(1000, Math.ceil(durationSeconds * 1000) + 250) + extraWaitMs;
+function lockReplay(durationSeconds = 0): void {
+  const durationMs = Math.max(1000, Math.ceil(durationSeconds * 1000) + 250);
   replayReadyAt = Date.now() + durationMs;
   if (replayTimer !== null) window.clearInterval(replayTimer);
   refs.playSignal.disabled = true;
