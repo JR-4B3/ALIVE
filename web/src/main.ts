@@ -107,6 +107,7 @@ let silentNode: GainNode | null = null;
 let micActive = false;
 let replayReadyAt = 0;
 let replayTimer: number | null = null;
+let playPending = false;
 let recording: { chunks: Float32Array[]; samples: number; rate: number; api: string; message: string; timer: number } | null = null;
 let recordingDownloadUrl: string | null = null;
 
@@ -229,7 +230,8 @@ async function sendContactMessage(): Promise<void> {
 }
 
 async function playCurrentSignal(): Promise<void> {
-  if (Date.now() < replayReadyAt) return;
+  if (playPending || Date.now() < replayReadyAt) return;
+  playPending = true;
   try {
     const apiBase = requestApiBase();
     if (DEBUG_UI) {
@@ -249,14 +251,7 @@ async function playCurrentSignal(): Promise<void> {
     }
     setContactStatus('playing');
     lockReplay(1);
-    const response = await fetch(`${apiBase}/api/emitter/main/play`, {
-      method: 'POST', headers: apiAuthHeaders()
-    });
-    if (response.status === 405) throw new Error(DEBUG_UI ? 'HTTP 405: enter the NAS API URL above' : 'HTTP 405: no signal API');
-    if (!response.ok) {
-      const failure = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(failure?.error ?? `HTTP ${response.status}`);
-    }
+    const response = await requestPlayWithOfflineRetry(apiBase);
     const payload = (await response.json()) as { duration?: number; message?: string };
     if (DEBUG_UI) {
       if (recording) {
@@ -267,11 +262,31 @@ async function playCurrentSignal(): Promise<void> {
     }
     if (micActive && payload.duration) decoder.setCaptureDuration(performance.now(), payload.duration);
     setContactStatus('ESP32 signal queued');
-    lockReplay(payload.duration);
+    lockReplay(payload.duration, DEBUG_UI ? 0 : 1000);
   } catch (error) {
     cancelRecording();
     unlockReplay();
     reportStatus(error instanceof Error ? error.message : 'play failed', refs.playSignal, 'play signal');
+  } finally {
+    playPending = false;
+  }
+}
+
+async function requestPlayWithOfflineRetry(apiBase: string): Promise<Response> {
+  const retryUntil = Date.now() + 5000;
+  while (true) {
+    const response = await fetch(`${apiBase}/api/emitter/main/play`, {
+      method: 'POST', headers: apiAuthHeaders()
+    });
+    if (response.ok) return response;
+    if (response.status === 405) throw new Error(DEBUG_UI ? 'HTTP 405: enter the NAS API URL above' : 'HTTP 405: no signal API');
+    const failure = (await response.json().catch(() => null)) as { error?: string } | null;
+    const error = failure?.error ?? `HTTP ${response.status}`;
+    if (DEBUG_UI || response.status !== 503 || !error.startsWith('ESP32 is offline') || Date.now() >= retryUntil) {
+      throw new Error(error);
+    }
+    showPlayLoading();
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
   }
 }
 
@@ -309,11 +324,12 @@ async function saveRecording(): Promise<void> {
   }
 }
 
-function lockReplay(durationSeconds = 0): void {
-  const durationMs = Math.max(1000, Math.ceil(durationSeconds * 1000) + 250);
+function lockReplay(durationSeconds = 0, extraWaitMs = 0): void {
+  const durationMs = Math.max(1000, Math.ceil(durationSeconds * 1000) + 250) + extraWaitMs;
   replayReadyAt = Date.now() + durationMs;
   if (replayTimer !== null) window.clearInterval(replayTimer);
   refs.playSignal.disabled = true;
+  refs.playSignal.removeAttribute('aria-label');
   updateReplayButton();
   replayTimer = window.setInterval(updateReplayButton, 200);
 }
@@ -321,10 +337,21 @@ function lockReplay(durationSeconds = 0): void {
 function updateReplayButton(): void {
   const remainingMs = replayReadyAt - Date.now();
   if (remainingMs <= 0) {
-    unlockReplay();
+    if (!playPending) unlockReplay();
     return;
   }
   refs.playSignal.textContent = `wait ${Math.ceil(remainingMs / 1000)}s`;
+}
+
+function showPlayLoading(): void {
+  replayReadyAt = 0;
+  if (replayTimer !== null) {
+    window.clearInterval(replayTimer);
+    replayTimer = null;
+  }
+  refs.playSignal.disabled = true;
+  refs.playSignal.setAttribute('aria-label', 'Waiting for signal');
+  refs.playSignal.innerHTML = '<span class="play-loading" aria-hidden="true"><span></span><span></span><span></span></span>';
 }
 
 function unlockReplay(): void {
@@ -334,6 +361,7 @@ function unlockReplay(): void {
     replayTimer = null;
   }
   refs.playSignal.disabled = false;
+  refs.playSignal.removeAttribute('aria-label');
   refs.playSignal.textContent = 'play signal';
 }
 
