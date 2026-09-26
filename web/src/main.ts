@@ -30,7 +30,7 @@ app.innerHTML = `
 
     <section class="grid gap-3">
       <button id="mic" class="min-h-14 px-4 text-base uppercase tracking-[0.18em]">enable microphone</button>
-      ${DEBUG_UI ? `<div id="micDiagnostics" class="break-words font-mono text-xs text-neutral-400">RX V6 · MIC OFF</div>` : ''}
+      ${DEBUG_UI ? `<div id="micDiagnostics" class="overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[10px] text-neutral-400">MIC OFF · enable before play</div>` : ''}
       <form id="contactForm" class="grid gap-3 border border-white px-3 py-3">
         <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">contact</div>
         <input id="prompt" class="min-h-11 px-3 text-base" maxlength="120" placeholder="message">
@@ -39,6 +39,12 @@ app.innerHTML = `
           <button id="playSignal" type="button" class="min-h-11 px-3 text-xs uppercase tracking-[0.16em]">play signal</button>
         </div>
         ${DEBUG_UI ? `
+        <div id="contactStatus" class="min-h-6 font-mono text-xs uppercase tracking-[0.16em] text-neutral-400">---</div>
+        <label class="text-sm text-neutral-400">
+          <input id="recordDiagnostic" type="checkbox">
+          Record next playback (25s max)
+        </label>
+        <div id="recordStatus" class="text-sm text-neutral-400"></div>
         <details class="border-t border-neutral-700 pt-2 text-xs text-neutral-400">
           <summary class="cursor-pointer uppercase tracking-[0.16em]">connection settings</summary>
           <label class="mt-3 grid gap-1 uppercase tracking-[0.16em]" for="apiBase">
@@ -49,13 +55,7 @@ app.innerHTML = `
             Private operator token (leave empty at the exhibition)
             <input id="apiToken" class="min-h-11 px-3 text-base normal-case tracking-normal" type="password" autocomplete="off" placeholder="optional">
           </label>
-        </details>
-        <div id="contactStatus" class="min-h-6 font-mono text-xs uppercase tracking-[0.16em] text-neutral-400">---</div>
-        <label class="text-sm text-neutral-400">
-          <input id="recordDiagnostic" type="checkbox">
-          Record next playback for diagnosis (up to 25 seconds of microphone and room sound). A WAV download is kept on this phone; NAS upload is optional and requires the operator token.
-        </label>
-        <div id="recordStatus" class="text-sm text-neutral-400"></div>` : ''}
+        </details>` : ''}
       </form>
     </section>
   </main>
@@ -297,9 +297,9 @@ async function saveRecording(): Promise<void> {
     recordingDownloadUrl = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
     link.href = recordingDownloadUrl;
     link.download = `alive-diagnostic-${Date.now()}-${captured.message.replace(/[^A-Z ]/g, '').trim().replaceAll(' ', '-') || 'signal'}.wav`;
-    link.textContent = 'Download WAV recording';
+    link.textContent = 'Download WAV';
     link.className = 'underline';
-    const status = document.createTextNode('Recording ready. ');
+    const status = document.createTextNode('Ready · ');
     debugRefs!.recordStatus.replaceChildren(status, link);
     const headers = apiAuthHeaders();
     if (!headers.authorization) link.click();
@@ -344,8 +344,8 @@ function render(): void {
     const diagnostics = debugRefs?.micDiagnostics;
     if (diagnostics) {
       diagnostics.textContent = micActive
-        ? `RX V6 · MIC ${Math.round(levelSnapshot.levelDb)} dB · ROOM ${Math.round(levelSnapshot.noiseFloorDb)} dB · TONE ${translationSnapshot.pair} · RX ${translationSnapshot.stream}`
-        : 'RX V6 · MIC OFF — enable microphone before play to decode';
+        ? `MIC ${Math.round(levelSnapshot.levelDb)}dB · ROOM ${Math.round(levelSnapshot.noiseFloorDb)}dB · ${translationSnapshot.pair}Hz · ${translationSnapshot.stream === 'message complete' ? 'complete' : translationSnapshot.stream}`
+        : 'MIC OFF · enable before play';
     }
   }
   renderStatus(levelSnapshot.status);
