@@ -351,7 +351,9 @@ function showPlayLoading(): void {
   }
   refs.playSignal.disabled = true;
   refs.playSignal.setAttribute('aria-label', 'Waiting for signal');
-  refs.playSignal.innerHTML = '<span class="play-loading" aria-hidden="true"><span></span><span></span><span></span></span>';
+  if (!refs.playSignal.querySelector('.play-loading')) {
+    refs.playSignal.innerHTML = '<span class="play-loading" aria-hidden="true"><span></span><span></span><span></span></span>';
+  }
 }
 
 function unlockReplay(): void {
