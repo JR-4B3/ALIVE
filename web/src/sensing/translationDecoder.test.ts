@@ -198,7 +198,7 @@ describe('microphone tone decoding', () => {
 });
 
 // Firmware waveform through a deterministic two-reflection room model.
-function beaconWithEcho(text: string, minGap: number, rate: number): Float32Array {
+function beaconWithEcho(text: string, minGap: number, rate: number, distortion = false): Float32Array {
   const parts = [new Float32Array(Math.round(rate * 0.25))];
   for (const ch of text) {
     const index = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ '.indexOf(ch);
@@ -209,6 +209,10 @@ function beaconWithEcho(text: string, minGap: number, rate: number): Float32Arra
       const envelope = Math.min(1, i / (rate * 0.024), (signal.length - i) / (rate * 0.024));
       signal[i] = envelope * (0.008 * Math.sin(2 * Math.PI * low * i / rate) +
         0.025 * Math.sin(2 * Math.PI * high * i / rate));
+      const intermodulation = high - 2 * low;
+      if (distortion && intermodulation >= 400 && intermodulation <= 1000) {
+        signal[i] += envelope * 0.011 * Math.sin(2 * Math.PI * intermodulation * i / rate);
+      }
     }
     const gap = ch === ' ' ? 1.04 : Math.max(minGap, (100 + index * 50) * 0.00065);
     parts.push(signal, new Float32Array(Math.round(rate * gap)));
@@ -261,3 +265,11 @@ test('recognizes N with a strong competing 900 Hz tone', () => {
   }
   expect(decode(concat(noise(0.25, 0.001), signal, noise(0.5, 0.001)), -50)).toBe('N');
 });
+
+for (const rate of [44100, 48000]) {
+  for (const message of ['ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ZYXWVUTSRQPONMLKJIHGFEDCBA', 'NQIM VRSW ABCD']) {
+    test(`uses tone and rhythm for arbitrary symbols with stronger distortion at ${rate} Hz: ${message}`, () => {
+      expect(decode(beaconWithEcho(message, 0.22, rate, true), -50, rate)).toBe(message);
+    });
+  }
+}
