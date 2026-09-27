@@ -9,7 +9,7 @@ printed URL/IP with the phone.
 
     python debug_host.py                                        # NAS API
     python debug_host.py --api https://127.0.0.1:8765           # local emitter API
-    python debug_host.py -kill                                  # stop existing debug host
+    python debug_host.py -kill                                  # stop all debug hosts
 
 Requests the page sends to /api/* are proxied to that upstream, so the phone
 talks to this one origin only: no CORS setup and no certificate problems
@@ -22,7 +22,6 @@ import errno
 import json
 import mimetypes
 import os
-import re
 import signal
 import shutil
 import socket
@@ -46,82 +45,61 @@ DEFAULT_API = "https://ds720.tail688a7b.ts.net"
 MAX_REQUEST_BYTES = 12_000_000
 
 
-def listening_pids(port: int) -> set[int]:
-    """Find processes listening on a TCP port without relying on a PID file."""
-    try:
-        result = subprocess.run(
-            ["lsof", "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
-            capture_output=True, text=True, check=False,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError("-kill requires lsof to identify the port owner") from exc
-    if result.returncode not in (0, 1):
-        raise RuntimeError(result.stderr.strip() or "Could not inspect the listening port")
-    return {int(line) for line in result.stdout.splitlines() if line.isdecimal()}
-
-
-def repository_debug_hosts() -> set[Path]:
-    """Allow debug hosts launched from any worktree of this repository."""
-    result = subprocess.run(
-        ["git", "-C", str(ROOT), "worktree", "list", "--porcelain"],
-        capture_output=True, text=True, check=True,
-    )
-    return {
-        Path(line.removeprefix("worktree ")).resolve() / "debug_host.py"
-        for line in result.stdout.splitlines() if line.startswith("worktree ")
-    }
-
-
-def is_this_debug_host(pid: int, allowed_scripts: set[Path]) -> bool:
-    """Accept this repository's debug host, even if its worktree was removed."""
+def is_debug_host(pid: int) -> bool:
+    """Match a running debug_host.py owned by this user, from any location."""
+    if pid == os.getpid():
+        return False
     try:
         process_dir = Path(f"/proc/{pid}")
+        if process_dir.stat().st_uid != os.getuid():
+            return False
         arguments = (process_dir / "cmdline").read_bytes().split(b"\0")
-        cwd_target = os.readlink(process_dir / "cwd")
-        deleted_worktree = cwd_target.endswith(" (deleted)")
-        cwd = Path(cwd_target.removesuffix(" (deleted)"))
-        for raw in arguments[1:]:
-            argument = os.fsdecode(raw)
-            if Path(argument).name != "debug_host.py":
-                continue
-            script = Path(argument)
-            script_path = (script if script.is_absolute() else cwd / script).resolve()
-            if script_path in allowed_scripts:
-                return True
-            # A running host can outlive `git worktree remove`. /proc marks its
-            # old cwd as deleted, and Git no longer lists that worktree.
-            managed_root = Path.home() / ".t3" / "worktrees" / ROOT.name
-            if (deleted_worktree and cwd.parent == managed_root
-                    and re.fullmatch(r"t3code-[0-9a-f]+", cwd.name)
-                    and script_path == cwd / "debug_host.py"):
-                return True
-    except (OSError, ValueError):
+        return (b"-kill" not in arguments and b"--kill" not in arguments
+                and any(Path(os.fsdecode(arg)).name == "debug_host.py" for arg in arguments[1:]))
+    except OSError:
         pass
     return False
 
 
-def kill_debug_host(port: int) -> int:
+def running_debug_hosts() -> set[int]:
+    return {int(entry.name) for entry in Path("/proc").iterdir()
+            if entry.name.isdecimal() and is_debug_host(int(entry.name))}
+
+
+def kill_debug_hosts() -> int:
     try:
-        listeners = listening_pids(port)
-        if not listeners:
-            print(f"No debug host is listening on port {port}.")
+        hosts = running_debug_hosts()
+        if not hosts:
+            print("No debug hosts are running.")
             return 0
-        allowed_scripts = repository_debug_hosts()
-        if not all(is_this_debug_host(pid, allowed_scripts) for pid in listeners):
-            print(f"Port {port} is held by another process; leaving it running.", file=sys.stderr)
-            return 1
-        for pid in listeners:
-            os.kill(pid, signal.SIGTERM)
+        for pid in hosts:
+            if is_debug_host(pid):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
-            if not (listening_pids(port) & listeners):
-                print(f"Stopped debug host on port {port}.")
+            if not any(is_debug_host(pid) for pid in hosts):
+                print(f"Stopped {len(hosts)} debug host(s).")
                 return 0
             time.sleep(0.1)
-        print(f"Debug host on port {port} did not stop after SIGTERM.", file=sys.stderr)
+        for pid in hosts:
+            if is_debug_host(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if not any(is_debug_host(pid) for pid in hosts):
+                print(f"Stopped {len(hosts)} debug host(s).")
+                return 0
+            time.sleep(0.1)
+        print("Some debug hosts could not be stopped.", file=sys.stderr)
         return 1
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-        print(f"Could not stop debug host: {exc}", file=sys.stderr)
+    except OSError as exc:
+        print(f"Could not stop debug hosts: {exc}", file=sys.stderr)
         return 1
 
 
@@ -338,11 +316,11 @@ def main() -> int:
     parser.add_argument("--rebuild", action="store_true",
                         help="rebuild docs/debug before serving")
     parser.add_argument("-kill", "--kill", action="store_true",
-                        help="stop this repository's debug host on --port and exit")
+                        help="stop all running debug_host.py servers and exit")
     args = parser.parse_args()
 
     if args.kill:
-        return kill_debug_host(args.port)
+        return kill_debug_hosts()
 
     if args.rebuild or not DEBUG_APP.exists():
         if not build_debug_app():
