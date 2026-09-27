@@ -226,6 +226,7 @@ The debugging page can also be served from a laptop on the local network:
 ```bash
 python debug_host.py                    # proxies /api/* to the NAS
 python debug_host.py --api https://127.0.0.1:8765   # optional local emitter
+python debug_host.py -kill             # stop an existing debug host on port 8443
 ```
 
 It prints the phone URL and IP plus a terminal QR code to scan. Requests the
@@ -233,6 +234,8 @@ page sends to `/api/*` are proxied to the chosen upstream, so the phone only
 ever talks to the debug host and needs no separate CORS or certificate setup.
 Use `--rebuild` to rebuild `docs/debug/` first, and `--http` only for
 desktop testing (microphone access normally needs HTTPS).
+Use `python debug_host.py -kill --port PORT` for a custom port. The command
+leaves an unrelated process on that port alone.
 
 ## Tests
 
