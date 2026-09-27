@@ -198,8 +198,8 @@ Microphone access usually requires HTTPS. Use `--http` only for local desktop te
 The same receiver exists in two builds. The visitor page is what GitHub Pages
 serves and keeps the exhibition flow to a minimum: translation display,
 microphone toggle, and the contact form. The debugging page keeps the extra
-instrumentation hidden from visitors: the `RX V6` microphone/room/tone readout,
-the connection settings disclosure (NAS API URL and operator token), the
+instrumentation hidden from visitors: the microphone/room/tone readout,
+the connection settings disclosure (NAS API URL, operator token, and message reset), the
 per-play status line, and diagnostic recording controls.
 
 ```bash
@@ -213,6 +213,13 @@ from the visitor QR page. The debug page prepares a local WAV download before
 any optional NAS upload. Without an operator token, it downloads the WAV on
 the phone and skips the upload. With a token, the local download link stays
 available if the upload fails. No token is included in either published page.
+The reset button restores the message configured when the API server started
+(`WE ARE HERE` by default) and saves that choice, so a restart does not bring
+back the previous reply. It requires the operator token when one is configured.
+Replies use only the current contact message; the API keeps no conversation history.
+Interactive local server startup prints `ALIVE_WEB_TOKEN` next to the phone URL
+when that variable is set. The NAS container keeps it out of unattended logs;
+read it from the NAS `.env` file as described in [NAS_SETUP.md](NAS_SETUP.md).
 
 The receiver combines carrier frequencies with the timing between letters
 when reflections make two low tones plausible. In the two supplied phone
@@ -225,6 +232,7 @@ The debugging page can also be served from a laptop on the local network:
 ```bash
 python debug_host.py                    # proxies /api/* to the NAS
 python debug_host.py --api https://127.0.0.1:8765   # optional local emitter
+python debug_host.py -kill             # stop all running debug hosts
 ```
 
 It prints the phone URL and IP plus a terminal QR code to scan. Requests the
@@ -232,6 +240,8 @@ page sends to `/api/*` are proxied to the chosen upstream, so the phone only
 ever talks to the debug host and needs no separate CORS or certificate setup.
 Use `--rebuild` to rebuild `docs/debug/` first, and `--http` only for
 desktop testing (microphone access normally needs HTTPS).
+The kill command finds running `debug_host.py` processes owned by your user,
+including instances started from other or since-removed worktrees and custom ports.
 
 ## Tests
 

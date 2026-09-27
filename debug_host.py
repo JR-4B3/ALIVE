@@ -9,6 +9,7 @@ printed URL/IP with the phone.
 
     python debug_host.py                                        # NAS API
     python debug_host.py --api https://127.0.0.1:8765           # local emitter API
+    python debug_host.py -kill                                  # stop all debug hosts
 
 Requests the page sends to /api/* are proxied to that upstream, so the phone
 talks to this one origin only: no CORS setup and no certificate problems
@@ -20,11 +21,14 @@ import argparse
 import errno
 import json
 import mimetypes
+import os
+import signal
 import shutil
 import socket
 import ssl
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from http import HTTPStatus
@@ -39,6 +43,64 @@ DEBUG_APP_DIR = ROOT / "docs" / "debug"
 DEBUG_APP = DEBUG_APP_DIR / "index.html"
 DEFAULT_API = "https://ds720.tail688a7b.ts.net"
 MAX_REQUEST_BYTES = 12_000_000
+
+
+def is_debug_host(pid: int) -> bool:
+    """Match a running debug_host.py owned by this user, from any location."""
+    if pid == os.getpid():
+        return False
+    try:
+        process_dir = Path(f"/proc/{pid}")
+        if process_dir.stat().st_uid != os.getuid():
+            return False
+        arguments = (process_dir / "cmdline").read_bytes().split(b"\0")
+        return (b"-kill" not in arguments and b"--kill" not in arguments
+                and any(Path(os.fsdecode(arg)).name == "debug_host.py" for arg in arguments[1:]))
+    except OSError:
+        pass
+    return False
+
+
+def running_debug_hosts() -> set[int]:
+    return {int(entry.name) for entry in Path("/proc").iterdir()
+            if entry.name.isdecimal() and is_debug_host(int(entry.name))}
+
+
+def kill_debug_hosts() -> int:
+    try:
+        hosts = running_debug_hosts()
+        if not hosts:
+            print("No debug hosts are running.")
+            return 0
+        for pid in hosts:
+            if is_debug_host(pid):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if not any(is_debug_host(pid) for pid in hosts):
+                print(f"Stopped {len(hosts)} debug host(s).")
+                return 0
+            time.sleep(0.1)
+        for pid in hosts:
+            if is_debug_host(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if not any(is_debug_host(pid) for pid in hosts):
+                print(f"Stopped {len(hosts)} debug host(s).")
+                return 0
+            time.sleep(0.1)
+        print("Some debug hosts could not be stopped.", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"Could not stop debug hosts: {exc}", file=sys.stderr)
+        return 1
 
 
 def build_debug_app() -> bool:
@@ -253,7 +315,12 @@ def main() -> int:
                         help="serve plain HTTP; phone microphone access usually needs HTTPS")
     parser.add_argument("--rebuild", action="store_true",
                         help="rebuild docs/debug before serving")
+    parser.add_argument("-kill", "--kill", action="store_true",
+                        help="stop all running debug_host.py servers and exit")
     args = parser.parse_args()
+
+    if args.kill:
+        return kill_debug_hosts()
 
     if args.rebuild or not DEBUG_APP.exists():
         if not build_debug_app():
@@ -280,6 +347,13 @@ def main() -> int:
     print(f"Phone URL: {url}")
     print(f"Also try:  {local_url}")
     print(f"API proxy: {args.api}  (page requests to /api/* go there)")
+    operator_token = os.environ.get("ALIVE_WEB_TOKEN", "")
+    if operator_token and sys.stdout.isatty():
+        print(f"Operator token: {operator_token}  (paste into Connection Settings)")
+    elif operator_token:
+        print("Operator token: configured in ALIVE_WEB_TOKEN (hidden in logs)")
+    else:
+        print("Operator token: use ALIVE_WEB_TOKEN from the API server's .env")
     if https_active:
         print("[HTTPS] The phone may show a certificate warning; accept it for the local demo.")
     else:
