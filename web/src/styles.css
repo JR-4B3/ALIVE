@@ -24,3 +24,28 @@
     @apply outline outline-2 outline-offset-2 outline-white;
   }
 }
+
+.record-checkbox-mark {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid white;
+  background: black;
+  color: white;
+}
+
+.record-checkbox-mark svg {
+  visibility: hidden;
+}
+
+#recordDiagnostic:checked + .record-checkbox-mark svg {
+  visibility: visible;
+}
+
+#recordDiagnostic:focus-visible + .record-checkbox-mark {
+  outline: 2px solid white;
+  outline-offset: 2px;
+}

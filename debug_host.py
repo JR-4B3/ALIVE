@@ -20,6 +20,7 @@ import argparse
 import errno
 import json
 import mimetypes
+import os
 import shutil
 import socket
 import ssl
@@ -280,6 +281,13 @@ def main() -> int:
     print(f"Phone URL: {url}")
     print(f"Also try:  {local_url}")
     print(f"API proxy: {args.api}  (page requests to /api/* go there)")
+    operator_token = os.environ.get("ALIVE_WEB_TOKEN", "")
+    if operator_token and sys.stdout.isatty():
+        print(f"Operator token: {operator_token}  (paste into Connection Settings)")
+    elif operator_token:
+        print("Operator token: configured in ALIVE_WEB_TOKEN (hidden in logs)")
+    else:
+        print("Operator token: use ALIVE_WEB_TOKEN from the API server's .env")
     if https_active:
         print("[HTTPS] The phone may show a certificate warning; accept it for the local demo.")
     else:

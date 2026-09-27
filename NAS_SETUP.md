@@ -50,6 +50,12 @@ Do not put `.env`, `secrets.h`, the OpenAI API key, or either private access tok
 
    Avoid putting real secrets in screenshots, chat, or a Git commit. The old key file on the laptop is not automatically copied to the NAS.
 
+   To view the operator token for the debug page later, run this in your NAS SSH terminal from `/volume1/docker/alive` and paste the output into **Connection Settings → Private operator token**:
+
+   ```bash
+   sed -n 's/^ALIVE_WEB_TOKEN=//p' .env
+   ```
+
 6. Start the container and inspect its logs:
 
    ```bash

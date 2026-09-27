@@ -192,8 +192,8 @@ Microphone access usually requires HTTPS. Use `--http` only for local desktop te
 The same receiver exists in two builds. The visitor page is what GitHub Pages
 serves and keeps the exhibition flow to a minimum: translation display,
 microphone toggle, and the contact form. The debugging page keeps the extra
-instrumentation hidden from visitors: the `RX V6` microphone/room/tone readout,
-the connection settings disclosure (NAS API URL and operator token), the
+instrumentation hidden from visitors: the microphone/room/tone readout,
+the connection settings disclosure (NAS API URL, operator token, and message reset), the
 per-play status line, and diagnostic recording controls.
 
 ```bash
@@ -207,6 +207,13 @@ from the visitor QR page. The debug page prepares a local WAV download before
 any optional NAS upload. Without an operator token, it downloads the WAV on
 the phone and skips the upload. With a token, the local download link stays
 available if the upload fails. No token is included in either published page.
+The reset button restores the message configured when the API server started
+(`WE ARE HERE` by default) and saves that choice, so a restart does not bring
+back the previous reply. It requires the operator token when one is configured.
+Replies use only the current contact message; the API keeps no conversation history.
+Interactive local server startup prints `ALIVE_WEB_TOKEN` next to the phone URL
+when that variable is set. The NAS container keeps it out of unattended logs;
+read it from the NAS `.env` file as described in [NAS_SETUP.md](NAS_SETUP.md).
 
 The receiver combines carrier frequencies with the timing between letters
 when reflections make two low tones plausible. In the two supplied phone
