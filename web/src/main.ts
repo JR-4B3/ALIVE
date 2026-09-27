@@ -234,7 +234,7 @@ async function sendContactMessage(): Promise<void> {
       throw new Error(failure?.error ?? `HTTP ${response.status}`);
     }
     const payload = (await response.json()) as { reply?: string; message?: string; duration?: number };
-    reportStatus(payload.reply ?? payload.message ?? 'sent', refs.send, 'send');
+    reportStatus(DEBUG_UI ? (payload.reply ?? payload.message ?? 'sent') : 'sent', refs.send, 'send');
     refs.prompt.value = '';
   } catch (error) {
     reportStatus(error instanceof Error ? error.message : 'send failed', refs.send, 'send');
