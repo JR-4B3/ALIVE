@@ -107,6 +107,20 @@ After flashing, the ESP32 polls the public API using the **device** token. On fi
 
 If a visitor sees **401**, check `ALIVE_PUBLIC_DEMO=1` on the NAS and restart the container. If it shows **device offline**, check the ESP32's Wi-Fi, device token, URL, and polling. If it shows **failed to fetch** or a CORS error, check the public HTTPS URL and `ALIVE_WEB_ORIGIN`. If the sound plays but letters are missed, inspect speaker level, phone placement, and room noise; moving the API to the NAS does not by itself improve acoustic decoding.
 
+### Playback latency
+
+The Wi-Fi firmware reuses its HTTPS connection and polls every 100 ms while idle.
+It primes the audio output with 50 ms of silence before the first tone. Tone
+lengths, fades, and the gaps needed for microphone decoding are unchanged. A
+closed connection is discarded and re-established on the next poll; the existing Wi-Fi reconnection logic remains in place.
+
+The NAS advertises the actual ESP32 duration (including its lead and tail) and a
+`replayAfterSeconds` deadline. The web page uses that deadline to avoid enabling
+Play before the NAS will accept it. Install the firmware, rebuild the NAS
+container, and publish the new web build to get all of these changes. The new
+web page also respects the older NAS's extra one-second replay margin while
+deployments are being updated.
+
 ## 6. Keeping it running
 
 After a NAS reboot, confirm the Compose project and Funnel status before opening the exhibition. Use the two commands below for a quick check:

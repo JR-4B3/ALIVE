@@ -5,7 +5,30 @@ import urllib.request
 from unittest.mock import patch
 
 from audio_message import LoopingMessagePlayer
-from emitter import DemoState, QuietThreadingHTTPServer, make_handler
+from emitter import DemoState, QuietThreadingHTTPServer, make_handler, esp32_message_duration
+
+
+def test_esp32_duration_matches_audio_including_rounded_gaps():
+    # HI: 2 * 220 ms tones + 293/325 ms gaps + 50 ms lead + 1000 ms tail.
+    assert esp32_message_duration("HI") == 2.108
+    assert esp32_message_duration("HI", serial=True) == 2.308
+    # The short A gap is clamped to 220 ms for reliable microphone decoding.
+    assert esp32_message_duration("A") == 1.49
+    assert esp32_message_duration("A A") == 3.19
+
+
+def test_public_replay_deadline_uses_firmware_duration():
+    state = DemoState(LoopingMessagePlayer("HI"), device_output=True)
+    with patch("emitter.time.monotonic", return_value=1000):
+        state.note_device_poll()
+        assert state.reserve_public_play() == 0
+        payload = state.play_current_once()
+        assert payload["duration"] == 2.108
+        assert payload["replayAfterSeconds"] == 2.608
+    with patch("emitter.time.monotonic", return_value=1002.60):
+        assert state.reserve_public_play() == 1
+    with patch("emitter.time.monotonic", return_value=1002.61):
+        assert state.reserve_public_play() == 0
 
 
 def test_wifi_command_persists_and_never_calls_laptop_audio(tmp_path):

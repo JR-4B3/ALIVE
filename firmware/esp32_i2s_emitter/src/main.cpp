@@ -25,7 +25,7 @@ constexpr uint32_t BURST_MS = 220;
 constexpr float GAP_SCALE = 0.65f;
 // Leave time for room reflections and the receiver's 4096-sample window to clear.
 constexpr uint32_t MIN_GAP_MS = 220;
-constexpr uint32_t POLL_MS = 300;
+constexpr uint32_t POLL_MS = 100;
 // GAIN stays open. 1200 is +6 dB over 600, with ample digital headroom.
 constexpr int16_t AMPLITUDE = 1200;
 #if defined(ALIVE_HARDWARE_TEST)
@@ -64,6 +64,9 @@ uint32_t lastPollAt = 0;
 uint32_t lastHardwareTestAt = 0;
 uint32_t lastLedToggleAt = 0;
 bool statusLedOn = false;
+// Retain the TLS session between polls instead of negotiating on every request.
+WiFiClientSecure pollClient;
+HTTPClient pollHttp;
 
 bool frequenciesFor(char ch, float &low, float &high, uint16_t &rawGapMs) {
   if (ch == ' ') {
@@ -243,7 +246,7 @@ void playMessage(const String &message) {
   messageLetterIndex = 0;
   messageSegment = MessageSegment::Lead;
   messageSegmentFrame = 0;
-  messageSegmentLength = SAMPLE_RATE / 4;
+  messageSegmentLength = SAMPLE_RATE / 20; // 50 ms to prime the audio buffers.
   while (messageSegment != MessageSegment::Idle) writeContinuousMessageAudio();
 }
 
@@ -307,14 +310,17 @@ void connectWifi() {
 
 void pollForMessage() {
   static bool serverReachable = false;
-  WiFiClientSecure client;
-  client.setHandshakeTimeout(12);
+  auto &client = pollClient;
+  client.setHandshakeTimeout(8);
 #ifdef ALIVE_SERVER_CA_CERT
   client.setCACert(ALIVE_SERVER_CA_CERT);
 #else
   client.setInsecure();  // Local test only; configure a trusted CA for the NAS.
 #endif
-  HTTPClient http;
+  auto &http = pollHttp;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  http.setReuse(true);
   const String url = String(ALIVE_SERVER_URL) + "/api/emitter/main/current";
   if (!http.begin(client, url)) return;
 #ifdef ALIVE_DEVICE_TOKEN
@@ -323,7 +329,8 @@ void pollForMessage() {
   const int status = http.GET();
   if (status == HTTP_CODE_OK) {
     JsonDocument json;
-    const DeserializationError error = deserializeJson(json, http.getStream());
+    // Consume the entire body, including HTTP/1.1 chunk framing, before reuse.
+    const DeserializationError error = deserializeJson(json, http.getString());
     if (!error) {
       if (!serverReachable) Serial.println("NAS poll ready: HTTPS verified, device token accepted");
       serverReachable = true;
@@ -339,6 +346,7 @@ void pollForMessage() {
         return;
       }
     } else {
+      client.stop();
       Serial.printf("JSON error: %s\n", error.c_str());
     }
   } else {
@@ -347,6 +355,7 @@ void pollForMessage() {
     const int tlsCode = client.lastError(tlsError, sizeof(tlsError));
     Serial.printf("Poll failed: HTTP %d (%s), TLS %d (%s)\n", status,
                   http.errorToString(status).c_str(), tlsCode, tlsError);
+    client.stop(); // Reconnect promptly if the server closed an idle session.
   }
   http.end();
 }

@@ -252,7 +252,7 @@ async function playCurrentSignal(): Promise<void> {
     setContactStatus('playing');
     lockReplay(1);
     const response = await requestPlayWhenReady(apiBase);
-    const payload = (await response.json()) as { duration?: number; message?: string };
+    const payload = (await response.json()) as { duration?: number; message?: string; replayAfterSeconds?: number };
     if (DEBUG_UI) {
       if (recording) {
         recording.message = payload.message ?? '';
@@ -262,7 +262,8 @@ async function playCurrentSignal(): Promise<void> {
     }
     if (micActive && payload.duration) decoder.setCaptureDuration(performance.now(), payload.duration);
     setContactStatus('ESP32 signal queued');
-    lockReplay(payload.duration);
+    // Match the NAS replay deadline, including compatibility with older NAS builds.
+    lockReplay(Math.max(payload.duration ?? 0, payload.replayAfterSeconds ?? ((payload.duration ?? 0) + 1)));
   } catch (error) {
     cancelRecording();
     unlockReplay();

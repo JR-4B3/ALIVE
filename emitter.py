@@ -25,11 +25,19 @@ from audio_message import (
     sanitize_message,
 )
 from reply_engine import MAX_REPLY_CHARS, ReplyUnavailableError, generate_reply, normalize_reply
+from codebook import GAP_MAP
 
 
 DEFAULT_MESSAGE = "WE ARE HERE"
 STATIC_PHONE_APP = Path(__file__).parent / "docs" / "index.html"
 RECEIVER_CAPTURES = Path.home() / ".local" / "state" / "alive" / "receiver-captures"
+
+
+def esp32_message_duration(message: str, serial: bool = False) -> float:
+    """Match the firmware's 220 ms tones/gaps, lead, and one-second tail."""
+    lead_ms = 250 if serial else 50
+    gaps_ms = sum(max(220, (GAP_MAP[ch] * 65 + 50) // 100) for ch in message)
+    return (lead_ms + len(message) * 220 + gaps_ms + 1000) / 1000
 
 
 def save_receiver_capture(data: bytes, message: str) -> str:
@@ -145,14 +153,22 @@ class DemoState:
             return 0
 
     def reserve_public_play(self) -> int:
-        duration = float(self.player.public_snapshot()["duration"])
+        player_duration = float(self.player.public_snapshot()["duration"])
         with self._lock:
+            duration = self._playback_duration(player_duration)
             now = time.monotonic()
             wait = self._public_play_ready_at - now
             if wait > 0:
                 return max(1, int(wait + 0.999))
-            self._public_play_ready_at = now + max(2.0, duration + 1.0)
+            margin = 0.5 if self.device_output else 1.0
+            self._public_play_ready_at = now + max(2.0, duration + margin)
             return 0
+
+    def _playback_duration(self, player_duration: float) -> float:
+        # Called while holding _lock so message and advertised duration agree.
+        if self.device_output:
+            return esp32_message_duration(self.latest_reply, serial=self.serial_device is not None)
+        return player_duration
 
     def public_snapshot(self) -> dict[str, object]:
         return self.player.public_snapshot()
@@ -166,7 +182,8 @@ class DemoState:
                 "message": self.latest_reply,
                 "mode": "language",
                 "maxChars": MAX_REPLY_CHARS,
-                "duration": player_state["duration"],
+                "duration": self._playback_duration(float(player_state["duration"])),
+                "replayAfterSeconds": max(0, round(self._public_play_ready_at - time.monotonic(), 3)),
                 "active": player_state["active"],
                 "output": "esp32" if self.device_output else "laptop",
                 "deviceOnline": bool(self.serial_device) or
@@ -186,7 +203,7 @@ class DemoState:
                 "message": self.latest_reply,
                 "mode": "language",
                 "maxChars": MAX_REPLY_CHARS,
-                "duration": player_state["duration"],
+                "duration": self._playback_duration(float(player_state["duration"])),
                 "active": player_state["active"],
                 "output": "esp32" if self.device_output else "laptop",
             }
