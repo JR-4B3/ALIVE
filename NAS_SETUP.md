@@ -42,7 +42,7 @@ Do not put `.env`, `secrets.h`, the OpenAI API key, or either private access tok
    sh nas-bootstrap.sh
    ```
 
-5. Edit `.env` on the NAS. The script has already filled `ALIVE_WEB_TOKEN` and `ALIVE_DEVICE_TOKEN`; leave them private and distinct. Set `OPENAI_API_KEY` to your working key and `ALIVE_PUBLIC_DEMO=1` for the QR experience. Keep `ALIVE_WEB_ORIGIN=https://jr-4b3.github.io` exactly as shown; the `/ALIVE/` path does **not** belong in an origin. Save the file, then restrict its permissions:
+5. Edit `.env` on the NAS. The script has already filled `ALIVE_WEB_TOKEN` and `ALIVE_DEVICE_TOKEN`; leave them private and distinct. Set `OPENAI_API_KEY` to your working key, `ALIVE_PUBLIC_DEMO=1`, and `ALIVE_PROXIMITY_RSSI_MIN=-65` as the initial contact threshold. Keep `ALIVE_WEB_ORIGIN=https://jr-4b3.github.io` exactly as shown; the `/ALIVE/` path does **not** belong in an origin. Save the file, then restrict its permissions:
 
    ```bash
    chmod 600 .env
@@ -85,6 +85,7 @@ The current speaker test worked with the connected amplifier; there is no need t
 | `ALIVE_WIFI_SSID` / `ALIVE_WIFI_PASSWORD` | The exhibition Wi-Fi or a dedicated hotspot the ESP32 can join |
 | `ALIVE_SERVER_URL` | The Funnel `https://...ts.net` URL, without a trailing slash |
 | `ALIVE_DEVICE_TOKEN` | The device token from the NAS `.env` |
+| `ALIVE_VISITOR_AP_SSID` / `ALIVE_VISITOR_AP_PASSWORD` | The separate one-client Wi-Fi network visitors join |
 | `ALIVE_SERVER_CA_CERT` | The trusted root CA PEM for the Funnel certificate |
 
 Use a normal password-protected 2.4 GHz Wi-Fi network without a browser login page. A phone hotspot or travel router is often simpler than venue Wi-Fi. The firmware needs working internet time for HTTPS certificate verification. **Add the CA certificate before exhibition use**: without `ALIVE_SERVER_CA_CERT`, the current firmware uses an insecure TLS fallback. Once the exact Funnel URL exists, verify its certificate chain and put the matching trusted root CA PEM in `secrets.h`; do not copy an arbitrary certificate from a web page.
@@ -101,9 +102,9 @@ After flashing, the ESP32 polls the public API using the **device** token. On fi
 
 1. Confirm the NAS container is running and `sudo /var/packages/Tailscale/target/bin/tailscale funnel status` still shows the public address.
 2. Power the ESP32, then wait for it to join its configured Wi-Fi and poll the NAS. If **Play signal** reports device offline, check its Wi-Fi, URL, device token, and certificate before testing audio.
-3. On the phone, scan the [exhibition QR](docs/ALIVE-QR.svg) or open <https://jr-4b3.github.io/ALIVE/>. Tap **Enable microphone** and allow access. Visitors do not need the NAS URL, private token, Tailscale, or the exhibition Wi-Fi.
-4. Type a short message in **Contact** and tap **Send**. The NAS asks GPT-6 Luna for a reply capped at 12 characters. Tap **Play signal** once. One press should cause one playback. Hold the phone approximately 10–25 cm from the speaker and watch the translation. Use **Wait 2s** before another playback if needed.
-5. Repeat once with the phone on mobile data and the ESP32 on its own Wi-Fi or hotspot. This checks that the public address works without the laptop or a shared local network.
+3. On the phone, scan the [exhibition QR](docs/ALIVE-QR.svg) or open <https://jr-4b3.github.io/ALIVE/>. Tap **Enable microphone** and allow access. For proximity mode, join the ESP32 visitor Wi-Fi and verify that the page can still reach the NAS using cellular data and Connectivity Assist.
+4. Type a short message in **Contact** and tap **Send**. Inside the configured threshold, the NAS asks GPT-6 Luna for a reply and the ESP32 plays it once. Outside it, the phone gives a clock-like dead signal and no model call is made. Cross the boundary and repeat to tune the threshold.
+5. Use **Play signal** only to replay the current signal. Hold the phone near the speaker to check the translation.
 
 If a visitor sees **401**, check `ALIVE_PUBLIC_DEMO=1` on the NAS and restart the container. If it shows **device offline**, check the ESP32's Wi-Fi, device token, URL, and polling. If it shows **failed to fetch** or a CORS error, check the public HTTPS URL and `ALIVE_WEB_ORIGIN`. If the sound plays but letters are missed, inspect speaker level, phone placement, and room noise; moving the API to the NAS does not by itself improve acoustic decoding.
 

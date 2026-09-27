@@ -115,3 +115,42 @@ def test_public_exhibition_page_can_send_and_play_with_bounded_requests():
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+
+def test_proximity_gate_sends_clock_without_model_and_language_inside_threshold():
+    state = DemoState(LoopingMessagePlayer("HELLO"), device_output=True)
+    environment = {"ALIVE_WEB_TOKEN": "operator-secret", "ALIVE_DEVICE_TOKEN": "device-secret",
+                   "ALIVE_PUBLIC_DEMO": "1", "ALIVE_PROXIMITY_RSSI_MIN": "-65"}
+    with patch.dict("os.environ", environment), patch("emitter.generate_reply", return_value="I AM HERE") as model:
+        server = QuietThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+
+            def post():
+                request = urllib.request.Request(base + "/api/message",
+                    data=b'{"message":"hello"}', headers={"Content-Type": "application/json"}, method="POST")
+                with urllib.request.urlopen(request, timeout=2) as response:
+                    return json.load(response)
+
+            assert post()["contact"] is False
+            assert state.current_emitter_message()["mode"] == "clock"
+            model.assert_not_called()
+            state.reserve_public_message = lambda: 0
+            state.note_device_poll(2, -40)
+            assert post()["contact"] is False
+            model.assert_not_called()
+            state.note_device_poll(1, -80)
+            assert post()["contact"] is False
+            model.assert_not_called()
+            state.note_device_poll(1, -50)
+            result = post()
+            assert result["contact"] is True
+            assert result["reply"] == "I AM HERE"
+            assert state.current_emitter_message()["mode"] == "language"
+            model.assert_called_once()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)

@@ -108,6 +108,7 @@ let micActive = false;
 let replayReadyAt = 0;
 let replayTimer: number | null = null;
 let playPending = false;
+let deadSignalUntil = 0;
 let recording: { chunks: Float32Array[]; samples: number; rate: number; api: string; message: string; timer: number } | null = null;
 let recordingDownloadUrl: string | null = null;
 
@@ -205,6 +206,14 @@ async function stopMicrophone(): Promise<void> {
 async function sendContactMessage(): Promise<void> {
   const message = refs.prompt.value.trim();
   if (!message) return;
+  // Unlock audio during the tap so iPhone Safari can play dead-signal ticks
+  // after the network response arrives.
+  const feedbackAudio = new AudioContext();
+  void feedbackAudio.resume().catch(() => {});
+  if (micActive) {
+    translationSnapshot = decoder.beginCapture(performance.now());
+    render();
+  }
   reportStatus('sending', refs.send, 'send');
   refs.prompt.disabled = true;
   try {
@@ -218,14 +227,44 @@ async function sendContactMessage(): Promise<void> {
       const failure = (await response.json().catch(() => null)) as { error?: string } | null;
       throw new Error(failure?.error ?? `HTTP ${response.status}`);
     }
-    const payload = (await response.json()) as { reply?: string; message?: string; duration?: number };
-    reportStatus(payload.reply ?? payload.message ?? 'sent', refs.send, 'send');
+    const payload = (await response.json()) as { reply?: string; message?: string; duration?: number; contact?: boolean };
+    if (payload.contact === false) {
+      deadSignalUntil = Date.now() + 4200;
+      playDeadSignal(feedbackAudio);
+      lockReplay(4);
+      render();
+      window.setTimeout(() => render(), 4300);
+      reportStatus('dead signal', refs.send, 'send');
+    } else {
+      deadSignalUntil = 0;
+      if (payload.contact === true && payload.duration && micActive) decoder.setCaptureDuration(performance.now(), payload.duration);
+      if (payload.contact === true && payload.duration) lockReplay(payload.duration);
+      render();
+      reportStatus(payload.contact === true ? 'signal sent' : (payload.reply ?? payload.message ?? 'sent'), refs.send, 'send');
+    }
     refs.prompt.value = '';
   } catch (error) {
     reportStatus(error instanceof Error ? error.message : 'send failed', refs.send, 'send');
   } finally {
+    window.setTimeout(() => void feedbackAudio.close(), 5000);
     refs.prompt.disabled = false;
     refs.prompt.focus();
+  }
+}
+
+function playDeadSignal(ctx: AudioContext): void {
+  for (let index = 0; index < 6; index += 1) {
+    const start = ctx.currentTime + index * 0.6;
+    const tone = ctx.createOscillator();
+    const gain = ctx.createGain();
+    tone.frequency.value = 1500;
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(0.12, start + 0.01);
+    gain.gain.setValueAtTime(0.12, start + 0.16);
+    gain.gain.linearRampToValueAtTime(0, start + 0.18);
+    tone.connect(gain).connect(ctx.destination);
+    tone.start(start);
+    tone.stop(start + 0.19);
   }
 }
 
@@ -375,8 +414,9 @@ function unlockReplay(): void {
 }
 
 function render(): void {
-  refs.translationState.textContent = `${translationSnapshot.title} · ${translationSnapshot.verdict}`;
-  refs.message.textContent = translationSnapshot.message;
+  const dead = Date.now() < deadSignalUntil;
+  refs.translationState.textContent = dead ? 'Clock signal · DEAD' : `${translationSnapshot.title} · ${translationSnapshot.verdict}`;
+  refs.message.textContent = dead ? '---' : translationSnapshot.message;
   if (DEBUG_UI) {
     const diagnostics = debugRefs?.micDiagnostics;
     if (diagnostics) {

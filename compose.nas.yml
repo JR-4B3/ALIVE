@@ -9,6 +9,7 @@ services:
       ALIVE_WEB_TOKEN: ${ALIVE_WEB_TOKEN:?Set a private browser access token}
       ALIVE_DEVICE_TOKEN: ${ALIVE_DEVICE_TOKEN:?Set a separate ESP32 token}
       ALIVE_PUBLIC_DEMO: ${ALIVE_PUBLIC_DEMO:-0}
+      ALIVE_PROXIMITY_RSSI_MIN: ${ALIVE_PROXIMITY_RSSI_MIN:--65}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?Set the OpenAI API key on the NAS}
     ports:
       - "127.0.0.1:8765:8765"

@@ -100,6 +100,9 @@ class DemoState:
         self.reply_revision = 0
         self._lock = threading.Lock()
         self._device_last_seen_at = 0.0
+        self._visitor_wifi_count = 0
+        self._visitor_wifi_rssi = -127
+        self.current_signal = "language"
         self._public_message_window_at = time.monotonic()
         self._public_message_count = 0
         self._public_message_last_at = 0.0
@@ -124,9 +127,20 @@ class DemoState:
     def snapshot(self) -> dict[str, object]:
         return self.player.snapshot()
 
-    def note_device_poll(self) -> None:
+    def note_device_poll(self, station_count: int = 0, rssi: int = -127) -> None:
         with self._lock:
             self._device_last_seen_at = time.monotonic()
+            self._visitor_wifi_count = station_count
+            self._visitor_wifi_rssi = rssi
+
+    def contact_possible(self) -> bool:
+        threshold = os.environ.get("ALIVE_PROXIMITY_RSSI_MIN")
+        if threshold is None:
+            return True
+        with self._lock:
+            return (time.monotonic() - self._device_last_seen_at < 2 and
+                    self._visitor_wifi_count == 1 and
+                    self._visitor_wifi_rssi >= int(threshold))
 
     def reserve_public_message(self) -> int:
         """Bound public LLM usage even when callers bypass the browser UI."""
@@ -163,8 +177,8 @@ class DemoState:
             return {
                 "emitterId": "main",
                 "revision": self.reply_revision,
-                "message": self.latest_reply,
-                "mode": "language",
+                "message": "DEAD" if self.current_signal == "clock" else self.latest_reply,
+                "mode": self.current_signal,
                 "maxChars": MAX_REPLY_CHARS,
                 "duration": player_state["duration"],
                 "active": player_state["active"],
@@ -179,6 +193,7 @@ class DemoState:
         player_state = self.player.public_snapshot()
         with self._lock:
             self.latest_reply = cleaned
+            self.current_signal = "language"
             self._save_state()
             return {
                 "emitterId": "main",
@@ -191,11 +206,17 @@ class DemoState:
                 "output": "esp32" if self.device_output else "laptop",
             }
 
+    def set_dead_signal(self) -> dict[str, object]:
+        self.player.configure(signal_type="clock")
+        with self._lock:
+            self.current_signal = "clock"
+        return self.current_emitter_message()
+
     def play_current_once(self) -> dict[str, object]:
         with self._lock:
             if self.device_output and self.serial_device is None and time.monotonic() - self._device_last_seen_at >= 5:
                 raise TimeoutError("ESP32 is offline; check its Wi-Fi connection")
-            message = self.latest_reply
+            message = "DEAD" if self.current_signal == "clock" else self.latest_reply
         if self.serial_device is not None:
             self.serial_device.play(message)
         elif not self.device_output:
@@ -222,7 +243,12 @@ def make_handler(state: DemoState):
             parsed = urlparse(self.path)
             if parsed.path == "/api/emitter/main/current":
                 if self._authorized("ALIVE_DEVICE_TOKEN"):
-                    state.note_device_poll()
+                    try:
+                        count = int(self.headers.get("x-alive-station-count", "0"))
+                        rssi = int(self.headers.get("x-alive-station-rssi", "-127"))
+                    except ValueError:
+                        count, rssi = 0, -127
+                    state.note_device_poll(count, rssi)
                     self._send_json(state.current_emitter_message())
                 return
             if (parsed.path.startswith("/api/") or parsed.path == "/events") and not self._authorized("ALIVE_WEB_TOKEN"):
@@ -277,6 +303,8 @@ def make_handler(state: DemoState):
                 return
             if parsed.path == "/api/emitter/main/play":
                 try:
+                    if public_action and os.environ.get("ALIVE_PROXIMITY_RSSI_MIN") is not None and not state.contact_possible():
+                        state.set_dead_signal()
                     if public_action:
                         if not state.current_emitter_message()["deviceOnline"]:
                             raise TimeoutError("ESP32 is offline; check its Wi-Fi connection")
@@ -336,13 +364,38 @@ def make_handler(state: DemoState):
                     message = "Daily message limit reached" if wait < 0 else f"Wait {wait}s before sending again"
                     self._send_json({"error": message}, HTTPStatus.TOO_MANY_REQUESTS)
                     return
+            if public_action and os.environ.get("ALIVE_PROXIMITY_RSSI_MIN") is not None and not state.contact_possible():
+                state.set_dead_signal()
+                try:
+                    state.play_current_once()
+                except (OSError, TimeoutError):
+                    pass
+                self._send_json({"signal": "clock", "contact": False})
+                return
             try:
                 reply = generate_reply(player_text)
             except ReplyUnavailableError as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return
+            if public_action and os.environ.get("ALIVE_PROXIMITY_RSSI_MIN") is not None and not state.contact_possible():
+                state.set_dead_signal()
+                try:
+                    state.play_current_once()
+                except (OSError, TimeoutError):
+                    pass
+                self._send_json({"signal": "clock", "contact": False})
+                return
             current = state.set_reply(reply)
-            self._send_json({"reply": current["message"], **current})
+            if public_action and os.environ.get("ALIVE_PROXIMITY_RSSI_MIN") is not None:
+                try:
+                    current = state.play_current_once()
+                except (OSError, TimeoutError) as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+            response = {"reply": current["message"], **current}
+            if public_action and os.environ.get("ALIVE_PROXIMITY_RSSI_MIN") is not None:
+                response.update({"signal": "language", "contact": True})
+            self._send_json(response)
 
         def _read_json(self) -> dict[str, object]:
             length = int(self.headers.get("content-length", "0") or "0")

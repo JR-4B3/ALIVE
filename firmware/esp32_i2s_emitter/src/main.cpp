@@ -3,6 +3,7 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <esp_wifi.h>
 #include <driver/i2s.h>
 #include <math.h>
 #include <time.h>
@@ -247,6 +248,29 @@ void playMessage(const String &message) {
   while (messageSegment != MessageSegment::Idle) writeContinuousMessageAudio();
 }
 
+void playDeadSignal() {
+  // Single carrier outside the letter codebook: six sparse clock ticks.
+  int16_t samples[512];
+  uint32_t phase = 0;
+  constexpr uint32_t cycleFrames = SAMPLE_RATE * 600 / 1000;
+  constexpr uint32_t tickFrames = SAMPLE_RATE * 180 / 1000;
+  for (uint32_t frame = 0; frame < cycleFrames * 6; frame += 256) {
+    for (uint32_t i = 0; i < 256; ++i) {
+      const uint32_t within = (frame + i) % cycleFrames;
+      const uint32_t fade = min<uint32_t>(SAMPLE_RATE / 100,
+                           min(within, tickFrames > within ? tickFrames - within : 0));
+      const int16_t sample = within < tickFrames
+          ? messageSine[phase] * static_cast<int32_t>(fade) / (SAMPLE_RATE / 100) : 0;
+      samples[i * 2] = sample;
+      samples[i * 2 + 1] = sample;
+      phase = (phase + 15) % MESSAGE_SINE_FRAMES;
+    }
+    size_t written = 0;
+    i2s_write(I2S_PORT, samples, sizeof(samples), &written, portMAX_DELAY);
+  }
+  Serial.println("DONE DEAD SIGNAL");
+}
+
 void connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
@@ -296,6 +320,13 @@ void connectWifi() {
     }
   }
   Serial.printf("\nWiFi ready: %s\n", WiFi.localIP().toString().c_str());
+#ifdef ALIVE_VISITOR_AP_SSID
+  WiFi.mode(WIFI_AP_STA);
+  if (!WiFi.softAP(ALIVE_VISITOR_AP_SSID, ALIVE_VISITOR_AP_PASSWORD, WiFi.channel(), 0, 1))
+    Serial.println("Visitor access point failed to start");
+  else
+    Serial.printf("Visitor access point ready: %s\n", WiFi.softAPIP().toString().c_str());
+#endif
 #ifdef ALIVE_SERVER_CA_CERT
   // Certificate verification needs a real clock after each power-up.
   configTime(0, 0, "pool.ntp.org", "time.google.com");
@@ -320,6 +351,14 @@ void pollForMessage() {
 #ifdef ALIVE_DEVICE_TOKEN
   http.addHeader("Authorization", String("Bearer ") + ALIVE_DEVICE_TOKEN);
 #endif
+#ifdef ALIVE_VISITOR_AP_SSID
+  wifi_sta_list_t stations = {};
+  if (esp_wifi_ap_get_sta_list(&stations) == ESP_OK) {
+    http.addHeader("X-Alive-Station-Count", String(stations.num));
+    http.addHeader("X-Alive-Station-Rssi", stations.num == 1
+        ? String(stations.sta[0].rssi) : String(-127));
+  }
+#endif
   const int status = http.GET();
   if (status == HTTP_CODE_OK) {
     JsonDocument json;
@@ -329,13 +368,15 @@ void pollForMessage() {
       serverReachable = true;
       const long revision = json["revision"] | -1;
       const String message = json["message"] | "";
+      const String mode = json["mode"] | "language";
       if (lastRevision < 0 || revision < lastRevision) {
         // Boot or server reset: observe the current command without replaying it.
         lastRevision = revision;
       } else if (revision > lastRevision && message.length() > 0) {
         lastRevision = revision;
         http.end();
-        playMessage(message);
+        if (mode == "clock") playDeadSignal();
+        else playMessage(message);
         return;
       }
     } else {
