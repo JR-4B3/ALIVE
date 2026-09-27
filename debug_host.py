@@ -22,6 +22,7 @@ import errno
 import json
 import mimetypes
 import os
+import re
 import signal
 import shutil
 import socket
@@ -72,17 +73,27 @@ def repository_debug_hosts() -> set[Path]:
 
 
 def is_this_debug_host(pid: int, allowed_scripts: set[Path]) -> bool:
-    """Accept only this repository's debug_host.py, including relative launches."""
+    """Accept this repository's debug host, even if its worktree was removed."""
     try:
         process_dir = Path(f"/proc/{pid}")
         arguments = (process_dir / "cmdline").read_bytes().split(b"\0")
-        cwd = (process_dir / "cwd").resolve()
+        cwd_target = os.readlink(process_dir / "cwd")
+        deleted_worktree = cwd_target.endswith(" (deleted)")
+        cwd = Path(cwd_target.removesuffix(" (deleted)"))
         for raw in arguments[1:]:
             argument = os.fsdecode(raw)
             if Path(argument).name != "debug_host.py":
                 continue
             script = Path(argument)
-            if (script if script.is_absolute() else cwd / script).resolve() in allowed_scripts:
+            script_path = (script if script.is_absolute() else cwd / script).resolve()
+            if script_path in allowed_scripts:
+                return True
+            # A running host can outlive `git worktree remove`. /proc marks its
+            # old cwd as deleted, and Git no longer lists that worktree.
+            managed_root = Path.home() / ".t3" / "worktrees" / ROOT.name
+            if (deleted_worktree and cwd.parent == managed_root
+                    and re.fullmatch(r"t3code-[0-9a-f]+", cwd.name)
+                    and script_path == cwd / "debug_host.py"):
                 return True
     except (OSError, ValueError):
         pass
