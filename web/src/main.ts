@@ -18,44 +18,53 @@ app.innerHTML = `
     <section class="flex flex-1 flex-col border border-white">
       <div class="flex items-center justify-between border-b border-white px-3 py-2">
         <div>
-          <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">translation${DEBUG_UI ? ' · debug' : ''}</div>
-          <div id="translationState" class="mt-1 text-xs uppercase tracking-[0.16em]">Listening</div>
+          <div class="whitespace-nowrap text-[13px] uppercase tracking-[0.06em] text-neutral-400">translation${DEBUG_UI ? ' · debug' : ''}</div>
+          <div id="translationState" class="mt-1 text-sm uppercase tracking-[0.1em]">Listening</div>
         </div>
-        <button id="clear" class="px-3 py-2 text-xs uppercase tracking-[0.16em]">clear</button>
+        <button id="clear" class="px-3 py-2 text-sm uppercase tracking-[0.1em]">clear</button>
       </div>
       <div class="flex min-h-48 flex-1 items-center justify-center px-4 py-8">
         <div id="message" class="w-full break-words text-center font-mono text-4xl leading-tight sm:text-6xl">---</div>
       </div>
     </section>
 
-    <section class="grid gap-3">
-      <button id="mic" class="min-h-14 px-4 text-base uppercase tracking-[0.18em]">enable microphone</button>
-      ${DEBUG_UI ? `<div id="micDiagnostics" class="break-words font-mono text-xs text-neutral-400">RX V6 · MIC OFF</div>` : ''}
-      <form id="contactForm" class="grid gap-3 border border-white px-3 py-3">
-        <div class="text-xs uppercase tracking-[0.24em] text-neutral-400">contact</div>
-        <input id="prompt" class="min-h-11 px-3 text-base" maxlength="120" placeholder="message">
+    <section class="grid min-w-0 grid-cols-1 gap-3">
+      <button id="mic" class="min-h-14 px-4 text-lg uppercase tracking-[0.12em]">enable microphone</button>
+      <form id="contactForm" class="grid min-w-0 grid-cols-1 gap-3 border border-white px-3 py-3">
+        <div class="flex min-w-0 items-center gap-2">
+          <div class="shrink-0 text-sm uppercase tracking-[0.12em] text-neutral-400">contact</div>
+          ${DEBUG_UI ? `<div id="micDiagnostics" class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap border-l border-neutral-600 pl-2 font-mono text-[clamp(10px,3vw,12px)] text-neutral-400">MIC OFF</div>` : ''}
+        </div>
+        <input id="prompt" class="min-h-11 px-3 text-lg" maxlength="120" placeholder="message">
         <div class="grid grid-cols-2 gap-3">
-          <button id="send" class="min-h-11 px-3 text-xs uppercase tracking-[0.16em]">send</button>
-          <button id="playSignal" type="button" class="min-h-11 px-3 text-xs uppercase tracking-[0.16em]">play signal</button>
+          <button id="send" class="min-h-11 px-2 text-sm uppercase tracking-normal">send</button>
+          <button id="playSignal" type="button" class="min-h-11 whitespace-nowrap px-2 text-sm uppercase tracking-normal">play signal</button>
         </div>
         ${DEBUG_UI ? `
-        <details class="border-t border-neutral-700 pt-2 text-xs text-neutral-400">
-          <summary class="cursor-pointer uppercase tracking-[0.16em]">connection settings</summary>
-          <label class="mt-3 grid gap-1 uppercase tracking-[0.16em]" for="apiBase">
-            NAS API URL
-            <input id="apiBase" class="min-h-11 px-3 text-base normal-case tracking-normal" type="url" placeholder="https://api.example.com">
-          </label>
-          <label class="mt-3 grid gap-1 uppercase tracking-[0.16em]" for="apiToken">
-            Private operator token (leave empty at the exhibition)
-            <input id="apiToken" class="min-h-11 px-3 text-base normal-case tracking-normal" type="password" autocomplete="off" placeholder="optional">
-          </label>
-        </details>
-        <div id="contactStatus" class="min-h-6 font-mono text-xs uppercase tracking-[0.16em] text-neutral-400">---</div>
-        <label class="text-sm text-neutral-400">
-          <input id="recordDiagnostic" type="checkbox">
-          Record next playback for diagnosis (up to 25 seconds of microphone and room sound). A WAV download is kept on this phone; NAS upload is optional and requires the operator token.
+        <div id="contactStatus" class="min-h-6 font-mono text-sm uppercase tracking-[0.08em] text-neutral-400">---</div>
+        <label class="flex cursor-pointer items-center gap-2 text-base text-neutral-400">
+          <input id="recordDiagnostic" class="sr-only" type="checkbox">
+          <span class="record-checkbox-mark" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
+              <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" />
+            </svg>
+          </span>
+          <span>Record next playback (25s max)</span>
         </label>
-        <div id="recordStatus" class="text-sm text-neutral-400"></div>` : ''}
+        <div id="recordStatus" class="text-base text-neutral-400"></div>
+        <details class="min-w-0 border-t border-neutral-700 pt-2 text-sm text-neutral-400">
+          <summary class="cursor-pointer uppercase tracking-[0.1em]">connection settings</summary>
+          <label class="mt-3 grid min-w-0 grid-cols-1 gap-1 uppercase tracking-[0.1em]" for="apiBase">
+            NAS API URL
+            <input id="apiBase" class="min-h-11 min-w-0 w-full px-3 text-lg normal-case tracking-normal" type="url" placeholder="https://api.example.com">
+          </label>
+          <label class="mt-3 grid min-w-0 grid-cols-1 gap-1 uppercase tracking-[0.1em]" for="apiToken">
+            Private operator token (required for reset)
+            <input id="apiToken" class="min-h-11 min-w-0 w-full px-3 text-lg normal-case tracking-normal" type="password" autocomplete="off" placeholder="paste operator token">
+          </label>
+          <button id="resetMessage" type="button" class="mt-3 min-h-11 w-full px-3 text-sm uppercase tracking-[0.08em]">reset message</button>
+          <div id="resetStatus" class="mt-2 font-mono text-xs empty:hidden" role="status"></div>
+        </details>` : ''}
       </form>
     </section>
   </main>
@@ -78,6 +87,8 @@ const debugRefs = DEBUG_UI ? {
   micDiagnostics: requiredElement<HTMLDivElement>('#micDiagnostics'),
   apiBase: requiredElement<HTMLInputElement>('#apiBase'),
   apiToken: requiredElement<HTMLInputElement>('#apiToken'),
+  resetMessage: requiredElement<HTMLButtonElement>('#resetMessage'),
+  resetStatus: requiredElement<HTMLDivElement>('#resetStatus'),
   contactStatus: requiredElement<HTMLDivElement>('#contactStatus'),
   recordDiagnostic: requiredElement<HTMLInputElement>('#recordDiagnostic'),
   recordStatus: requiredElement<HTMLDivElement>('#recordStatus')
@@ -124,6 +135,9 @@ refs.contactForm.addEventListener('submit', (event) => {
 });
 refs.playSignal.addEventListener('click', () => {
   void playCurrentSignal();
+});
+debugRefs?.resetMessage.addEventListener('click', () => {
+  void resetPreparedMessage();
 });
 
 render();
@@ -207,6 +221,7 @@ async function sendContactMessage(): Promise<void> {
   if (!message) return;
   reportStatus('sending', refs.send, 'send');
   refs.prompt.disabled = true;
+  if (debugRefs) debugRefs.resetMessage.disabled = true;
   try {
     const apiBase = requestApiBase();
     const response = await fetch(`${apiBase}/api/message`, {
@@ -225,7 +240,41 @@ async function sendContactMessage(): Promise<void> {
     reportStatus(error instanceof Error ? error.message : 'send failed', refs.send, 'send');
   } finally {
     refs.prompt.disabled = false;
+    if (debugRefs) debugRefs.resetMessage.disabled = false;
     refs.prompt.focus();
+  }
+}
+
+async function resetPreparedMessage(): Promise<void> {
+  if (!debugRefs || refs.prompt.disabled) return;
+  debugRefs.resetMessage.disabled = true;
+  refs.prompt.disabled = true;
+  refs.send.disabled = true;
+  debugRefs.resetStatus.textContent = 'Resetting…';
+  try {
+    const response = await fetch(`${requestApiBase()}/api/emitter/main/reset`, {
+      method: 'POST', headers: apiAuthHeaders()
+    });
+    if (!response.ok) {
+      if (response.status === 401) {
+        debugRefs.apiToken.focus();
+        throw new Error('Enter the correct operator token above');
+      }
+      const failure = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(failure?.error ?? `HTTP ${response.status}`);
+    }
+    const payload = (await response.json()) as { message: string };
+    refs.prompt.value = '';
+    translationSnapshot = decoder.reset();
+    render();
+    setContactStatus('---');
+    debugRefs.resetStatus.textContent = `Ready: ${payload.message}`;
+  } catch (error) {
+    debugRefs.resetStatus.textContent = error instanceof Error ? error.message : 'Reset failed';
+  } finally {
+    refs.prompt.disabled = false;
+    refs.send.disabled = false;
+    debugRefs.resetMessage.disabled = false;
   }
 }
 
@@ -319,9 +368,9 @@ async function saveRecording(): Promise<void> {
     recordingDownloadUrl = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
     link.href = recordingDownloadUrl;
     link.download = `alive-diagnostic-${Date.now()}-${captured.message.replace(/[^A-Z ]/g, '').trim().replaceAll(' ', '-') || 'signal'}.wav`;
-    link.textContent = 'Download WAV recording';
+    link.textContent = 'Download WAV';
     link.className = 'underline';
-    const status = document.createTextNode('Recording ready. ');
+    const status = document.createTextNode('Ready · ');
     debugRefs!.recordStatus.replaceChildren(status, link);
     const headers = apiAuthHeaders();
     if (!headers.authorization) link.click();
@@ -381,8 +430,8 @@ function render(): void {
     const diagnostics = debugRefs?.micDiagnostics;
     if (diagnostics) {
       diagnostics.textContent = micActive
-        ? `RX V6 · MIC ${Math.round(levelSnapshot.levelDb)} dB · ROOM ${Math.round(levelSnapshot.noiseFloorDb)} dB · TONE ${translationSnapshot.pair} · RX ${translationSnapshot.stream}`
-        : 'RX V6 · MIC OFF — enable microphone before play to decode';
+        ? `M/R ${Math.round(levelSnapshot.levelDb)}/${Math.round(levelSnapshot.noiseFloorDb)}dB · ${translationSnapshot.pair}`
+        : 'MIC OFF';
     }
   }
   renderStatus(levelSnapshot.status);

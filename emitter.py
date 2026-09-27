@@ -96,7 +96,8 @@ class DemoState:
         self.device_output = device_output
         self.serial_device = serial_device
         self.running = True
-        self.latest_reply = normalize_reply(player.message) or "ALIVE"
+        self.initial_message = normalize_reply(player.message) or "ALIVE"
+        self.latest_reply = self.initial_message
         self.reply_revision = 0
         self._lock = threading.Lock()
         self._device_last_seen_at = 0.0
@@ -191,6 +192,9 @@ class DemoState:
                 "output": "esp32" if self.device_output else "laptop",
             }
 
+    def reset_reply(self) -> dict[str, object]:
+        return self.set_reply(self.initial_message)
+
     def play_current_once(self) -> dict[str, object]:
         with self._lock:
             if self.device_output and self.serial_device is None and time.monotonic() - self._device_last_seen_at >= 5:
@@ -274,6 +278,9 @@ def make_handler(state: DemoState):
                 return
             if parsed.path == "/api/message":
                 self._handle_message_post(public_action)
+                return
+            if parsed.path == "/api/emitter/main/reset":
+                self._send_json(state.reset_reply())
                 return
             if parsed.path == "/api/emitter/main/play":
                 try:
@@ -605,6 +612,13 @@ def main() -> int:
     print("ALIVE encoded-audio emitter")
     print("=" * 56)
     print(f"Phone URL: {url}")
+    operator_token = os.environ.get("ALIVE_WEB_TOKEN", "")
+    if operator_token and sys.stdout.isatty() and not args.serve_only:
+        print(f"Operator token: {operator_token}  (paste into Connection Settings)")
+    elif operator_token:
+        print("Operator token: configured in ALIVE_WEB_TOKEN (hidden in server logs)")
+    else:
+        print("Operator token: not configured (leave the field empty)")
     print(f"Encoded message: {player.message}")
     print(f"Sound style: {player.mode}")
     print(f"Signal type: {player.signal_type}")

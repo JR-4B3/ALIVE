@@ -25,6 +25,9 @@ def test_wifi_command_persists_and_never_calls_laptop_audio(tmp_path):
     assert restored.current_emitter_message()["revision"] == 1
     restored.note_device_poll()
     assert restored.play_current_once()["revision"] == 2
+    assert restored.reset_reply()["message"] == "HELLO"
+    assert DemoState(LoopingMessagePlayer("HELLO"), device_output=True,
+                     state_file=file).current_emitter_message()["message"] == "HELLO"
 
 
 def test_web_and_device_use_separate_tokens_and_restricted_origin():
@@ -61,6 +64,14 @@ def test_web_and_device_use_separate_tokens_and_restricted_origin():
             with request("/api/emitter/main/play", "web-secret", "https://jr-4b3.github.io", "POST") as response:
                 assert json.load(response)["revision"] == 1
                 assert response.headers["Access-Control-Allow-Origin"] == "https://jr-4b3.github.io"
+            state.set_reply("I AM HERE")
+            with request("/api/emitter/main/reset", "web-secret", method="POST") as response:
+                assert json.load(response)["message"] == "HELLO"
+            try:
+                request("/api/emitter/main/reset", "device-secret", method="POST")
+                assert False, "Device token must not reset the prepared message"
+            except urllib.error.HTTPError as error:
+                assert error.code == 401
             with request("/api/emitter/main/play", "web-secret", "https://other.example", "POST") as response:
                 assert "Access-Control-Allow-Origin" not in response.headers
             try:
@@ -93,6 +104,11 @@ def test_public_exhibition_page_can_send_and_play_with_bounded_requests():
 
             with post("/api/message", {"message": "Are you there?"}) as response:
                 assert json.load(response)["reply"] == "I AM HERE"
+            try:
+                post("/api/emitter/main/reset")
+                assert False, "Public visitors must not reset the prepared message"
+            except urllib.error.HTTPError as error:
+                assert error.code == 401
             try:
                 post("/api/message", {"message": "Again"})
                 assert False, "Public LLM calls must be rate limited"
