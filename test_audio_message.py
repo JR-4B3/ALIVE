@@ -122,10 +122,10 @@ def test_reply_requires_real_model_and_uses_luna():
     assert "emergency beacon" in captured["payload"]["instructions"]
 
 
-def test_device_output_queues_each_play_without_laptop_audio():
+def test_device_output_queues_each_play_without_local_audio():
     player = LoopingMessagePlayer("TEST")
-    laptop_play_calls = []
-    player.play_once = lambda: laptop_play_calls.append(True)  # type: ignore[method-assign]
+    local_play_calls = []
+    player.play_once = lambda: local_play_calls.append(True)  # type: ignore[method-assign]
     state = DemoState(player, device_output=True)
 
     first = state.set_reply("I AM HERE")
@@ -136,7 +136,7 @@ def test_device_output_queues_each_play_without_laptop_audio():
     assert replay["revision"] == 1
     assert replay["message"] == "I AM HERE"
     assert replay["output"] == "esp32"
-    assert laptop_play_calls == []
+    assert local_play_calls == []
 
 
 def test_serial_output_only_plays_when_requested():
@@ -171,7 +171,7 @@ def run_tests():
         test_reply_text_is_transport_safe,
         test_reply_requires_real_model_and_uses_luna,
         test_local_env_loads_key_without_overriding_shell,
-        test_device_output_queues_each_play_without_laptop_audio,
+        test_device_output_queues_each_play_without_local_audio,
         test_serial_output_only_plays_when_requested,
     ]
     for test in tests:

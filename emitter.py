@@ -186,7 +186,7 @@ class DemoState:
                 "duration": self._playback_duration(float(player_state["duration"])),
                 "replayAfterSeconds": max(0, round(self._public_play_ready_at - time.monotonic(), 3)),
                 "active": player_state["active"],
-                "output": "esp32" if self.device_output else "laptop",
+                "output": "esp32" if self.device_output else "local",
                 "deviceOnline": bool(self.serial_device) or
                     (self.device_output and time.monotonic() - self._device_last_seen_at < 5),
             }
@@ -206,7 +206,7 @@ class DemoState:
                 "maxChars": MAX_REPLY_CHARS,
                 "duration": self._playback_duration(float(player_state["duration"])),
                 "active": player_state["active"],
-                "output": "esp32" if self.device_output else "laptop",
+                "output": "esp32" if self.device_output else "local",
             }
 
     def reset_reply(self) -> dict[str, object]:
@@ -599,10 +599,10 @@ def main() -> int:
     parser.add_argument(
         "--device-output",
         action="store_true",
-        help="Queue replies for the ESP32 I2S emitter instead of laptop audio",
+        help="Queue replies for the ESP32 I2S emitter instead of local audio",
     )
     parser.add_argument("--wifi-device", action="store_true",
-                        help="Queue one-shot commands for the Wi-Fi ESP32 without laptop audio")
+                        help="Queue one-shot commands for the Wi-Fi ESP32 without local audio")
     parser.add_argument(
         "--serial-device",
         metavar="PORT",
@@ -639,9 +639,9 @@ def main() -> int:
     print(f"Encoded message: {player.message}")
     print(f"Sound style: {player.mode}")
     print(f"Signal type: {player.signal_type}")
-    print(f"Audio output: {'ESP32 / MAX98357' if state.device_output else 'laptop'}")
+    print(f"Audio output: {'ESP32 / MAX98357' if state.device_output else 'local speakers'}")
     if args.wifi_device:
-        print("Wi-Fi ESP32: waiting for one-shot play requests; no laptop audio")
+        print("Wi-Fi ESP32: waiting for one-shot play requests; local audio disabled")
     elif serial_device is not None:
         print(f"USB serial: {serial_device.port_name}; Play signal sends once")
     else:

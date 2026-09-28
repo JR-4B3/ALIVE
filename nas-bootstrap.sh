@@ -18,7 +18,7 @@ web_token=$(openssl rand -hex 32)
 device_token=$(openssl rand -hex 32)
 cat > .env <<EOF
 # Private NAS settings. Never commit or share this file.
-ALIVE_WEB_ORIGIN=https://jr-4b3.github.io
+ALIVE_WEB_ORIGIN=https://your-site.example
 ALIVE_WEB_TOKEN=$web_token
 ALIVE_DEVICE_TOKEN=$device_token
 OPENAI_API_KEY=REPLACE_WITH_YOUR_OPENAI_API_KEY

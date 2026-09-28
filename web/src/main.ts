@@ -95,11 +95,7 @@ const debugRefs = DEBUG_UI ? {
 } : null;
 
 const params = new URLSearchParams(location.search);
-const exhibitionApi = location.hostname === 'jr-4b3.github.io' && location.pathname.startsWith('/ALIVE/')
-  ? 'https://ds720.tail688a7b.ts.net' : '';
-const initialApiBase = params.get('api') ?? (exhibitionApi
-  ? (localStorage.getItem('aliveExhibitionApi') || exhibitionApi)
-  : (localStorage.getItem('aliveApiBase') || ''));
+const initialApiBase = params.get('api') ?? (localStorage.getItem('aliveApiBase') || '');
 const initialApiToken = params.get('token') ?? (sessionStorage.getItem('aliveApiToken') ?? '');
 if (debugRefs) {
   debugRefs.apiBase.value = initialApiBase;
@@ -473,12 +469,9 @@ function normalizedApiBase(): string {
 
 function requestApiBase(): string {
   const apiBase = normalizedApiBase();
-  if (debugRefs) {
-    localStorage.setItem('aliveApiBase', apiBase);
-    if (exhibitionApi) localStorage.setItem('aliveExhibitionApi', apiBase);
-  }
+  if (apiBase) localStorage.setItem('aliveApiBase', apiBase);
   // An explicit URL wins; otherwise the API lives at this page's own origin
-  // (NAS container, laptop emitter, or the debug host's /api proxy).
+  // (API container, local development server, or debug host proxy).
   return apiBase || location.origin;
 }
 

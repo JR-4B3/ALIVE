@@ -31,7 +31,7 @@ def test_public_replay_deadline_uses_firmware_duration():
         assert state.reserve_public_play() == 0
 
 
-def test_wifi_command_persists_and_never_calls_laptop_audio(tmp_path):
+def test_wifi_command_persists_and_never_calls_local_audio(tmp_path):
     file = tmp_path / "state.json"
     player = LoopingMessagePlayer("HELLO")
     calls = []
@@ -56,7 +56,7 @@ def test_wifi_command_persists_and_never_calls_laptop_audio(tmp_path):
 def test_web_and_device_use_separate_tokens_and_restricted_origin():
     state = DemoState(LoopingMessagePlayer("HELLO"), device_output=True)
     environment = {"ALIVE_WEB_TOKEN": "web-secret", "ALIVE_DEVICE_TOKEN": "device-secret",
-                   "ALIVE_WEB_ORIGIN": "https://jr-4b3.github.io"}
+                   "ALIVE_WEB_ORIGIN": "https://site.example"}
     with patch.dict("os.environ", environment):
         server = QuietThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -84,9 +84,9 @@ def test_web_and_device_use_separate_tokens_and_restricted_origin():
                 assert False, "Web token must not act as an ESP32"
             except urllib.error.HTTPError as error:
                 assert error.code == 401
-            with request("/api/emitter/main/play", "web-secret", "https://jr-4b3.github.io", "POST") as response:
+            with request("/api/emitter/main/play", "web-secret", "https://site.example", "POST") as response:
                 assert json.load(response)["revision"] == 1
-                assert response.headers["Access-Control-Allow-Origin"] == "https://jr-4b3.github.io"
+                assert response.headers["Access-Control-Allow-Origin"] == "https://site.example"
             state.set_reply("I AM HERE")
             with request("/api/emitter/main/reset", "web-secret", method="POST") as response:
                 assert json.load(response)["message"] == "HELLO"
@@ -111,7 +111,7 @@ def test_web_and_device_use_separate_tokens_and_restricted_origin():
 def test_public_exhibition_page_can_send_and_play_with_bounded_requests():
     state = DemoState(LoopingMessagePlayer("HELLO"), device_output=True)
     environment = {"ALIVE_WEB_TOKEN": "operator-secret", "ALIVE_DEVICE_TOKEN": "device-secret",
-                   "ALIVE_WEB_ORIGIN": "https://jr-4b3.github.io", "ALIVE_PUBLIC_DEMO": "1"}
+                   "ALIVE_WEB_ORIGIN": "https://site.example", "ALIVE_PUBLIC_DEMO": "1"}
     with patch.dict("os.environ", environment), patch("emitter.generate_reply", return_value="I AM HERE"):
         server = QuietThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -122,7 +122,7 @@ def test_public_exhibition_page_can_send_and_play_with_bounded_requests():
             def post(path, payload=None):
                 data = json.dumps(payload or {}).encode()
                 return urllib.request.urlopen(urllib.request.Request(base + path, data=data,
-                    headers={"Origin": "https://jr-4b3.github.io", "Content-Type": "application/json"},
+                    headers={"Origin": "https://site.example", "Content-Type": "application/json"},
                     method="POST"), timeout=2)
 
             with post("/api/message", {"message": "Are you there?"}) as response:
