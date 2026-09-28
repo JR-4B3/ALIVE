@@ -25,7 +25,9 @@ The builds write to `docs/` and `docs/debug/`. Publish `docs/` with any static h
 
 The page accepts an API URL through `?api=https%3A%2F%2Fapi.example.com`. It saves the URL in that browser's local storage after a request. For a public installation, generate a visitor link or QR code with the URL parameter; do not commit a deployment address. The debug page also has an API URL field. When a page is served directly by the API, same-origin requests work without an override. The API must allow the static site's exact origin with `ALIVE_WEB_ORIGIN`.
 
-For local development, `python emitter.py` serves the app and API. `python debug_host.py` can serve the debug page and proxy API requests. Use `python emitter.py --help` and `python debug_host.py --help` for options. Set `OPENAI_API_KEY` in the environment or an ignored `.env` file to generate replies. The default model can be overridden with `ALIVE_OPENAI_MODEL`.
+For local development, `python emitter.py` serves the app and Wi-Fi API. `python debug_host.py` can serve the debug page and proxy API requests. Use `python emitter.py --help` and `python debug_host.py --help` for options. Set `OPENAI_API_KEY` in the environment or an ignored `.env` file to generate replies. The default model can be overridden with `ALIVE_OPENAI_MODEL`.
+
+The API uses only the Python standard library. Python tests require `pytest`.
 
 ## Hardware
 
@@ -34,8 +36,7 @@ The ESP32-C3 and MAX98357 connections are shown in [the wiring diagram](docs/ali
 ## Source layout
 
 - `web/src/`: phone receiver and UI.
-- `emitter.py`, `reply_engine.py`: API and reply handling.
-- `audio_message.py`, `codebook.py`: tone synthesis and character mapping.
+- `emitter.py`, `reply_engine.py`: API, one-time play state, and reply handling.
 - `firmware/esp32_i2s_emitter/`: hardware sender.
 - `docs/`: built static pages and wiring diagram.
 - `NAS_SETUP.md`: reusable deployment and test guide.

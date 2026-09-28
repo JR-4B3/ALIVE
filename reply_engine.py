@@ -7,15 +7,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from audio_message import BURST_LEN, LANGUAGE_LOOP_PAUSE_S, encoded_gap_ms, sanitize_message
-
-
 MAX_REPLY_CHARS = 12
 MAX_SIGNAL_SECONDS = 15.0
-DEVICE_LEAD_SECONDS = 0.25
 DEFAULT_MODEL = "gpt-6-luna"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
-API_KEY_FILE = Path.home() / ".config" / "alive" / "openai_api_key"
 LOCAL_ENV_FILE = Path(__file__).with_name(".env")
 
 
@@ -38,10 +33,20 @@ class ReplyUnavailableError(RuntimeError):
     """The requested model could not prepare a reply."""
 
 
+def sanitize_message(text: str) -> str:
+    return "".join(char for char in text.upper() if char == " " or "A" <= char <= "Z").strip()
+
+
 def signal_duration_seconds(text: str) -> float:
-    return DEVICE_LEAD_SECONDS + LANGUAGE_LOOP_PAUSE_S + sum(
-        BURST_LEN + encoded_gap_ms(char) / 1000 for char in text
-    )
+    """Match the ESP32's lead, 220 ms tones/gaps, and one-second tail."""
+    gap_ms = sum(max(220, (raw_gap_ms(char) * 65 + 50) // 100) for char in text)
+    return (50 + len(text) * 220 + gap_ms + 1000) / 1000
+
+
+def raw_gap_ms(char: str) -> int:
+    if char == " ":
+        return 1600
+    return 100 + (ord(char) - ord("A")) * 50
 
 
 def normalize_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:
@@ -58,11 +63,6 @@ def normalize_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:
 def generate_reply(player_text: str) -> str:
     load_local_env()
     api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        try:
-            api_key = API_KEY_FILE.read_text(encoding="utf-8").strip()
-        except OSError:
-            pass
     if not api_key:
         raise ReplyUnavailableError("OpenAI API key is not configured on the API server")
 

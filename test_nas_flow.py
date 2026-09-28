@@ -4,21 +4,20 @@ import urllib.error
 import urllib.request
 from unittest.mock import patch
 
-from audio_message import LoopingMessagePlayer
-from emitter import DemoState, QuietThreadingHTTPServer, make_handler, esp32_message_duration
+from emitter import ApiState, QuietThreadingHTTPServer, make_handler
+from reply_engine import signal_duration_seconds
 
 
 def test_esp32_duration_matches_audio_including_rounded_gaps():
     # HI: 2 * 220 ms tones + 293/325 ms gaps + 50 ms lead + 1000 ms tail.
-    assert esp32_message_duration("HI") == 2.108
-    assert esp32_message_duration("HI", serial=True) == 2.308
+    assert signal_duration_seconds("HI") == 2.108
     # The short A gap is clamped to 220 ms for reliable microphone decoding.
-    assert esp32_message_duration("A") == 1.49
-    assert esp32_message_duration("A A") == 3.19
+    assert signal_duration_seconds("A") == 1.49
+    assert signal_duration_seconds("A A") == 3.19
 
 
 def test_public_replay_deadline_uses_firmware_duration():
-    state = DemoState(LoopingMessagePlayer("HI"), device_output=True)
+    state = ApiState("HI")
     with patch("emitter.time.monotonic", return_value=1000):
         state.note_device_poll()
         assert state.reserve_public_play() == 0
@@ -31,30 +30,26 @@ def test_public_replay_deadline_uses_firmware_duration():
         assert state.reserve_public_play() == 0
 
 
-def test_wifi_command_persists_and_never_calls_local_audio(tmp_path):
+def test_wifi_command_persists_across_restart(tmp_path):
     file = tmp_path / "state.json"
-    player = LoopingMessagePlayer("HELLO")
-    calls = []
-    player.play_once = lambda: calls.append(True)
-    state = DemoState(player, device_output=True, state_file=file)
+    state = ApiState("HELLO", state_file=file)
     state.set_reply("I AM HERE")
     assert state.current_emitter_message()["revision"] == 0
     assert state.current_emitter_message()["deviceOnline"] is False
     state.note_device_poll()
     assert state.play_current_once()["revision"] == 1
-    assert calls == []
-    restored = DemoState(LoopingMessagePlayer("HELLO"), device_output=True, state_file=file)
+    restored = ApiState("HELLO", state_file=file)
     assert restored.current_emitter_message()["message"] == "I AM HERE"
     assert restored.current_emitter_message()["revision"] == 1
     restored.note_device_poll()
     assert restored.play_current_once()["revision"] == 2
     assert restored.reset_reply()["message"] == "HELLO"
-    assert DemoState(LoopingMessagePlayer("HELLO"), device_output=True,
+    assert ApiState("HELLO",
                      state_file=file).current_emitter_message()["message"] == "HELLO"
 
 
 def test_web_and_device_use_separate_tokens_and_restricted_origin():
-    state = DemoState(LoopingMessagePlayer("HELLO"), device_output=True)
+    state = ApiState("HELLO")
     environment = {"ALIVE_WEB_TOKEN": "web-secret", "ALIVE_DEVICE_TOKEN": "device-secret",
                    "ALIVE_WEB_ORIGIN": "https://site.example"}
     with patch.dict("os.environ", environment):
@@ -109,7 +104,7 @@ def test_web_and_device_use_separate_tokens_and_restricted_origin():
 
 
 def test_public_exhibition_page_can_send_and_play_with_bounded_requests():
-    state = DemoState(LoopingMessagePlayer("HELLO"), device_output=True)
+    state = ApiState("HELLO")
     environment = {"ALIVE_WEB_TOKEN": "operator-secret", "ALIVE_DEVICE_TOKEN": "device-secret",
                    "ALIVE_WEB_ORIGIN": "https://site.example", "ALIVE_PUBLIC_DEMO": "1"}
     with patch.dict("os.environ", environment), patch("emitter.generate_reply", return_value="I AM HERE"):

@@ -18,26 +18,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from audio_message import (
-    LoopingMessagePlayer,
-    VALID_MODES,
-    VALID_SIGNAL_TYPES,
-    sanitize_message,
+from reply_engine import (
+    MAX_REPLY_CHARS, ReplyUnavailableError, generate_reply, normalize_reply,
+    sanitize_message, signal_duration_seconds,
 )
-from reply_engine import MAX_REPLY_CHARS, ReplyUnavailableError, generate_reply, normalize_reply
-from codebook import GAP_MAP
 
 
 DEFAULT_MESSAGE = "WE ARE HERE"
 STATIC_PHONE_APP = Path(__file__).parent / "docs" / "index.html"
 RECEIVER_CAPTURES = Path.home() / ".local" / "state" / "alive" / "receiver-captures"
-
-
-def esp32_message_duration(message: str, serial: bool = False) -> float:
-    """Match the firmware's 220 ms tones/gaps, lead, and one-second tail."""
-    lead_ms = 250 if serial else 50
-    gaps_ms = sum(max(220, (GAP_MAP[ch] * 65 + 50) // 100) for ch in message)
-    return (lead_ms + len(message) * 220 + gaps_ms + 1000) / 1000
 
 
 def save_receiver_capture(data: bytes, message: str) -> str:
@@ -61,50 +50,11 @@ def save_receiver_capture(data: bytes, message: str) -> str:
     return name
 
 
-class SerialMessageTransport:
-    """Send a single play request to the USB-connected ESP32."""
+class ApiState:
+    """Prepared reply and one-time Wi-Fi play command state."""
 
-    def __init__(self, port_name: str) -> None:
-        self.port_name = port_name
-        self._port = None
-        self._lock = threading.Lock()
-
-    def play(self, message: str) -> None:
-        import serial
-
-        with self._lock:
-            if self._port is None or not self._port.is_open:
-                self._port = serial.Serial(self.port_name, 115200, timeout=0.2, write_timeout=2)
-                # Opening USB serial can reset the ESP32; wait until its receiver is ready.
-                time.sleep(1.5)
-                self._port.reset_input_buffer()
-            self._port.write(f"PLAY {message}\n".encode("ascii"))
-            self._port.flush()
-            deadline = time.monotonic() + 2
-            while time.monotonic() < deadline:
-                line = self._port.readline().decode("ascii", errors="replace").strip()
-                if line == f"START {message}":
-                    return
-            raise TimeoutError("ESP32 did not start the play request")
-
-    def close(self) -> None:
-        if self._port is not None:
-            self._port.close()
-
-
-class DemoState:
-    def __init__(
-        self,
-        player: LoopingMessagePlayer,
-        device_output: bool = False,
-        serial_device: SerialMessageTransport | None = None,
-        state_file: Path | None = None,
-    ) -> None:
-        self.player = player
-        self.device_output = device_output
-        self.serial_device = serial_device
-        self.running = True
-        self.initial_message = normalize_reply(player.message) or "ALIVE"
+    def __init__(self, message: str = DEFAULT_MESSAGE, state_file: Path | None = None) -> None:
+        self.initial_message = normalize_reply(message) or "ALIVE"
         self.latest_reply = self.initial_message
         self.reply_revision = 0
         self._lock = threading.Lock()
@@ -119,7 +69,6 @@ class DemoState:
             if isinstance(saved, dict):
                 self.latest_reply = normalize_reply(str(saved.get("message", ""))) or self.latest_reply
                 self.reply_revision = max(0, int(saved.get("revision", 0)))
-                self.player.configure(message=self.latest_reply, signal_type="language")
 
     def _save_state(self) -> None:
         if self.state_file is None:
@@ -130,15 +79,12 @@ class DemoState:
                              encoding="utf-8")
         os.replace(temporary, self.state_file)
 
-    def snapshot(self) -> dict[str, object]:
-        return self.player.snapshot()
-
     def note_device_poll(self) -> None:
         with self._lock:
             self._device_last_seen_at = time.monotonic()
 
     def reserve_public_message(self) -> int:
-        """Bound public LLM usage even when callers bypass the browser UI."""
+        """Bound public model usage even when callers bypass the browser UI."""
         with self._lock:
             now = time.monotonic()
             if now - self._public_message_window_at >= 86400:
@@ -154,77 +100,51 @@ class DemoState:
             return 0
 
     def reserve_public_play(self) -> int:
-        player_duration = float(self.player.public_snapshot()["duration"])
         with self._lock:
-            duration = self._playback_duration(player_duration)
             now = time.monotonic()
             wait = self._public_play_ready_at - now
             if wait > 0:
                 return max(1, int(wait + 0.999))
-            margin = 0.5 if self.device_output else 1.0
-            self._public_play_ready_at = now + max(2.0, duration + margin)
+            duration = signal_duration_seconds(self.latest_reply)
+            self._public_play_ready_at = now + max(2.0, duration + 0.5)
             return 0
 
-    def _playback_duration(self, player_duration: float) -> float:
-        # Called while holding _lock so message and advertised duration agree.
-        if self.device_output:
-            return esp32_message_duration(self.latest_reply, serial=self.serial_device is not None)
-        return player_duration
-
-    def public_snapshot(self) -> dict[str, object]:
-        return self.player.public_snapshot()
-
     def current_emitter_message(self) -> dict[str, object]:
-        player_state = self.player.public_snapshot()
         with self._lock:
-            return {
-                "emitterId": "main",
-                "revision": self.reply_revision,
-                "message": self.latest_reply,
-                "mode": "language",
-                "maxChars": MAX_REPLY_CHARS,
-                "duration": self._playback_duration(float(player_state["duration"])),
-                "replayAfterSeconds": max(0, round(self._public_play_ready_at - time.monotonic(), 3)),
-                "active": player_state["active"],
-                "output": "esp32" if self.device_output else "local",
-                "deviceOnline": bool(self.serial_device) or
-                    (self.device_output and time.monotonic() - self._device_last_seen_at < 5),
-            }
+            return self._current_message()
+
+    def _current_message(self) -> dict[str, object]:
+        """Build a response while holding the state lock."""
+        return {
+            "emitterId": "main",
+            "revision": self.reply_revision,
+            "message": self.latest_reply,
+            "mode": "language",
+            "maxChars": MAX_REPLY_CHARS,
+            "duration": signal_duration_seconds(self.latest_reply),
+            "replayAfterSeconds": max(0, round(self._public_play_ready_at - time.monotonic(), 3)),
+            "active": False,
+            "output": "esp32",
+            "deviceOnline": time.monotonic() - self._device_last_seen_at < 5,
+        }
 
     def set_reply(self, reply: str) -> dict[str, object]:
         cleaned = normalize_reply(reply) or "ALIVE"
-        self.player.configure(message=cleaned, signal_type="language")
-        player_state = self.player.public_snapshot()
         with self._lock:
             self.latest_reply = cleaned
             self._save_state()
-            return {
-                "emitterId": "main",
-                "revision": self.reply_revision,
-                "message": self.latest_reply,
-                "mode": "language",
-                "maxChars": MAX_REPLY_CHARS,
-                "duration": self._playback_duration(float(player_state["duration"])),
-                "active": player_state["active"],
-                "output": "esp32" if self.device_output else "local",
-            }
+            return self._current_message()
 
     def reset_reply(self) -> dict[str, object]:
         return self.set_reply(self.initial_message)
 
     def play_current_once(self) -> dict[str, object]:
         with self._lock:
-            if self.device_output and self.serial_device is None and time.monotonic() - self._device_last_seen_at >= 5:
+            if time.monotonic() - self._device_last_seen_at >= 5:
                 raise TimeoutError("ESP32 is offline; check its Wi-Fi connection")
-            message = self.latest_reply
-        if self.serial_device is not None:
-            self.serial_device.play(message)
-        elif not self.device_output:
-            self.player.play_once()
-        with self._lock:
             self.reply_revision += 1
             self._save_state()
-        return self.current_emitter_message()
+            return self._current_message()
 
 
 class QuietThreadingHTTPServer(ThreadingHTTPServer):
@@ -235,7 +155,7 @@ class QuietThreadingHTTPServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
-def make_handler(state: DemoState):
+def make_handler(state: ApiState):
     class Handler(BaseHTTPRequestHandler):
         server_version = "ALIVEEmitter/0.4"
 
@@ -246,22 +166,13 @@ def make_handler(state: DemoState):
                     state.note_device_poll()
                     self._send_json(state.current_emitter_message())
                 return
-            if (parsed.path.startswith("/api/") or parsed.path == "/events") and not self._authorized("ALIVE_WEB_TOKEN"):
+            if parsed.path.startswith("/api/") and not self._authorized("ALIVE_WEB_TOKEN"):
                 return
             if parsed.path in {"/", "/index.html"}:
                 self._send_text(make_static_phone_html(), "text/html; charset=utf-8")
                 return
             if parsed.path.startswith("/assets/"):
                 self._send_static_asset(parsed.path)
-                return
-            if parsed.path == "/api/state":
-                self._send_json(state.public_snapshot())
-                return
-            if parsed.path == "/api/configure":
-                self._handle_configure(parsed.query)
-                return
-            if parsed.path == "/events":
-                self._events()
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -326,20 +237,6 @@ def make_handler(state: DemoState):
                 return True
             self._send_json({"error": "Invalid API access token"}, HTTPStatus.UNAUTHORIZED)
             return False
-
-        def _handle_configure(self, query: str) -> None:
-            params = parse_qs(query)
-            message = params.get("message", [None])[0]
-            mode = params.get("mode", [None])[0]
-            signal_type = params.get("signal", [None])[0]
-            if mode is not None and mode not in VALID_MODES:
-                self.send_error(HTTPStatus.BAD_REQUEST, "mode must be laser, horn, or vocal")
-                return
-            if signal_type is not None and signal_type not in VALID_SIGNAL_TYPES:
-                self.send_error(HTTPStatus.BAD_REQUEST, "signal must be language, clock, or burst")
-                return
-            state.player.configure(message=message, mode=mode, signal_type=signal_type)
-            self._send_json(state.public_snapshot())
 
         def _handle_message_post(self, public_action: bool = False) -> None:
             try:
@@ -423,21 +320,6 @@ def make_handler(state: DemoState):
                 return
             content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
             self._send_bytes(target.read_bytes(), content_type)
-
-        def _events(self) -> None:
-            self.send_response(HTTPStatus.OK)
-            self.send_header("content-type", "text/event-stream")
-            self.send_header("cache-control", "no-cache")
-            self.send_header("connection", "keep-alive")
-            self.end_headers()
-            while state.running:
-                payload = json.dumps(state.public_snapshot()).encode("utf-8")
-                try:
-                    self.wfile.write(b"data: " + payload + b"\n\n")
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    break
-                time.sleep(0.1)
 
     return Handler
 
@@ -528,141 +410,37 @@ def print_qr_hint(url: str) -> None:
     print(terminal_qr(url))
 
 
-def controller_loop(state: DemoState) -> None:
-    print("\nLive controls:")
-    print("  start                   start the current signal")
-    print("  stop                    stop the current signal")
-    print("  message <text>          prepare encoded message")
-    print("  ask <text>              generate a max-12-char reply")
-    print("  language / clock / burst  change signal type")
-    print("  status                  show current sender state")
-    print("  quit                    stop the server\n")
-    while state.running:
-        try:
-            raw = input("alive> ").strip()
-        except EOFError:
-            time.sleep(0.2)
-            continue
-        except KeyboardInterrupt:
-            print()
-            state.running = False
-            break
-        if not raw:
-            continue
-        command, _, value = raw.partition(" ")
-        command = command.lower()
-        if command in {"quit", "exit"}:
-            state.running = False
-        elif command == "start":
-            state.player.start()
-        elif command == "stop":
-            state.player.stop()
-        elif command == "status":
-            print(json.dumps(state.snapshot(), indent=2))
-        elif command == "message" and value.strip():
-            cleaned = sanitize_message(value)
-            if cleaned:
-                state.set_reply(cleaned)
-            else:
-                print("[error] message must contain A-Z or spaces")
-        elif command == "ask" and value.strip():
-            try:
-                reply = generate_reply(value)
-                current = state.set_reply(reply)
-                print(f"[reply] {current['message']}")
-            except ReplyUnavailableError as exc:
-                print(f"[LLM] {exc}")
-        elif command == "signal" and value.strip():
-            signal_type = value.strip().lower()
-            if signal_type in VALID_SIGNAL_TYPES:
-                state.player.configure(signal_type=signal_type)
-            else:
-                print("[error] signal must be language, clock, or burst")
-        elif command in VALID_SIGNAL_TYPES:
-            state.player.configure(signal_type=command)
-        else:
-            print("Unknown command. Try: start, stop, message HELLO WORLD, ask ARE YOU THERE, language, clock, burst, status, quit")
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description="ALIVE encoded-audio emitter")
+    parser = argparse.ArgumentParser(description="ALIVE Wi-Fi emitter API")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--message", default=DEFAULT_MESSAGE)
-    tone = parser.add_mutually_exclusive_group()
-    tone.add_argument("--laser", dest="mode", action="store_const", const="laser", default="laser")
-    tone.add_argument("--horn", dest="mode", action="store_const", const="horn")
-    tone.add_argument("--vocal", dest="mode", action="store_const", const="vocal")
-    parser.add_argument("--signal", choices=VALID_SIGNAL_TYPES, default="language")
-    parser.add_argument("--http", action="store_true", help="Use HTTP instead of local HTTPS")
-    parser.add_argument("--serve-only", action="store_true", help="Run the API without the terminal controls")
-    parser.add_argument(
-        "--device-output",
-        action="store_true",
-        help="Queue replies for the ESP32 I2S emitter instead of local audio",
-    )
-    parser.add_argument("--wifi-device", action="store_true",
-                        help="Queue one-shot commands for the Wi-Fi ESP32 without local audio")
-    parser.add_argument(
-        "--serial-device",
-        metavar="PORT",
-        help="Send one-shot play requests to an ESP32 over USB serial (for example /dev/ttyACM0)",
-    )
+    parser.add_argument("--message", default=DEFAULT_MESSAGE,
+                        help="initial reply restored by the operator reset action")
+    parser.add_argument("--http", action="store_true", help="Use HTTP behind a trusted HTTPS proxy")
     args = parser.parse_args()
 
-    player = LoopingMessagePlayer(normalize_reply(args.message) or "ALIVE", args.mode, args.signal)
-    serial_device = SerialMessageTransport(args.serial_device) if args.serial_device else None
     state_path = os.environ.get("ALIVE_STATE_FILE")
-    state = DemoState(player, device_output=args.device_output or args.wifi_device or bool(serial_device),
-                      serial_device=serial_device, state_file=Path(state_path) if state_path else None)
+    state = ApiState(args.message, state_file=Path(state_path) if state_path else None)
     ip = local_ip()
     server = QuietThreadingHTTPServer((args.host, args.port), make_handler(state))
-    https_active = False
-    if not args.http:
-        https_active = apply_https(server, ip)
-    if not args.serve_only:
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-
+    https_active = not args.http and apply_https(server, ip)
     scheme = "https" if https_active else "http"
     url = f"{scheme}://{ip}:{args.port}/"
-    print("=" * 56)
-    print("ALIVE encoded-audio emitter")
-    print("=" * 56)
-    print(f"Phone URL: {url}")
-    operator_token = os.environ.get("ALIVE_WEB_TOKEN", "")
-    if operator_token and sys.stdout.isatty() and not args.serve_only:
-        print(f"Operator token: {operator_token}  (paste into Connection Settings)")
-    elif operator_token:
-        print("Operator token: configured in ALIVE_WEB_TOKEN (hidden in server logs)")
-    else:
-        print("Operator token: not configured (leave the field empty)")
-    print(f"Encoded message: {player.message}")
-    print(f"Sound style: {player.mode}")
-    print(f"Signal type: {player.signal_type}")
-    print(f"Audio output: {'ESP32 / MAX98357' if state.device_output else 'local speakers'}")
-    if args.wifi_device:
-        print("Wi-Fi ESP32: waiting for one-shot play requests; local audio disabled")
-    elif serial_device is not None:
-        print(f"USB serial: {serial_device.port_name}; Play signal sends once")
-    else:
-        print("Audio loop: stopped; type start to play the current signal")
+    print(f"ALIVE Wi-Fi emitter API: {url}")
+    print(f"Prepared message: {state.current_emitter_message()['message']}")
+    print("Operator token: configured" if os.environ.get("ALIVE_WEB_TOKEN") else
+          "Operator token: not configured")
     if https_active:
-        print("[HTTPS] The phone may show a certificate warning; accept it for the local demo.")
-    else:
-        print("[HTTPS] HTTP mode is active. Phone microphone access may be blocked.")
+        print("[HTTPS] A phone may need to trust the local test certificate")
+    elif not args.http:
+        print("[HTTPS] Local certificate unavailable; serving HTTP")
     print_qr_hint(url)
 
     try:
-        if args.serve_only:
-            server.serve_forever()
-        else:
-            controller_loop(state)
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[stopped]")
     finally:
-        state.running = False
-        player.stop()
-        if serial_device is not None:
-            serial_device.close()
-        server.shutdown()
         server.server_close()
     return 0
 
