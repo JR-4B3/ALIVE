@@ -43,7 +43,6 @@ The ESP32-C3 and MAX98357 connections are shown in [the wiring diagram](docs/ali
 ## Checks
 
 ```bash
-python test_audio_message.py
-python test_nas_flow.py
+pytest -q
 cd web && bun test && bun run build && bun run build:debug
 ```

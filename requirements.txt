@@ -1,7 +1,4 @@
 numpy
-scipy
-matplotlib
 sounddevice
-pip
 platformio
 pyserial

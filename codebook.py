@@ -4,9 +4,6 @@
 # Receiver extracts the two peaks via FFT.
 # Gaps between bursts are a secondary timing channel + ALIVE/DEAD classifier.
 
-LOW_FREQS  = [400, 500, 600, 700, 800, 900, 1000]
-HIGH_FREQS = [2000, 2300, 2600, 2900]
-
 # 7 x 4 = 28 combos (27 used for A-Z + space)
 FREQ_MAP = {
     'A': (400, 2000),  'B': (400, 2300),  'C': (400, 2600),  'D': (400, 2900),
@@ -19,8 +16,6 @@ FREQ_MAP = {
     # (1000, 2900) is unused / reserved
 }
 
-REV_FREQ = {v: k for k, v in FREQ_MAP.items()}
-
 GAP_MAP = {
     'A': 100, 'B': 150, 'C': 200, 'D': 250, 'E': 300,
     'F': 350, 'G': 400, 'H': 450, 'I': 500, 'J': 550,
@@ -29,5 +24,3 @@ GAP_MAP = {
     'U': 1100, 'V': 1150, 'W': 1200, 'X': 1250, 'Y': 1300,
     'Z': 1350, ' ': 1600,
 }
-
-REV_GAP = {v: k for k, v in GAP_MAP.items()}

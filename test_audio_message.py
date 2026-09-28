@@ -158,27 +158,3 @@ def test_serial_output_only_plays_when_requested():
     played = state.play_current_once()
     assert played["revision"] == 1
     assert serial_device.messages == ["I AM HERE"]
-
-
-def run_tests():
-    tests = [
-        test_sanitize_message_keeps_codebook_chars,
-        test_encoded_gap_uses_transmission_scale,
-        test_language_signal_contains_bursts_and_gaps,
-        test_default_tone_has_smooth_edges_and_both_carriers,
-        test_clock_and_burst_signals_are_distinct,
-        test_player_configures_without_audio_device,
-        test_reply_text_is_transport_safe,
-        test_reply_requires_real_model_and_uses_luna,
-        test_local_env_loads_key_without_overriding_shell,
-        test_device_output_queues_each_play_without_local_audio,
-        test_serial_output_only_plays_when_requested,
-    ]
-    for test in tests:
-        test()
-        print(f"{test.__name__}: OK")
-    print(f"Result: {len(tests)} passed, 0 failed")
-
-
-if __name__ == "__main__":
-    run_tests()
