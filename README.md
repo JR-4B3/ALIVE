@@ -1,5 +1,24 @@
 # ALIVE
 
+## Experimental sound studio
+
+The browser sound studio includes a small synth with waveform, pitch, brightness,
+and attack/decay/sustain/release controls. It can generate a sound alphabet from
+that synth or from a DAW sample,
+import a complete designed alphabet, play messages through headphones, and build
+new recognition revisions from labelled microphone recordings. It runs separately
+from the classic exhibition receiver and ESP32 firmware. See the
+[sound studio guide](SOUND_STUDIO.md) for startup, sound-design limits, and the
+recording/evaluation workflow.
+
+```bash
+cd web
+bun run dev:voice --port 5174
+```
+
+Open `http://localhost:5174/`. The built studio is served at `/voice/` by the debug
+host and is linked from its main page.
+
 ## Phone + NAS + ESP32 (exhibition setup)
 
 For the full DS720+ setup and test sequence, open the [HTML guide](NAS_SETUP.html) or the [text version](NAS_SETUP.md).

@@ -52,6 +52,7 @@ app.innerHTML = `
           <span>Record next playback (25s max)</span>
         </label>
         <div id="recordStatus" class="text-base text-neutral-400"></div>
+        <a href="../voice/" class="text-sm text-neutral-400 underline">experimental sound studio ↗</a>
         <details class="min-w-0 border-t border-neutral-700 pt-2 text-sm text-neutral-400">
           <summary class="cursor-pointer uppercase tracking-[0.1em]">connection settings</summary>
           <label class="mt-3 grid min-w-0 grid-cols-1 gap-1 uppercase tracking-[0.1em]" for="apiBase">

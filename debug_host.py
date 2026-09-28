@@ -41,6 +41,7 @@ from simple_qr import terminal_qr
 ROOT = Path(__file__).resolve().parent
 DEBUG_APP_DIR = ROOT / "docs" / "debug"
 DEBUG_APP = DEBUG_APP_DIR / "index.html"
+VOICE_APP_DIR = ROOT / "docs" / "voice"
 DEFAULT_API = "https://ds720.tail688a7b.ts.net"
 MAX_REQUEST_BYTES = 12_000_000
 
@@ -110,8 +111,11 @@ def build_debug_app() -> bool:
         print("[build] neither bun nor npm found; run: cd web && bun install && bun run build:debug")
         return False
     print(f"[build] building the debugging page with {runner}…")
-    completed = subprocess.run([runner, "run", "build:debug"], cwd=web_dir)
-    return completed.returncode == 0 and DEBUG_APP.exists()
+    for command in ("build:debug", "build:voice"):
+        completed = subprocess.run([runner, "run", command], cwd=web_dir)
+        if completed.returncode != 0:
+            return False
+    return DEBUG_APP.exists() and (VOICE_APP_DIR / "index.html").exists()
 
 
 def local_ip() -> str:
@@ -261,12 +265,14 @@ def make_handler(upstream: str):
             self._send_bytes(payload, content_type, status)
 
         def _serve_static(self, request_path: str) -> None:
-            if request_path in {"", "/"}:
+            if request_path in {"", "/", "/debug/", "/debug/index.html"}:
                 target = DEBUG_APP
             else:
-                target = (DEBUG_APP_DIR / request_path.lstrip("/")).resolve()
+                root = VOICE_APP_DIR if request_path.startswith("/voice/") else DEBUG_APP_DIR
+                relative = request_path.removeprefix("/voice/") if root == VOICE_APP_DIR else request_path.removeprefix("/debug/").lstrip("/")
+                target = (root / (relative or "index.html")).resolve()
                 try:
-                    target.relative_to(DEBUG_APP_DIR.resolve())
+                    target.relative_to(root.resolve())
                 except ValueError:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
@@ -314,7 +320,7 @@ def main() -> int:
     parser.add_argument("--http", action="store_true",
                         help="serve plain HTTP; phone microphone access usually needs HTTPS")
     parser.add_argument("--rebuild", action="store_true",
-                        help="rebuild docs/debug before serving")
+                        help="rebuild docs/debug and docs/voice before serving")
     parser.add_argument("-kill", "--kill", action="store_true",
                         help="stop all running debug_host.py servers and exit")
     args = parser.parse_args()
@@ -322,7 +328,7 @@ def main() -> int:
     if args.kill:
         return kill_debug_hosts()
 
-    if args.rebuild or not DEBUG_APP.exists():
+    if args.rebuild or not DEBUG_APP.exists() or not (VOICE_APP_DIR / "index.html").exists():
         if not build_debug_app():
             return 1
 

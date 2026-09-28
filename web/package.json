@@ -7,7 +7,9 @@
     "build": "tsc --noEmit && vite build",
     "build:debug": "tsc --noEmit && vite build --mode debug",
     "test": "bun test",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "build:voice": "tsc --noEmit && vite build --mode voice",
+    "dev:voice": "vite --mode voice --host 0.0.0.0"
   },
   "devDependencies": {
     "autoprefixer": "^10.4.22",
