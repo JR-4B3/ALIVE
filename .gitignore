@@ -10,6 +10,7 @@ transmission*
 .alive-demo-*.pem
 .alive-demo-openssl.cnf
 .tmp/
+battery-runs/
 .mpl/
 .DS_Store
 node_modules/
