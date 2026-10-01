@@ -8,7 +8,7 @@
 #include <time.h>
 
 #include "secrets.h"
-#include "prototype/space_sound.h"
+#include "prototype/beacon_voice.h"
 
 // ESP32-C3 Super Mini -> MAX98357. Change these if your board layout needs it.
 constexpr gpio_num_t I2S_BCLK = GPIO_NUM_4;
@@ -49,7 +49,6 @@ MessageSegment messageSegment = MessageSegment::Idle;
 uint32_t messageSegmentLength = 0;
 char serialLine[32] = {};
 size_t serialLineLength = 0;
-int serialSoundDirection = 0;
 #endif
 char messageText[21] = "HELLO";
 uint32_t messageSegmentFrame = 0;
@@ -137,7 +136,7 @@ void startMessageLetter() {
   messageSegmentLength = MESSAGE_BURST_FRAMES;
 }
 
-void playAtmosphere(int direction, bool outro);
+void playBeacon(const char *text);
 
 void advanceMessageSegment() {
   if (messageSegment == MessageSegment::Lead) {
@@ -163,9 +162,6 @@ void advanceMessageSegment() {
 #else
     messageSegment = MessageSegment::Idle;
     messageSegmentLength = 0;
-#if defined(ALIVE_SERIAL_MESSAGE)
-    playAtmosphere(serialSoundDirection, true);
-#endif
     Serial.println("DONE");
 #endif
   }
@@ -183,6 +179,11 @@ void receiveSerialCommand() {
       continue;
     }
     serialLine[serialLineLength] = '\0';
+    if (strcmp(serialLine, "INFO") == 0) {
+      Serial.println("ALIVE BEACON_V1");
+      serialLineLength = 0;
+      continue;
+    }
     if (strncmp(serialLine, "PLAY ", 5) == 0) {
       size_t count = 0;
       const char *sound = strchr(serialLine, '|');
@@ -196,9 +197,11 @@ void receiveSerialCommand() {
       while (count > 0 && messageText[count - 1] == ' ') --count;
       messageText[count] = '\0';
       if (count > 0) {
-        playAtmosphere(direction, false);
-        if (direction) writeSilence(350);
-        serialSoundDirection = direction;
+        if (direction == 2) {
+          playBeacon(messageText);
+          serialLineLength = 0;
+          continue;
+        }
         messageLetterIndex = 0;
         messageSegment = MessageSegment::Lead;
         messageSegmentFrame = 0;
@@ -246,20 +249,34 @@ void writeContinuousMessageAudio() {
   if (startedMessage) Serial.printf("START %s\n", messageText);
 }
 
-// Experimental comparison sounds play outside the encoded letter train.
-void playAtmosphere(int direction, bool outro) {
-  if (!direction) return;
+// The Beacon chirps carry the letters themselves, with no legacy tones mixed in.
+void writeBeaconPulse(int symbol) {
+  beacon::Voice voice;
+  voice.reset(symbol);
   int16_t samples[512];
-  for (uint32_t frame = 0; frame < space_sound::frames; frame += 256) {
-    const uint32_t count = std::min<uint32_t>(256, space_sound::frames - frame);
+  for (uint32_t frame = 0; frame < beacon::frames; frame += 256) {
+    const uint32_t count = min<uint32_t>(256, beacon::frames - frame);
     for (uint32_t i = 0; i < count; ++i) {
-      const int16_t value = space_sound::sample(frame + i, direction, outro);
-      samples[i * 2] = value;
-      samples[i * 2 + 1] = value;
+      const int16_t value = voice.next();
+      samples[i * 2] = samples[i * 2 + 1] = value;
     }
     size_t written = 0;
     i2s_write(I2S_PORT, samples, count * 2 * sizeof(int16_t), &written, portMAX_DELAY);
   }
+}
+
+void playBeacon(const char *text) {
+  Serial.printf("START BEACON %s\n", text);
+  writeSilence(150);
+  writeBeaconPulse(-1); writeSilence(180);
+  writeBeaconPulse(-1); writeSilence(280);
+  for (size_t i = 0; text[i]; ++i) {
+    const int symbol = beacon::symbolFor(text[i]);
+    if (symbol < 0) continue;
+    writeBeaconPulse(symbol); writeSilence(180);
+  }
+  writeBeaconPulse(-1); writeSilence(760);
+  Serial.println("DONE");
 }
 
 void playMessage(const String &message, int direction = 0) {
@@ -271,15 +288,13 @@ void playMessage(const String &message, int direction = 0) {
   }
   messageText[count] = '\0';
   if (count == 0) return;
+  if (direction == 2) { playBeacon(messageText); return; }
   Serial.printf("Playing revision %ld: %s\n", lastRevision, messageText);
   messageLetterIndex = 0;
   messageSegment = MessageSegment::Lead;
   messageSegmentFrame = 0;
   messageSegmentLength = SAMPLE_RATE / 20; // 50 ms to prime the audio buffers.
-  playAtmosphere(direction, false);
-  if (direction) writeSilence(350);
   while (messageSegment != MessageSegment::Idle) writeContinuousMessageAudio();
-  playAtmosphere(direction, true);
 }
 
 void connectWifi() {
@@ -375,7 +390,7 @@ void pollForMessage() {
         lastRevision = revision;
         http.end();
         const String sound = json["soundDirection"] | "original";
-        const int direction = sound == "drift" ? 1 : sound == "beacon" ? 2 : sound == "chorus" ? 3 : 0;
+        const int direction = sound == "beacon" ? 2 : 0;
         playMessage(message, direction);
         return;
       }
@@ -452,7 +467,7 @@ void setup() {
   #if defined(ALIVE_MESSAGE_TEST)
   Serial.println("ALIVE message test: continuous 48 kHz I2S, sending HELLO repeatedly");
   #else
-  Serial.println("ALIVE serial message ready: send PLAY <TEXT> followed by newline");
+  Serial.println("ALIVE serial message ready: BEACON_V1; send PLAY <TEXT>|2");
   #endif
 #else
   Serial.println("ALIVE I2S emitter ready");

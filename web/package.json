@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "verify:beacon": "bun src/prototype/verifyBeacon.ts",
     "prototype": "vite --mode prototype --host 0.0.0.0",
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",

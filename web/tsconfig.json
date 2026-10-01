@@ -17,5 +17,5 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/prototype/inspectAudio.ts"]
+  "exclude": ["src/**/*.test.ts", "src/prototype/inspectAudio.ts", "src/prototype/verifyBeacon.ts"]
 }

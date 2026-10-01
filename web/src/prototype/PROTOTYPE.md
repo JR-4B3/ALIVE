@@ -1,41 +1,35 @@
-# Exhibition sound study
+# Signal strip and Beacon
 
-Throwaway branch `prototype/space-communication`. No sound or layout has been chosen for production. The question is which phone spectrogram layout and atmospheric transmission direction support an exhibition encounter while preserving the existing receiver.
+The selected exhibition page is layout B. It now has only translation, a taller black-and-white spectrogram, and contact controls. The microphone is a 44-pixel square inside the translation area. The study header, sound lab, direction buttons, state dump, and variant switcher are gone. The page fits one phone viewport and adjusts to the visible viewport when the keyboard opens.
 
-Start with `cd web && bun run prototype`. Open `http://localhost:5173/?prototype=space&variant=B`. A puts the spectrogram above the translation, B puts a short strip below a larger translation, and C puts a frequency column beside the translation. The arrows change `variant` in the URL. The prototype is absent from production builds.
+Run `cd web && bun run prototype`. The visitor page uses this layout at `/`, with no variant parameter. The temporary preview on main is `http://localhost:5178/`. A phone can use `https://192.168.178.20:5179/` after trusting the existing local certificate. Enable the phone microphone with the square button. For the main PC's Scarlett input, open `http://localhost:5178/?input=main` and use the same microphone button. All canvas pixels come from the active microphone's FFT measurements. Microphone audio is never sent back to a speaker.
 
-The phone view has no scrolling. Sound lab replaces the encounter with comparison controls. The square microphone button sits inside the translation area. Its crossed microphone SVG indicates that capture is off. The decoder receives the same unfiltered samples as before. The canvas displays FFT measurements rather than generated decoration.
+## The new sound
 
-Drift is a sustained low arrival, Beacon uses sparse high chirps, and Chorus uses beating low tones. All three surround the original letter signal. They keep its frequencies, amplitude, fades, and letter spacing. Browser auditions and WAV downloads use HELLO. The serial prototype's contact field sets literal test text without calling a model. The normal API's reply generation is unchanged.
+Beacon now carries the message itself. Each symbol is one 360 ms descending chirp with a smooth sine-squared envelope and a 180 ms quiet gap. Letter centers are 680–1780 Hz, and space is 1824 Hz. Two 550 Hz chirps mark the beginning; one marks the end. The maximum instantaneous frequency is 1860 Hz, compared with the earlier Beacon effect's roughly 3600–4800 Hz. Peak amplitude is 520 in 16-bit PCM. No legacy dual tones, atmospheric introduction, or atmospheric outro are mixed into this transmission.
 
-## Hardware session on main
+The receiver detects the Beacon framing and decodes its pitches from audio. It receives no expected text from the API. The original dual-tone decoder remains unchanged, and the combined receiver switches between both protocols. An original sender remains usable with the new receiver.
 
-An isolated copy runs at `/tmp/alive-space-prototype` on `main`. It leaves the separate checkout's unfinished sound-studio files alone. The desktop preview is `http://localhost:5178/?prototype=space&variant=B`. The phone preview is `https://192.168.178.20:5179/?prototype=space&variant=B`. It uses the existing local certificate, which the phone must trust for microphone access. The HTTPS server accepts certificate paths through `ALIVE_PROTOTYPE_CERT` and `ALIVE_PROTOTYPE_KEY`. Vite proxies requests to a temporary serial bridge on port 8766. The connected ESP32 is temporarily running the experimental `serial_message` firmware. Press Play signal to hear the selected direction through its MAX98357 speaker. Playback only starts on request. The original Wi-Fi firmware is backed up in `/tmp/alive-space-prototype/firmware-before.bin`.
+The browser renderer and ESP32 use the same fixed-point oscillator and generated sine/envelope tables. This avoids the live-synthesis stalls found during the previous experiment. Regenerate the tables with `python3 firmware/esp32_i2s_emitter/include/prototype/generate_beacon.py`.
 
-Use microphone on main reads the Scarlett capture input. It streams mono PCM from the physical input and feeds the unchanged decoder and the spectrogram. It does not send microphone audio back to the speaker. Phone microphone access requires localhost or HTTPS.
+## Quiet verification
 
-To restore the exact previous firmware and stop the bridge:
+No speaker playback or physical sound tests ran for this revision, at the user's request. The new firmware was compiled, uploaded in the idle serial-message mode, and checked with the silent INFO command. It responds with `BEACON_V1`. The serial bridge refuses to send Beacon to older firmware.
 
-```bash
-ssh main 'pkill -f "^python3 /tmp/alive-space-prototype/prototype_server.py$"; python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 write_flash 0 /tmp/alive-space-prototype/firmware-before.bin'
-```
+Run `cd web && bun run verify:beacon` for the silent check. Its 73 cases passed. They cover the full alphabet, repeated letters, spaces, three sample rates, lower volume with simulated room noise and echoes, automatic protocol switching, and rejection of unframed chirps. It compares every firmware-generated HELLO sample with the browser renderer and decodes the firmware PCM. It writes the WAV and report to `.tmp/beacon-silent-verification/` without playing them. This establishes digital round trips, not physical speaker-to-microphone reliability.
 
-## What the recordings established
+All 37 existing tone-decoder cases also passed through the combined receiver. The standard 42 frontend checks and 13 Python checks passed. The phone layout was inspected at 390 × 844, 320 × 568, and 320 × 400. Every control remained inside the viewport, with no page overflow. The signal strip measured about 311 pixels high on the larger phone and 184 pixels on the smaller phone. The real Scarlett input produced grayscale FFT history in the canvas, and stopping it restored the crossed microphone icon.
 
-Real speaker audio went through the Scarlett microphone on main at 48 kHz. The current decoder processed those PCM WAVs without filtering. The reports in `evidence/` contain the actual decoded text and intermediate transitions. Recordings remain in `/tmp/alive-space-prototype/captures` on main and `.tmp/space-captures` in this workspace.
+The older speaker reports in `evidence/HELLO-speaker.jsonl` and `evidence/WE-ARE-HERE-speaker.jsonl` belong to the superseded introduction/outro experiment. They do not verify the new Beacon alphabet. Earlier layouts and sound candidates remain in commit `d927190` on `prototype/space-communication`.
 
-Original, Beacon, and Chorus decoded HELLO in the latest short recordings. Drift's previous version introduced false L characters. Its final revision uses a single sustained low tone, but has only passed rendered PCM verification. We stopped audible tests at the user's request before checking that revision physically.
+## Hardware session
 
-Longer WE ARE HERE recordings were inconsistent in all directions, including Original. Some captures lack sufficient trailing audio and the receiver can confuse E with Y through this microphone/speaker path. These results do not establish reliable exhibition decoding. Keep this experiment separate from production.
+The temporary code lives at `/tmp/alive-space-prototype` on main. The separate unfinished sound-studio checkout is untouched. Vite proxies requests to the serial bridge on port 8766. The bridge prepares literal contact text and plays only when the visitor presses Play signal. It discovers the connected ESP32 instead of relying on a fixed tty number. No automated playback is scheduled.
 
-An earlier live synthesis attempt stalled the ESP32 and stretched playback. Precomputed tables removed that stall. Beacon's earlier low accompaniment also introduced a false B; removing it produced a clean short recording. The generated tables come from `firmware/esp32_i2s_emitter/include/prototype/generate_tables.py` and use interpolation during playback.
-
-The existing 42 browser audio/decoder checks and 13 Python checks pass. The decoder source has no changes. All final rendered HELLO WAVs decode correctly. The microphone button and the live main-input spectrogram were inspected in the collaborative preview. A 320 by 568 viewport fits the encounter and sound lab without scrolling.
-
-For another physical check, choose one direction explicitly. This plays sound:
+The connected speaker remains in experimental serial mode. Its original Wi-Fi firmware backup is `/tmp/alive-space-prototype/firmware-before.bin`. Restore it by stopping the bridge and writing that backup through the device's stable USB link:
 
 ```bash
-python3 /tmp/alive-space-prototype/prototype_capture.py --direction beacon --message HELLO
+ssh main 'pkill -f "^python3 /tmp/alive-space-prototype/prototype_server.py$"; python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32c3 --port /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_70:AF:09:0D:AB:24-if00 --baud 921600 write_flash 0 /tmp/alive-space-prototype/firmware-before.bin'
 ```
 
-The default captures only Original. `--direction all` repeats the full comparison and should be used deliberately. Re-run decoding silently with `bun web/src/prototype/inspectAudio.ts <recording.wav>`.
+No NAS service was deployed. For the normal Wi-Fi installation, update the API, sender firmware, and receiver together so that Beacon selection and playback duration agree.

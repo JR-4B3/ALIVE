@@ -1,0 +1,573 @@
+{
+  "cases": 73,
+  "failures": 0,
+  "peak": 0.015869140625,
+  "chirpCentersHz": {
+    "sync": 550,
+    "firstLetter": 680,
+    "lastLetter": 1780,
+    "space": 1824
+  },
+  "limits": "Generated PCM and simulated noise/echo only. No speaker playback or microphone round-trip test.",
+  "results": [
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "clean",
+      "expected": "HELLO",
+      "decoded": "HELLO",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "quiet room",
+      "expected": "HELLO",
+      "decoded": "HELLO",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "clean",
+      "expected": "WE ARE HERE",
+      "decoded": "WE ARE HERE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "quiet room",
+      "expected": "WE ARE HERE",
+      "decoded": "WE ARE HERE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "clean",
+      "expected": "I HEAR YOU",
+      "decoded": "I HEAR YOU",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "quiet room",
+      "expected": "I HEAR YOU",
+      "decoded": "I HEAR YOU",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "clean",
+      "expected": "STAY CALM",
+      "decoded": "STAY CALM",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "quiet room",
+      "expected": "STAY CALM",
+      "decoded": "STAY CALM",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "clean",
+      "expected": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "decoded": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "quiet room",
+      "expected": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "decoded": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "clean",
+      "expected": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "decoded": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "quiet room",
+      "expected": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "decoded": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "clean",
+      "expected": "NQIM VRSW ABCD",
+      "decoded": "NQIM VRSW ABCD",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "quiet room",
+      "expected": "NQIM VRSW ABCD",
+      "decoded": "NQIM VRSW ABCD",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "clean",
+      "expected": "EEEE",
+      "decoded": "EEEE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "quiet room",
+      "expected": "EEEE",
+      "decoded": "EEEE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "clean",
+      "expected": "ZZZZ",
+      "decoded": "ZZZZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "quiet room",
+      "expected": "ZZZZ",
+      "decoded": "ZZZZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "clean",
+      "expected": "A A",
+      "decoded": "A A",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 16000,
+      "condition": "quiet room",
+      "expected": "A A",
+      "decoded": "A A",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "clean",
+      "expected": "HELLO",
+      "decoded": "HELLO",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "quiet room",
+      "expected": "HELLO",
+      "decoded": "HELLO",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "clean",
+      "expected": "WE ARE HERE",
+      "decoded": "WE ARE HERE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "quiet room",
+      "expected": "WE ARE HERE",
+      "decoded": "WE ARE HERE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "clean",
+      "expected": "I HEAR YOU",
+      "decoded": "I HEAR YOU",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "quiet room",
+      "expected": "I HEAR YOU",
+      "decoded": "I HEAR YOU",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "clean",
+      "expected": "STAY CALM",
+      "decoded": "STAY CALM",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "quiet room",
+      "expected": "STAY CALM",
+      "decoded": "STAY CALM",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "clean",
+      "expected": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "decoded": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "quiet room",
+      "expected": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "decoded": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "clean",
+      "expected": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "decoded": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "quiet room",
+      "expected": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "decoded": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "clean",
+      "expected": "NQIM VRSW ABCD",
+      "decoded": "NQIM VRSW ABCD",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "quiet room",
+      "expected": "NQIM VRSW ABCD",
+      "decoded": "NQIM VRSW ABCD",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "clean",
+      "expected": "EEEE",
+      "decoded": "EEEE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "quiet room",
+      "expected": "EEEE",
+      "decoded": "EEEE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "clean",
+      "expected": "ZZZZ",
+      "decoded": "ZZZZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "quiet room",
+      "expected": "ZZZZ",
+      "decoded": "ZZZZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "clean",
+      "expected": "A A",
+      "decoded": "A A",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 44100,
+      "condition": "quiet room",
+      "expected": "A A",
+      "decoded": "A A",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "clean",
+      "expected": "HELLO",
+      "decoded": "HELLO",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "quiet room",
+      "expected": "HELLO",
+      "decoded": "HELLO",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "clean",
+      "expected": "WE ARE HERE",
+      "decoded": "WE ARE HERE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "quiet room",
+      "expected": "WE ARE HERE",
+      "decoded": "WE ARE HERE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "clean",
+      "expected": "I HEAR YOU",
+      "decoded": "I HEAR YOU",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "quiet room",
+      "expected": "I HEAR YOU",
+      "decoded": "I HEAR YOU",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "clean",
+      "expected": "STAY CALM",
+      "decoded": "STAY CALM",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "quiet room",
+      "expected": "STAY CALM",
+      "decoded": "STAY CALM",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "clean",
+      "expected": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "decoded": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "quiet room",
+      "expected": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "decoded": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "clean",
+      "expected": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "decoded": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "quiet room",
+      "expected": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "decoded": "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "clean",
+      "expected": "NQIM VRSW ABCD",
+      "decoded": "NQIM VRSW ABCD",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "quiet room",
+      "expected": "NQIM VRSW ABCD",
+      "decoded": "NQIM VRSW ABCD",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "clean",
+      "expected": "EEEE",
+      "decoded": "EEEE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "quiet room",
+      "expected": "EEEE",
+      "decoded": "EEEE",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "clean",
+      "expected": "ZZZZ",
+      "decoded": "ZZZZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "quiet room",
+      "expected": "ZZZZ",
+      "decoded": "ZZZZ",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "clean",
+      "expected": "A A",
+      "decoded": "A A",
+      "pass": true
+    },
+    {
+      "kind": "Beacon PCM",
+      "rate": 48000,
+      "condition": "quiet room",
+      "expected": "A A",
+      "decoded": "A A",
+      "pass": true
+    },
+    {
+      "kind": "legacy preserved",
+      "expected": "HELLO",
+      "before": "HELLO",
+      "decoded": "HELLO",
+      "pass": true
+    },
+    {
+      "kind": "legacy preserved",
+      "expected": "WE ARE HERE",
+      "before": "WE ARE HERE",
+      "decoded": "WE ARE HERE",
+      "pass": true
+    },
+    {
+      "kind": "legacy preserved",
+      "expected": "EEEE",
+      "before": "EEEE",
+      "decoded": "EEEE",
+      "pass": true
+    },
+    {
+      "kind": "legacy preserved",
+      "expected": "AEI",
+      "before": "AEI",
+      "decoded": "AEI",
+      "pass": true
+    },
+    {
+      "kind": "legacy preserved",
+      "expected": "NQIM VRSW ABCD",
+      "before": "NQIM VRSW ABCD",
+      "decoded": "NQIM VRSW ABCD",
+      "pass": true
+    },
+    {
+      "kind": "automatic protocol switching",
+      "expected": "STAY CALM",
+      "decoded": "STAY CALM",
+      "pass": true
+    },
+    {
+      "kind": "automatic protocol switching",
+      "expected": "HELLO",
+      "decoded": "HELLO",
+      "pass": true
+    },
+    {
+      "kind": "automatic protocol switching",
+      "expected": "STAY CALM",
+      "decoded": "STAY CALM",
+      "pass": true
+    },
+    {
+      "kind": "reject unframed chirps",
+      "pass": true
+    },
+    {
+      "kind": "reject broadband noise",
+      "pass": true
+    },
+    {
+      "kind": "firmware PCM matches browser PCM",
+      "samples": 247200,
+      "differences": 0,
+      "pass": true
+    },
+    {
+      "kind": "duration matches samples",
+      "expected": 5.15,
+      "seconds": 5.15,
+      "pass": true
+    },
+    {
+      "kind": "decode firmware PCM",
+      "expected": "HELLO",
+      "decoded": "HELLO",
+      "pass": true
+    }
+  ]
+}

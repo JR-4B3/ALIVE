@@ -1,6 +1,6 @@
 import './styles.css';
 import { SignalLevelTracker } from './sensing/signalLevelTracker';
-import { TranslationDecoder } from './sensing/translationDecoder';
+import { SignalReceiver } from './sensing/signalReceiver';
 import { encodeRecording } from './audio/recording';
 import { uploadRecording } from './audio/recordingUpload';
 import type { ReceiverStatus } from './types';
@@ -76,8 +76,10 @@ app.innerHTML = `
   </main>
 `;
 
-// Dev-only sound study, on the existing receiver route. No prototype persistence.
-const spacePrototype = import.meta.env.DEV && new URLSearchParams(location.search).get('prototype') === 'space'
+// Selected signal-strip layout on the visitor receiver. The sound codec remains experimental.
+const PROTOTYPE_MODE = import.meta.env.MODE === 'prototype' ||
+  (import.meta.env.DEV && new URLSearchParams(location.search).get('prototype') === 'space');
+const signalStrip = !DEBUG_UI
   ? (await import('./prototype/spacePrototype')).mountSpacePrototype((samples, rate) => {
       const now = performance.now();
       levelSnapshot = levels.process(samples, now);
@@ -110,15 +112,15 @@ const debugRefs = DEBUG_UI ? {
 } : null;
 
 const params = new URLSearchParams(location.search);
-const initialApiBase = params.get('api') ?? (spacePrototype ? '' : localStorage.getItem('aliveApiBase') || '');
-const initialApiToken = params.get('token') ?? (spacePrototype ? '' : sessionStorage.getItem('aliveApiToken') ?? '');
+const initialApiBase = params.get('api') ?? (PROTOTYPE_MODE ? '' : localStorage.getItem('aliveApiBase') || '');
+const initialApiToken = params.get('token') ?? (PROTOTYPE_MODE ? '' : sessionStorage.getItem('aliveApiToken') ?? '');
 if (debugRefs) {
   debugRefs.apiBase.value = initialApiBase;
   debugRefs.apiToken.value = initialApiToken;
 }
 
 const levels = new SignalLevelTracker();
-const decoder = new TranslationDecoder();
+const decoder = new SignalReceiver();
 let levelSnapshot = levels.snapshot();
 let translationSnapshot = decoder.snapshot();
 let audioCtx: AudioContext | null = null;
@@ -154,10 +156,15 @@ debugRefs?.resetMessage.addEventListener('click', () => {
 render();
 
 async function toggleMicrophone(): Promise<void> {
-  if (spacePrototype?.remoteActive()) { await spacePrototype.stopRemote(); return; }
+  if (signalStrip?.remoteActive()) { await signalStrip.stopRemote(); return; }
   if (micActive) {
     await stopMicrophone();
     return;
+  }
+  if (signalStrip?.remoteRequested()) {
+    levels.startCalibration(performance.now());
+    translationSnapshot = decoder.reset('listening for signal');
+    await signalStrip.startRemote(); render(); return;
   }
   await startMicrophone();
 }
@@ -193,7 +200,7 @@ async function startMicrophone(): Promise<void> {
       );
       render();
     };
-    spacePrototype?.connect(sourceNode, audioCtx);
+    signalStrip?.connect(sourceNode, audioCtx);
     sourceNode.connect(processor);
     processor.connect(silentNode).connect(audioCtx.destination);
     await audioCtx.resume();
@@ -212,7 +219,7 @@ async function startMicrophone(): Promise<void> {
 
 async function stopMicrophone(): Promise<void> {
   cancelRecording();
-  spacePrototype?.stop();
+  signalStrip?.stop();
   processor?.disconnect();
   sourceNode?.disconnect();
   silentNode?.disconnect();
@@ -308,7 +315,7 @@ async function playCurrentSignal(): Promise<void> {
         setRecordStatus('Recording microphone for diagnosis…');
       }
     }
-    if (micActive || spacePrototype?.remoteActive()) {
+    if (micActive || signalStrip?.remoteActive()) {
       translationSnapshot = decoder.beginCapture(performance.now());
       render();
     }
@@ -323,7 +330,7 @@ async function playCurrentSignal(): Promise<void> {
         recording.timer = window.setTimeout(() => void saveRecording(), Math.min(23, (payload.duration ?? 20) + 1.5) * 1000);
       }
     }
-    if ((micActive || spacePrototype?.remoteActive()) && payload.duration) decoder.setCaptureDuration(performance.now(), payload.duration);
+    if ((micActive || signalStrip?.remoteActive()) && payload.duration) decoder.setCaptureDuration(performance.now(), payload.duration);
     setContactStatus('ESP32 signal queued');
     // Match the NAS replay deadline, including compatibility with older NAS builds.
     lockReplay(Math.max(payload.duration ?? 0, payload.replayAfterSeconds ?? ((payload.duration ?? 0) + 1)));
@@ -341,7 +348,7 @@ async function requestPlayWhenReady(apiBase: string): Promise<Response> {
   while (true) {
     const response = await fetch(`${apiBase}/api/emitter/main/play`, {
       method: 'POST', headers: { ...apiAuthHeaders(), 'content-type': 'application/json' },
-      body: JSON.stringify(spacePrototype ? { soundDirection: spacePrototype.sound() } : {})
+      body: JSON.stringify(signalStrip ? { soundDirection: signalStrip.sound() } : {})
     });
     if (response.ok) return response;
     if (response.status === 405) throw new Error(DEBUG_UI ? 'HTTP 405: enter the NAS API URL above' : 'HTTP 405: no signal API');
@@ -440,7 +447,7 @@ function unlockReplay(): void {
 }
 
 function render(): void {
-  const capturing = micActive || !!spacePrototype?.remoteActive();
+  const capturing = micActive || !!signalStrip?.remoteActive();
   refs.mic.dataset.active = String(capturing);
   refs.mic.setAttribute('aria-pressed', String(capturing));
   refs.mic.setAttribute('aria-label', capturing ? 'Disable microphone' : 'Enable microphone');
@@ -492,7 +499,7 @@ function normalizedApiBase(): string {
 }
 
 function requestApiBase(): string {
-  if (spacePrototype) return spacePrototype.api();
+  if (PROTOTYPE_MODE && signalStrip) return signalStrip.api();
   const apiBase = normalizedApiBase();
   if (apiBase) localStorage.setItem('aliveApiBase', apiBase);
   // An explicit URL wins; otherwise the API lives at this page's own origin
@@ -503,10 +510,10 @@ function requestApiBase(): string {
 function apiAuthHeaders(): Record<string, string> {
   const token = (debugRefs?.apiToken.value ?? initialApiToken).trim();
   if (!token) {
-    if (!spacePrototype) sessionStorage.removeItem('aliveApiToken');
+    if (!PROTOTYPE_MODE) sessionStorage.removeItem('aliveApiToken');
     return {};
   }
-  if (!spacePrototype) sessionStorage.setItem('aliveApiToken', token);
+  if (!PROTOTYPE_MODE) sessionStorage.setItem('aliveApiToken', token);
   return { authorization: `Bearer ${token}` };
 }
 

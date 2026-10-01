@@ -106,7 +106,7 @@ class ApiState:
             wait = self._public_play_ready_at - now
             if wait > 0:
                 return max(1, int(wait + 0.999))
-            duration = signal_duration_seconds(self.latest_reply) + (3.95 if sound_direction != "original" else 0)
+            duration = (2.45 + len(self.latest_reply) * .54) if sound_direction == "beacon" else signal_duration_seconds(self.latest_reply)
             self._public_play_ready_at = now + max(2.0, duration + 0.5)
             return 0
 
@@ -122,7 +122,7 @@ class ApiState:
             "message": self.latest_reply,
             "mode": "language",
             "maxChars": MAX_REPLY_CHARS,
-            "duration": signal_duration_seconds(self.latest_reply) + (3.95 if self.sound_direction != "original" else 0),
+            "duration": (2.45 + len(self.latest_reply) * .54) if self.sound_direction == "beacon" else signal_duration_seconds(self.latest_reply),
             "soundDirection": self.sound_direction,
             "replayAfterSeconds": max(0, round(self._public_play_ready_at - time.monotonic(), 3)),
             "active": False,
@@ -141,7 +141,7 @@ class ApiState:
         return self.set_reply(self.initial_message)
 
     def play_current_once(self, sound_direction: str = "original") -> dict[str, object]:
-        if sound_direction not in {"original", "drift", "beacon", "chorus"}:
+        if sound_direction not in {"original", "beacon"}:
             raise ValueError("Unknown sound direction")
         with self._lock:
             if time.monotonic() - self._device_last_seen_at >= 5:
@@ -219,7 +219,7 @@ def make_handler(state: ApiState):
                 try:
                     payload = self._read_json()
                     sound = str(payload.get("soundDirection", "original"))
-                    if sound not in {"original", "drift", "beacon", "chorus"}:
+                    if sound not in {"original", "beacon"}:
                         raise ValueError("Unknown sound direction")
                     if public_action:
                         if not state.current_emitter_message()["deviceOnline"]:

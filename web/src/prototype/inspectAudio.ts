@@ -1,5 +1,5 @@
 // Re-run against actual mono/stereo PCM recordings: bun src/prototype/inspectAudio.ts <files.wav>
-import { TranslationDecoder } from '../sensing/translationDecoder';
+import { SignalReceiver } from '../sensing/signalReceiver';
 import { rmsDb } from '../audio/dsp';
 for (const path of process.argv.slice(2)) {
   const buffer = await Bun.file(path).arrayBuffer(), view = new DataView(buffer);
@@ -14,7 +14,7 @@ for (const path of process.argv.slice(2)) {
   if (bits !== 16 || !data || !channels || !rate) throw Error(`Expected PCM16 WAV: ${path}`);
   const samples = new Float32Array(bytes / 2 / channels);
   for (let i = 0; i < samples.length; i++) for (let ch = 0; ch < channels; ch++) samples[i] += view.getInt16(data + (i * channels + ch)*2, true) / 32768 / channels;
-  const decoder = new TranslationDecoder(); decoder.beginCapture(0); decoder.setCaptureDuration(0, samples.length / rate);
+  const decoder = new SignalReceiver(); decoder.beginCapture(0); decoder.setCaptureDuration(0, samples.length / rate);
   let result = decoder.snapshot();
   const transitions: {seconds: number; text: string}[] = [];
   for (let i = 0; i < samples.length; i += 2048) {
