@@ -57,6 +57,7 @@ class ApiState:
         self.initial_message = normalize_reply(message) or "ALIVE"
         self.latest_reply = self.initial_message
         self.reply_revision = 0
+        self.sound_direction = "original"
         self._lock = threading.Lock()
         self._device_last_seen_at = 0.0
         self._public_message_window_at = time.monotonic()
@@ -99,13 +100,13 @@ class ApiState:
             self._public_message_count += 1
             return 0
 
-    def reserve_public_play(self) -> int:
+    def reserve_public_play(self, sound_direction: str = "original") -> int:
         with self._lock:
             now = time.monotonic()
             wait = self._public_play_ready_at - now
             if wait > 0:
                 return max(1, int(wait + 0.999))
-            duration = signal_duration_seconds(self.latest_reply)
+            duration = signal_duration_seconds(self.latest_reply) + (3.95 if sound_direction != "original" else 0)
             self._public_play_ready_at = now + max(2.0, duration + 0.5)
             return 0
 
@@ -121,7 +122,8 @@ class ApiState:
             "message": self.latest_reply,
             "mode": "language",
             "maxChars": MAX_REPLY_CHARS,
-            "duration": signal_duration_seconds(self.latest_reply),
+            "duration": signal_duration_seconds(self.latest_reply) + (3.95 if self.sound_direction != "original" else 0),
+            "soundDirection": self.sound_direction,
             "replayAfterSeconds": max(0, round(self._public_play_ready_at - time.monotonic(), 3)),
             "active": False,
             "output": "esp32",
@@ -138,10 +140,13 @@ class ApiState:
     def reset_reply(self) -> dict[str, object]:
         return self.set_reply(self.initial_message)
 
-    def play_current_once(self) -> dict[str, object]:
+    def play_current_once(self, sound_direction: str = "original") -> dict[str, object]:
+        if sound_direction not in {"original", "drift", "beacon", "chorus"}:
+            raise ValueError("Unknown sound direction")
         with self._lock:
             if time.monotonic() - self._device_last_seen_at >= 5:
                 raise TimeoutError("ESP32 is offline; check its Wi-Fi connection")
+            self.sound_direction = sound_direction
             self.reply_revision += 1
             self._save_state()
             return self._current_message()
@@ -212,14 +217,20 @@ def make_handler(state: ApiState):
                 return
             if parsed.path == "/api/emitter/main/play":
                 try:
+                    payload = self._read_json()
+                    sound = str(payload.get("soundDirection", "original"))
+                    if sound not in {"original", "drift", "beacon", "chorus"}:
+                        raise ValueError("Unknown sound direction")
                     if public_action:
                         if not state.current_emitter_message()["deviceOnline"]:
                             raise TimeoutError("ESP32 is offline; check its Wi-Fi connection")
-                        wait = state.reserve_public_play()
+                        wait = state.reserve_public_play(sound)
                         if wait:
                             self._send_json({"error": f"Wait {wait}s before replaying"}, HTTPStatus.TOO_MANY_REQUESTS)
                             return
-                    self._send_json(state.play_current_once())
+                    self._send_json(state.play_current_once(sound))
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 except (OSError, TimeoutError) as exc:
                     self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return

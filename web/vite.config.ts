@@ -1,4 +1,4 @@
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 
@@ -8,6 +8,13 @@ export default defineConfig(({ mode }) => {
   const debug = mode === 'debug';
   return {
     base: './',
+    server: mode === 'prototype' ? {
+      proxy: { '/api': 'http://127.0.0.1:8766' },
+      https: process.env.ALIVE_PROTOTYPE_CERT && process.env.ALIVE_PROTOTYPE_KEY ? {
+        cert: readFileSync(process.env.ALIVE_PROTOTYPE_CERT),
+        key: readFileSync(process.env.ALIVE_PROTOTYPE_KEY)
+      } : undefined
+    } : undefined,
     define: { __DEBUG_UI__: JSON.stringify(debug) },
     build: {
       outDir: debug ? '../docs/debug' : '../docs',

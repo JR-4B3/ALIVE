@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include "secrets.h"
+#include "prototype/space_sound.h"
 
 // ESP32-C3 Super Mini -> MAX98357. Change these if your board layout needs it.
 constexpr gpio_num_t I2S_BCLK = GPIO_NUM_4;
@@ -48,6 +49,7 @@ MessageSegment messageSegment = MessageSegment::Idle;
 uint32_t messageSegmentLength = 0;
 char serialLine[32] = {};
 size_t serialLineLength = 0;
+int serialSoundDirection = 0;
 #endif
 char messageText[21] = "HELLO";
 uint32_t messageSegmentFrame = 0;
@@ -135,6 +137,8 @@ void startMessageLetter() {
   messageSegmentLength = MESSAGE_BURST_FRAMES;
 }
 
+void playAtmosphere(int direction, bool outro);
+
 void advanceMessageSegment() {
   if (messageSegment == MessageSegment::Lead) {
     startMessageLetter();
@@ -159,6 +163,9 @@ void advanceMessageSegment() {
 #else
     messageSegment = MessageSegment::Idle;
     messageSegmentLength = 0;
+#if defined(ALIVE_SERIAL_MESSAGE)
+    playAtmosphere(serialSoundDirection, true);
+#endif
     Serial.println("DONE");
 #endif
   }
@@ -178,7 +185,10 @@ void receiveSerialCommand() {
     serialLine[serialLineLength] = '\0';
     if (strncmp(serialLine, "PLAY ", 5) == 0) {
       size_t count = 0;
+      const char *sound = strchr(serialLine, '|');
+      const int direction = sound ? atoi(sound + 1) : 0;
       for (size_t i = 5; i < serialLineLength && count < 20; ++i) {
+        if (serialLine[i] == '|') break;
         const char letter = serialLine[i];
         if (letter >= 'A' && letter <= 'Z') messageText[count++] = letter;
         else if (letter == ' ' && count > 0) messageText[count++] = letter;
@@ -186,6 +196,9 @@ void receiveSerialCommand() {
       while (count > 0 && messageText[count - 1] == ' ') --count;
       messageText[count] = '\0';
       if (count > 0) {
+        playAtmosphere(direction, false);
+        if (direction) writeSilence(350);
+        serialSoundDirection = direction;
         messageLetterIndex = 0;
         messageSegment = MessageSegment::Lead;
         messageSegmentFrame = 0;
@@ -233,7 +246,23 @@ void writeContinuousMessageAudio() {
   if (startedMessage) Serial.printf("START %s\n", messageText);
 }
 
-void playMessage(const String &message) {
+// Experimental comparison sounds play outside the encoded letter train.
+void playAtmosphere(int direction, bool outro) {
+  if (!direction) return;
+  int16_t samples[512];
+  for (uint32_t frame = 0; frame < space_sound::frames; frame += 256) {
+    const uint32_t count = std::min<uint32_t>(256, space_sound::frames - frame);
+    for (uint32_t i = 0; i < count; ++i) {
+      const int16_t value = space_sound::sample(frame + i, direction, outro);
+      samples[i * 2] = value;
+      samples[i * 2 + 1] = value;
+    }
+    size_t written = 0;
+    i2s_write(I2S_PORT, samples, count * 2 * sizeof(int16_t), &written, portMAX_DELAY);
+  }
+}
+
+void playMessage(const String &message, int direction = 0) {
   // Use the same continuously buffered synthesis as the verified USB playback.
   size_t count = 0;
   for (size_t i = 0; i < message.length() && count < sizeof(messageText) - 1; ++i) {
@@ -247,7 +276,10 @@ void playMessage(const String &message) {
   messageSegment = MessageSegment::Lead;
   messageSegmentFrame = 0;
   messageSegmentLength = SAMPLE_RATE / 20; // 50 ms to prime the audio buffers.
+  playAtmosphere(direction, false);
+  if (direction) writeSilence(350);
   while (messageSegment != MessageSegment::Idle) writeContinuousMessageAudio();
+  playAtmosphere(direction, true);
 }
 
 void connectWifi() {
@@ -342,7 +374,9 @@ void pollForMessage() {
       } else if (revision > lastRevision && message.length() > 0) {
         lastRevision = revision;
         http.end();
-        playMessage(message);
+        const String sound = json["soundDirection"] | "original";
+        const int direction = sound == "drift" ? 1 : sound == "beacon" ? 2 : sound == "chorus" ? 3 : 0;
+        playMessage(message, direction);
         return;
       }
     } else {
