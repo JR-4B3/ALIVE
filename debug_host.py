@@ -7,7 +7,7 @@ and room levels, tone/stream diagnostics, connection settings, and the
 diagnostic recording upload. Run it, then scan the printed QR code or type the
 printed URL/IP with the phone.
 
-    python debug_host.py                                        # NAS API
+    python debug_host.py --api https://api.example.com          # remote API
     python debug_host.py --api https://127.0.0.1:8765           # local emitter API
     python debug_host.py -kill                                  # stop all debug hosts
 
@@ -41,7 +41,7 @@ from simple_qr import terminal_qr
 ROOT = Path(__file__).resolve().parent
 DEBUG_APP_DIR = ROOT / "docs" / "debug"
 DEBUG_APP = DEBUG_APP_DIR / "index.html"
-DEFAULT_API = "https://ds720.tail688a7b.ts.net"
+DEFAULT_API = os.environ.get("ALIVE_API_URL", "https://127.0.0.1:8765")
 MAX_REQUEST_BYTES = 12_000_000
 
 
@@ -187,7 +187,7 @@ def apply_https(server: ThreadingHTTPServer, ip_address: str) -> bool:
 
 def open_upstream(request: urllib.request.Request, timeout: float):
     """Open the upstream request, retrying without verification for self-signed
-    local APIs such as the laptop emitter's HTTPS."""
+    local HTTPS APIs."""
     try:
         return urllib.request.urlopen(request, timeout=timeout)
     except urllib.error.URLError as error:

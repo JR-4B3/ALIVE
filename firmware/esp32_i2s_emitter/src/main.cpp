@@ -5,6 +5,7 @@
 #include <WiFiClientSecure.h>
 #include <esp_wifi.h>
 #include <driver/i2s.h>
+#include <esp_task_wdt.h>
 #include <math.h>
 #include <time.h>
 
@@ -22,21 +23,15 @@ static_assert(SAMPLE_RATE == 8000 || SAMPLE_RATE == 16000 ||
               SAMPLE_RATE == 32000 || SAMPLE_RATE == 44100 ||
               SAMPLE_RATE == 48000 || SAMPLE_RATE == 88200 ||
               SAMPLE_RATE == 96000, "Unsupported MAX98357 sample rate");
-constexpr uint32_t BURST_MS = 220;
 constexpr float GAP_SCALE = 0.65f;
 // Leave time for room reflections and the receiver's 4096-sample window to clear.
 constexpr uint32_t MIN_GAP_MS = 220;
-constexpr uint32_t POLL_MS = 100;
+constexpr uint32_t POLL_MS = 2000;
+constexpr uint32_t WIFI_JOIN_TIMEOUT_MS = 15000;
+constexpr uint32_t RESTART_AFTER_MS = 180000;
+constexpr uint32_t WATCHDOG_S = 30;
 // GAIN stays open. 1200 is +6 dB over 600, with ample digital headroom.
 constexpr int16_t AMPLITUDE = 1200;
-#if defined(ALIVE_HARDWARE_TEST)
-constexpr uint32_t TEST_TONE_FRAMES = SAMPLE_RATE / 2;  // 500 ms
-constexpr uint32_t TEST_CYCLE_FRAMES = SAMPLE_RATE * 6; // 6 seconds
-constexpr uint32_t TEST_FADE_FRAMES = SAMPLE_RATE / 200; // 5 ms
-constexpr uint32_t TEST_SINE_FRAMES = SAMPLE_RATE / 800; // Exact 800 Hz cycle
-uint32_t testFrameCursor = 0;
-int16_t testSine[TEST_SINE_FRAMES];
-#endif
 constexpr uint32_t MESSAGE_BURST_FRAMES = SAMPLE_RATE * 220 / 1000;
 constexpr uint32_t MESSAGE_FADE_FRAMES = SAMPLE_RATE * 24 / 1000;
 constexpr uint32_t MESSAGE_SINE_FRAMES = SAMPLE_RATE / 100;
@@ -62,9 +57,8 @@ int16_t messageSine[MESSAGE_SINE_FRAMES];
 
 long lastRevision = -1;
 uint32_t lastPollAt = 0;
-uint32_t lastHardwareTestAt = 0;
-uint32_t lastLedToggleAt = 0;
-bool statusLedOn = false;
+uint32_t lastHealthyAt = 0;
+uint32_t wifiJoinStartedAt = 0;
 // Retain the TLS session between polls instead of negotiating on every request.
 WiFiClientSecure pollClient;
 HTTPClient pollHttp;
@@ -81,44 +75,6 @@ bool frequenciesFor(char ch, float &low, float &high, uint16_t &rawGapMs) {
   rawGapMs = 100 + index * 50;
   return true;
 }
-
-void writeSilence(uint32_t durationMs) {
-  // Interleaved left/right samples keep the I2S frame unambiguous for the amp.
-  static int16_t zeros[512] = {};
-  uint32_t remaining = (SAMPLE_RATE * durationMs) / 1000;
-  while (remaining > 0) {
-    const size_t count = min<uint32_t>(remaining, 256);
-    size_t written = 0;
-    i2s_write(I2S_PORT, zeros, count * 2 * sizeof(int16_t), &written, portMAX_DELAY);
-    remaining -= count;
-  }
-}
-
-#if defined(ALIVE_HARDWARE_TEST)
-void writeContinuousTestAudio() {
-  int16_t samples[512];
-  for (uint32_t i = 0; i < 256; ++i) {
-    int16_t sample = 0;
-    if (testFrameCursor < TEST_TONE_FRAMES) {
-      const uint32_t fade = min(TEST_FADE_FRAMES,
-                                min(testFrameCursor, TEST_TONE_FRAMES - testFrameCursor - 1));
-      sample = static_cast<int32_t>(testSine[testFrameCursor % TEST_SINE_FRAMES]) *
-               fade / TEST_FADE_FRAMES;
-    }
-    samples[i * 2] = sample;
-    samples[i * 2 + 1] = sample;
-    testFrameCursor = (testFrameCursor + 1) % TEST_CYCLE_FRAMES;
-  }
-  size_t written = 0;
-  const esp_err_t error = i2s_write(I2S_PORT, samples, sizeof(samples),
-                                   &written, portMAX_DELAY);
-  if (error != ESP_OK || written != sizeof(samples)) {
-    Serial.printf("I2S write failed: error=%d, bytes=%u\n", error,
-                  static_cast<unsigned>(written));
-  }
-  if (testFrameCursor < 256) Serial.println("Hardware test beep");
-}
-#endif
 
 void startMessageLetter() {
   float low = 0;
@@ -149,7 +105,7 @@ void advanceMessageSegment() {
       return;
     }
     messageSegment = MessageSegment::Pause;
-    // Trade trailing silence for clearer letter separation. For NAS replies
+    // Trade trailing silence for clearer letter separation. For API replies
     // (<=12 characters), total playback still fits its legacy duration budget.
     messageSegmentLength = SAMPLE_RATE;
   } else if (messageSegment == MessageSegment::Pause) {
@@ -199,7 +155,9 @@ void receiveSerialCommand() {
 }
 #endif
 
-void writeContinuousMessageAudio() {
+// Returns false when the amplifier stream fails, so playback stops instead of
+// reporting a message it never sent.
+bool writeContinuousMessageAudio() {
   int16_t samples[512];
   bool startedMessage = false;
   for (uint32_t i = 0; i < 256; ++i) {
@@ -226,197 +184,18 @@ void writeContinuousMessageAudio() {
   }
   size_t written = 0;
   const esp_err_t error = i2s_write(I2S_PORT, samples, sizeof(samples),
-                                   &written, portMAX_DELAY);
+                                   &written, pdMS_TO_TICKS(1000));
+  esp_task_wdt_reset();
   if (error != ESP_OK || written != sizeof(samples)) {
     Serial.printf("I2S write failed: error=%d, bytes=%u\n", error,
                   static_cast<unsigned>(written));
+    return false;
   }
   if (startedMessage) Serial.printf("START %s\n", messageText);
+  return true;
 }
 
-void playMessage(const String &message) {
-  // Use the same continuously buffered synthesis as the verified USB playback.
-  size_t count = 0;
-  for (size_t i = 0; i < message.length() && count < sizeof(messageText) - 1; ++i) {
-    const char ch = message[i];
-    if ((ch >= 'A' && ch <= 'Z') || ch == ' ') messageText[count++] = ch;
-  }
-  messageText[count] = '\0';
-  if (count == 0) return;
-  Serial.printf("Playing revision %ld: %s\n", lastRevision, messageText);
-  messageLetterIndex = 0;
-  messageSegment = MessageSegment::Lead;
-  messageSegmentFrame = 0;
-  messageSegmentLength = SAMPLE_RATE / 20; // 50 ms to prime the audio buffers.
-  while (messageSegment != MessageSegment::Idle) writeContinuousMessageAudio();
-}
-
-void playDeadSignal() {
-  // Single carrier outside the letter codebook: six sparse clock ticks.
-  int16_t samples[512];
-  uint32_t phase = 0;
-  constexpr uint32_t cycleFrames = SAMPLE_RATE * 600 / 1000;
-  constexpr uint32_t tickFrames = SAMPLE_RATE * 180 / 1000;
-  for (uint32_t frame = 0; frame < cycleFrames * 6; frame += 256) {
-    for (uint32_t i = 0; i < 256; ++i) {
-      const uint32_t within = (frame + i) % cycleFrames;
-      const uint32_t fade = min<uint32_t>(SAMPLE_RATE / 100,
-                           min(within, tickFrames > within ? tickFrames - within : 0));
-      const int16_t sample = within < tickFrames
-          ? messageSine[phase] * static_cast<int32_t>(fade) / (SAMPLE_RATE / 100) : 0;
-      samples[i * 2] = sample;
-      samples[i * 2 + 1] = sample;
-      phase = (phase + 15) % MESSAGE_SINE_FRAMES;
-    }
-    size_t written = 0;
-    i2s_write(I2S_PORT, samples, sizeof(samples), &written, portMAX_DELAY);
-  }
-  Serial.println("DONE DEAD SIGNAL");
-}
-
-void connectWifi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  // This Super Mini repeatedly failed authentication/DHCP at default TX power.
-  // 8.5 dBm is the measured working setting for the assembled device.
-  Serial.printf("WiFi TX power 8.5 dBm: %s\n",
-                WiFi.setTxPower(WIFI_POWER_8_5dBm) ? "set" : "failed");
-  static bool eventLoggerInstalled = false;
-  if (!eventLoggerInstalled) {
-    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-      if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED)
-        Serial.println("WiFi associated; waiting for IP");
-      if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP)
-        Serial.println("WiFi received IP");
-      if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
-        Serial.printf("WiFi disconnected: reason %u\n",
-                      info.wifi_sta_disconnected.reason);
-    });
-    eventLoggerInstalled = true;
-  }
-  const int networkCount = WiFi.scanNetworks();
-  int bestTargetRssi = -127;
-  for (int i = 0; i < networkCount; ++i) {
-    if (WiFi.SSID(i) == ALIVE_WIFI_SSID)
-      bestTargetRssi = max(bestTargetRssi, static_cast<int>(WiFi.RSSI(i)));
-  }
-  WiFi.scanDelete();
-  if (bestTargetRssi == -127) Serial.println("Target WiFi not found in scan");
-  else Serial.printf("Target WiFi RSSI: %d dBm\n", bestTargetRssi);
-  WiFi.begin(ALIVE_WIFI_SSID, ALIVE_WIFI_PASSWORD);
-  Serial.printf("Connecting to %s", ALIVE_WIFI_SSID);
-  uint32_t lastReportAt = millis();
-  uint32_t attemptStartedAt = millis();
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(300);
-    Serial.print('.');
-    if (millis() - attemptStartedAt >= 15000) {
-      Serial.println(" WiFi authentication retry");
-      WiFi.disconnect();
-      delay(300);
-      WiFi.begin(ALIVE_WIFI_SSID, ALIVE_WIFI_PASSWORD);
-      attemptStartedAt = millis();
-    }
-    if (millis() - lastReportAt >= 5000) {
-      Serial.printf(" status=%d\n", WiFi.status());
-      lastReportAt = millis();
-    }
-  }
-  Serial.printf("\nWiFi ready: %s\n", WiFi.localIP().toString().c_str());
-#ifdef ALIVE_VISITOR_AP_SSID
-  WiFi.mode(WIFI_AP_STA);
-  if (!WiFi.softAP(ALIVE_VISITOR_AP_SSID, ALIVE_VISITOR_AP_PASSWORD, WiFi.channel(), 0, 1))
-    Serial.println("Visitor access point failed to start");
-  else
-    Serial.printf("Visitor access point ready: %s\n", WiFi.softAPIP().toString().c_str());
-#endif
-#ifdef ALIVE_SERVER_CA_CERT
-  // Certificate verification needs a real clock after each power-up.
-  configTime(0, 0, "pool.ntp.org", "time.google.com");
-  for (int attempt = 0; attempt < 20 && time(nullptr) < 1700000000; ++attempt)
-    delay(500);
-  if (time(nullptr) < 1700000000) Serial.println("Time sync pending; HTTPS may fail");
-#endif
-}
-
-void pollForMessage() {
-  static bool serverReachable = false;
-  auto &client = pollClient;
-  client.setHandshakeTimeout(8);
-#ifdef ALIVE_SERVER_CA_CERT
-  client.setCACert(ALIVE_SERVER_CA_CERT);
-#else
-  client.setInsecure();  // Local test only; configure a trusted CA for the NAS.
-#endif
-  auto &http = pollHttp;
-  http.setConnectTimeout(5000);
-  http.setTimeout(5000);
-  http.setReuse(true);
-  const String url = String(ALIVE_SERVER_URL) + "/api/emitter/main/current";
-  if (!http.begin(client, url)) return;
-#ifdef ALIVE_DEVICE_TOKEN
-  http.addHeader("Authorization", String("Bearer ") + ALIVE_DEVICE_TOKEN);
-#endif
-#ifdef ALIVE_VISITOR_AP_SSID
-  wifi_sta_list_t stations = {};
-  if (esp_wifi_ap_get_sta_list(&stations) == ESP_OK) {
-    http.addHeader("X-Alive-Station-Count", String(stations.num));
-    http.addHeader("X-Alive-Station-Rssi", stations.num == 1
-        ? String(stations.sta[0].rssi) : String(-127));
-  }
-#endif
-  const int status = http.GET();
-  if (status == HTTP_CODE_OK) {
-    JsonDocument json;
-    // Consume the entire body, including HTTP/1.1 chunk framing, before reuse.
-    const DeserializationError error = deserializeJson(json, http.getString());
-    if (!error) {
-      if (!serverReachable) Serial.println("NAS poll ready: HTTPS verified, device token accepted");
-      serverReachable = true;
-      const long revision = json["revision"] | -1;
-      const String message = json["message"] | "";
-      const String mode = json["mode"] | "language";
-      if (lastRevision < 0 || revision < lastRevision) {
-        // Boot or server reset: observe the current command without replaying it.
-        lastRevision = revision;
-      } else if (revision > lastRevision && message.length() > 0) {
-        lastRevision = revision;
-        http.end();
-        if (mode == "clock") playDeadSignal();
-        else playMessage(message);
-        return;
-      }
-    } else {
-      client.stop();
-      Serial.printf("JSON error: %s\n", error.c_str());
-    }
-  } else {
-    serverReachable = false;
-    char tlsError[128] = {};
-    const int tlsCode = client.lastError(tlsError, sizeof(tlsError));
-    Serial.printf("Poll failed: HTTP %d (%s), TLS %d (%s)\n", status,
-                  http.errorToString(status).c_str(), tlsCode, tlsError);
-    client.stop(); // Reconnect promptly if the server closed an idle session.
-  }
-  http.end();
-}
-
-void setup() {
-  Serial.begin(115200);
-  delay(500);
-#if defined(ALIVE_WIFI_DIAGNOSTIC)
-  Serial.println("Wi-Fi diagnostic: amplifier pins are not initialized");
-  connectWifi();
-  return;
-#endif
-  pinMode(STATUS_LED, OUTPUT);
-  // The ESP32-C3 Super Mini's blue onboard LED is active-low.
-  digitalWrite(STATUS_LED, HIGH);
-#if !defined(ALIVE_SILENCE_TEST) && !defined(ALIVE_HARDWARE_TEST) && \
-    !defined(ALIVE_MESSAGE_TEST) && !defined(ALIVE_SERIAL_MESSAGE)
-  // Associate before starting I2S clocks beside the board's Wi-Fi antenna.
-  connectWifi();
-#endif
+void startAudio() {
   const i2s_config_t config = {
       .mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_TX),
       .sample_rate = SAMPLE_RATE,
@@ -440,63 +219,223 @@ void setup() {
   ESP_ERROR_CHECK(i2s_driver_install(I2S_PORT, &config, 0, nullptr));
   ESP_ERROR_CHECK(i2s_set_pin(I2S_PORT, &pins));
   ESP_ERROR_CHECK(i2s_zero_dma_buffer(I2S_PORT));
+}
+
+void playMessage(const String &message) {
+  // Use the same continuously buffered synthesis as the verified USB playback.
+  size_t count = 0;
+  for (size_t i = 0; i < message.length() && count < sizeof(messageText) - 1; ++i) {
+    const char ch = message[i];
+    if ((ch >= 'A' && ch <= 'Z') || ch == ' ') messageText[count++] = ch;
+  }
+  messageText[count] = '\0';
+  if (count == 0) return;
+  // The I2S clocks run only during playback; without them the amplifier
+  // shuts down, which is most of the idle battery saving.
+  startAudio();
+  Serial.printf("Playing revision %ld: %s\n", lastRevision, messageText);
+  messageLetterIndex = 0;
+  messageSegment = MessageSegment::Lead;
+  messageSegmentFrame = 0;
+  messageSegmentLength = SAMPLE_RATE / 20; // 50 ms to prime the audio buffers.
+  while (messageSegment != MessageSegment::Idle) {
+    if (!writeContinuousMessageAudio()) messageSegment = MessageSegment::Idle;
+  }
+  ESP_ERROR_CHECK(i2s_driver_uninstall(I2S_PORT));
+}
+
+// Single carrier outside the letter codebook: six sparse clock ticks.
+bool writeDeadSignal() {
+  int16_t samples[512];
+  uint32_t phase = 0;
+  constexpr uint32_t cycleFrames = SAMPLE_RATE * 600 / 1000;
+  constexpr uint32_t tickFrames = SAMPLE_RATE * 180 / 1000;
+  for (uint32_t frame = 0; frame < cycleFrames * 6; frame += 256) {
+    for (uint32_t i = 0; i < 256; ++i) {
+      const uint32_t within = (frame + i) % cycleFrames;
+      const uint32_t fade = min<uint32_t>(SAMPLE_RATE / 100,
+                           min(within, tickFrames > within ? tickFrames - within : 0));
+      const int16_t sample = within < tickFrames
+          ? messageSine[phase] * static_cast<int32_t>(fade) / (SAMPLE_RATE / 100) : 0;
+      samples[i * 2] = sample;
+      samples[i * 2 + 1] = sample;
+      phase = (phase + 15) % MESSAGE_SINE_FRAMES;
+    }
+    size_t written = 0;
+    const esp_err_t error = i2s_write(I2S_PORT, samples, sizeof(samples), &written,
+                                     pdMS_TO_TICKS(1000));
+    esp_task_wdt_reset();
+    if (error != ESP_OK || written != sizeof(samples)) return false;
+  }
+  Serial.println("DONE DEAD SIGNAL");
+  return true;
+}
+
+void playDeadSignal() {
+  startAudio();
+  if (!writeDeadSignal()) Serial.println("I2S write failed during dead signal");
+  ESP_ERROR_CHECK(i2s_driver_uninstall(I2S_PORT));
+}
+
+void joinWifi() {
+  const int networkCount = WiFi.scanNetworks();
+  int bestTargetRssi = -127;
+  for (int i = 0; i < networkCount; ++i) {
+    if (WiFi.SSID(i) == ALIVE_WIFI_SSID)
+      bestTargetRssi = max(bestTargetRssi, static_cast<int>(WiFi.RSSI(i)));
+  }
+  WiFi.scanDelete();
+  if (bestTargetRssi == -127) Serial.println("Target WiFi not found in scan");
+  else Serial.printf("Target WiFi RSSI: %d dBm\n", bestTargetRssi);
+  WiFi.disconnect();
+  WiFi.begin(ALIVE_WIFI_SSID, ALIVE_WIFI_PASSWORD);
+  Serial.printf("Connecting to %s\n", ALIVE_WIFI_SSID);
+  wifiJoinStartedAt = millis();
+}
+
+void setupWifi() {
+  WiFi.mode(WIFI_STA);
+  // Modem sleep lets the radio doze between beacons while the board waits
+  // for the next poll. Arduino applies it to every later connection.
+  WiFi.setSleep(true);
+  // This Super Mini repeatedly failed authentication/DHCP at default TX power.
+  // 8.5 dBm is the measured working setting for the assembled device.
+  Serial.printf("WiFi TX power 8.5 dBm: %s\n",
+                WiFi.setTxPower(WIFI_POWER_8_5dBm) ? "set" : "failed");
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED)
+      Serial.println("WiFi associated; waiting for IP");
+    if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP)
+      Serial.printf("WiFi ready: %s\n", WiFi.localIP().toString().c_str());
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
+      Serial.printf("WiFi disconnected: reason %u\n",
+                    info.wifi_sta_disconnected.reason);
+  });
+#ifdef ALIVE_VISITOR_AP_SSID
+  // Visitors join this one-client network; its RSSI is reported with each poll.
+  // The access point follows the station's channel when it joins.
+  WiFi.mode(WIFI_AP_STA);
+  if (!WiFi.softAP(ALIVE_VISITOR_AP_SSID, ALIVE_VISITOR_AP_PASSWORD, 1, 0, 1))
+    Serial.println("Visitor access point failed to start");
+  else
+    Serial.printf("Visitor access point ready: %s\n", WiFi.softAPIP().toString().c_str());
+#endif
+#ifdef ALIVE_SERVER_CA_CERT
+  // Certificate checks need real time. SNTP keeps retrying in the background;
+  // polls fail until it succeeds and the restart deadline covers a long outage.
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+#endif
+  joinWifi();
+}
+
+void pollForMessage() {
+  static bool serverReachable = false;
+  auto &client = pollClient;
+  client.setHandshakeTimeout(8);
+#ifdef ALIVE_SERVER_CA_CERT
+  client.setCACert(ALIVE_SERVER_CA_CERT);
+#else
+  client.setInsecure();  // Local test only; configure a trusted CA for the API.
+#endif
+  auto &http = pollHttp;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  http.setReuse(true);
+  const String url = String(ALIVE_SERVER_URL) + "/api/emitter/main/current";
+  if (!http.begin(client, url)) return;
+#ifdef ALIVE_DEVICE_TOKEN
+  http.addHeader("Authorization", String("Bearer ") + ALIVE_DEVICE_TOKEN);
+#endif
+#ifdef ALIVE_VISITOR_AP_SSID
+  wifi_sta_list_t stations = {};
+  if (esp_wifi_ap_get_sta_list(&stations) == ESP_OK) {
+    http.addHeader("X-Alive-Station-Count", String(stations.num));
+    http.addHeader("X-Alive-Station-Rssi", stations.num == 1
+        ? String(stations.sta[0].rssi) : String(-127));
+  }
+#endif
+  const int status = http.GET();
+  if (status == HTTP_CODE_OK) {
+    JsonDocument json;
+    // Consume the entire body, including HTTP/1.1 chunk framing, before reuse.
+    const DeserializationError error = deserializeJson(json, http.getString());
+    if (!error && json["revision"].is<long>() && json["message"].is<const char *>()) {
+      if (!serverReachable) Serial.println("API poll ready: HTTPS verified, device token accepted");
+      serverReachable = true;
+      lastHealthyAt = millis();
+      const long revision = json["revision"];
+      const String message = json["message"].as<const char *>();
+      if (lastRevision < 0 || revision < lastRevision) {
+        // Boot or server reset: observe the current command without replaying it.
+        lastRevision = revision;
+      } else if (revision > lastRevision && message.length() > 0) {
+        lastRevision = revision;
+        http.end();
+        if (json["mode"] == "clock") playDeadSignal();
+        else playMessage(message);
+        return;
+      }
+    } else {
+      client.stop();
+      Serial.printf("Unexpected poll response: %s\n", error ? error.c_str() : "missing fields");
+    }
+  } else {
+    serverReachable = false;
+    char tlsError[128] = {};
+    const int tlsCode = client.lastError(tlsError, sizeof(tlsError));
+    Serial.printf("Poll failed: HTTP %d (%s), TLS %d (%s)\n", status,
+                  http.errorToString(status).c_str(), tlsCode, tlsError);
+    client.stop(); // Reconnect promptly if the server closed an idle session.
+  }
+  http.end();
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  pinMode(STATUS_LED, OUTPUT);
+  // The ESP32-C3 Super Mini's blue onboard LED is active-low.
+  digitalWrite(STATUS_LED, HIGH);
+  // A stuck TLS handshake, HTTP read, or I2S write resets the board.
+  esp_task_wdt_init(WATCHDOG_S, true);
+  enableLoopWDT();
   for (uint32_t i = 0; i < MESSAGE_SINE_FRAMES; ++i) {
     messageSine[i] = static_cast<int16_t>(sinf(TWO_PI * i / MESSAGE_SINE_FRAMES) * AMPLITUDE);
   }
-  Serial.printf("I2S initialized: %lu Hz, 16-bit stereo, BCLK=4 LRC=5 DIN=6\n",
-                static_cast<unsigned long>(SAMPLE_RATE));
-#if defined(ALIVE_SILENCE_TEST)
-  Serial.println("ALIVE silence test: I2S clocks active, speaker data is zero, blue LED blinking");
-  writeSilence(500);
-  lastHardwareTestAt = millis();
-  lastLedToggleAt = millis();
-#elif defined(ALIVE_HARDWARE_TEST)
-  Serial.println("ALIVE hardware test: continuous 48 kHz I2S, 500 ms 800 Hz beep every 6 seconds");
-  for (uint32_t i = 0; i < TEST_SINE_FRAMES; ++i) {
-    testSine[i] = static_cast<int16_t>(sinf(TWO_PI * i / TEST_SINE_FRAMES) * AMPLITUDE);
-  }
-#elif defined(ALIVE_MESSAGE_TEST) || defined(ALIVE_SERIAL_MESSAGE)
+#if defined(ALIVE_MESSAGE_TEST) || defined(ALIVE_SERIAL_MESSAGE)
+  startAudio();
+  Serial.println(
   #if defined(ALIVE_MESSAGE_TEST)
-  Serial.println("ALIVE message test: continuous 48 kHz I2S, sending HELLO repeatedly");
+      "ALIVE message test: continuous 48 kHz I2S, sending HELLO repeatedly"
   #else
-  Serial.println("ALIVE serial message ready: send PLAY <TEXT> followed by newline");
+      "ALIVE serial message ready: send PLAY <TEXT> followed by newline"
   #endif
+  );
 #else
+  setupWifi();
   Serial.println("ALIVE I2S emitter ready");
 #endif
 }
 
 void loop() {
-#if defined(ALIVE_WIFI_DIAGNOSTIC)
-  delay(5000);
-  Serial.printf("Wi-Fi diagnostic status=%d, IP=%s\n", WiFi.status(),
-                WiFi.localIP().toString().c_str());
-#elif defined(ALIVE_SILENCE_TEST)
-  writeSilence(100);
-  if (millis() - lastLedToggleAt >= 250) {
-    statusLedOn = !statusLedOn;
-    digitalWrite(STATUS_LED, statusLedOn ? LOW : HIGH);
-    lastLedToggleAt = millis();
-  }
-  if (millis() - lastHardwareTestAt >= 1000) {
-    Serial.println("Silence test alive");
-    lastHardwareTestAt = millis();
-  }
-#elif defined(ALIVE_HARDWARE_TEST)
-  writeContinuousTestAudio();
-#elif defined(ALIVE_MESSAGE_TEST)
+#if defined(ALIVE_MESSAGE_TEST)
   writeContinuousMessageAudio();
 #elif defined(ALIVE_SERIAL_MESSAGE)
   receiveSerialCommand();
   writeContinuousMessageAudio();
 #else
-  if (WiFi.status() != WL_CONNECTED) connectWifi();
-  if (millis() - lastPollAt >= POLL_MS) {
+  // A restart clears Wi-Fi, DNS, TLS, and HTTP state together. It is the one
+  // recovery path for every outage that outlasts ordinary reconnects.
+  if (millis() - lastHealthyAt >= RESTART_AFTER_MS) {
+    Serial.println("No valid poll for 3 minutes; restarting");
+    ESP.restart();
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    if (millis() - wifiJoinStartedAt >= WIFI_JOIN_TIMEOUT_MS) joinWifi();
+  } else if (millis() - lastPollAt >= POLL_MS) {
     lastPollAt = millis();
     pollForMessage();
   }
-#endif
-#if !defined(ALIVE_HARDWARE_TEST) && !defined(ALIVE_MESSAGE_TEST) && !defined(ALIVE_SERIAL_MESSAGE)
   delay(10);
 #endif
 }

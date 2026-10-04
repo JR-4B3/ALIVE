@@ -25,26 +25,6 @@ def terminal_qr(text: str) -> str:
     return "\n".join(rows)
 
 
-def svg_qr(text: str, scale: int = 8) -> str:
-    modules = make_qr(text)
-    quiet = 4
-    size = len(modules) + quiet * 2
-    rects = []
-    for y, row in enumerate(modules):
-        for x, cell in enumerate(row):
-            if cell:
-                rects.append(
-                    f'<rect x="{(x + quiet) * scale}" y="{(y + quiet) * scale}" '
-                    f'width="{scale}" height="{scale}"/>'
-                )
-    px = size * scale
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {px} {px}" '
-        f'width="{px}" height="{px}"><rect width="100%" height="100%" fill="#fff"/>'
-        f'<g fill="#000">{"".join(rects)}</g></svg>'
-    )
-
-
 def make_qr(text: str) -> list[list[bool]]:
     data = text.encode("iso-8859-1")
     bits = _data_bits(data)
