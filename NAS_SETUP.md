@@ -13,7 +13,7 @@ The phone and ESP32 may use separate networks, but both must reach the public AP
 
 ## Publish the phone page
 
-Build the visitor and debug pages from `web/` with `bun run build` and `bun run build:debug`. Publish `docs/` on a static HTTPS host. The visitor page has no connection settings; pass the public API base URL in the `api` query parameter of the visitor link or a privately generated QR code. It is saved in that browser after the first request. A new browser needs the parameter in its link. The debug page also has a manual API URL field and recording controls. Its local WAV download remains available if an optional API upload fails.
+Build the visitor and debug pages from `web/` with `bun run build` and `bun run build:debug`. Publish `docs/` on a static HTTPS host. Pass the public API base URL in the `api` query parameter of the visitor link or a privately generated QR code, enter it in connection settings, or set `VITE_ALIVE_API_URL` when building both pages. The browser saves a manually configured URL for later visits. A static host such as GitHub Pages cannot run the API. If a request reaches a static host, the page opens connection settings and explains how to correct the address. The debug page also has recording controls. Its local WAV download remains available if an optional API upload fails.
 
 Set `ALIVE_WEB_ORIGIN` to the page's exact origin, such as `https://site.example`, without a path or trailing slash. Neither page should contain an access token. In public demo mode, visitors can send short messages and request playback without logging in. Message requests are limited to one every 10 seconds and 300 per rolling 24 hours, and playback requests cannot overlap. Device and operator endpoints use separate tokens.
 

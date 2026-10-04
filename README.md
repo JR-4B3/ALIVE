@@ -21,9 +21,9 @@ bun run build
 bun run build:debug
 ```
 
-The builds write to `docs/` and `docs/debug/`. Publish `docs/` with any static host that serves the debug subdirectory too. The visitor page has only translation, microphone, and contact controls. The debug page adds signal diagnostics, connection settings, and an optional recording download or upload.
+The builds write to `docs/` and `docs/debug/`. Publish `docs/` with any static host that serves the debug subdirectory too. The visitor page has translation, microphone, contact controls, and API connection settings. The debug page adds signal diagnostics, operator settings, and an optional recording download or upload.
 
-The page accepts an API URL through `?api=https%3A%2F%2Fapi.example.com`. It saves the URL in that browser's local storage after a request. For a public installation, generate a visitor link or QR code with the URL parameter; do not commit a deployment address. The debug page also has an API URL field. When a page is served directly by the API, same-origin requests work without an override. The API must allow the static site's exact origin with `ALIVE_WEB_ORIGIN`.
+The page accepts an API URL through `?api=https%3A%2F%2Fapi.example.com` or its connection settings. It saves the URL in that browser's local storage. For a public installation, generate a visitor link or QR code with the URL parameter, or set `VITE_ALIVE_API_URL` when building both pages. Do not commit a deployment address. When a page is served directly by the API, same-origin requests work without an override. GitHub Pages only serves the frontend; it cannot handle API requests. The API must allow the static site's exact origin with `ALIVE_WEB_ORIGIN`.
 
 For local development, `python emitter.py` serves the app and Wi-Fi API. `python debug_host.py` can serve the debug page and proxy API requests. Use `python emitter.py --help` and `python debug_host.py --help` for options. Set `OPENAI_API_KEY` in the environment or an ignored `.env` file to generate replies. The default model can be overridden with `ALIVE_OPENAI_MODEL`.
 

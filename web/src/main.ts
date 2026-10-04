@@ -4,6 +4,7 @@ import { SignalReceiver } from './sensing/signalReceiver';
 import { encodeRecording } from './audio/recording';
 import { uploadRecording } from './audio/recordingUpload';
 import type { ReceiverStatus } from './types';
+import { normalizeApiBase, apiFailure, ApiConnectionError } from './api/connection';
 
 // Set at build time: `bun run build` publishes the clean visitor page to docs/,
 // `bun run build:debug` keeps every diagnostic control for local testing.
@@ -72,6 +73,16 @@ app.innerHTML = `
           <div id="resetStatus" class="mt-2 font-mono text-xs empty:hidden" role="status"></div>
         </details>` : ''}
       </form>
+      ${!DEBUG_UI ? `
+      <details id="connectionSettings" class="min-w-0 text-sm text-neutral-400">
+        <summary class="cursor-pointer uppercase tracking-[0.1em]">connection settings</summary>
+        <label class="mt-3 grid gap-1" for="visitorApiBase">
+          ALIVE API URL
+          <input id="visitorApiBase" class="min-h-11 min-w-0 w-full px-3 text-base" type="url" placeholder="https://api.example.com">
+        </label>
+        <button id="saveConnection" type="button" class="mt-2 min-h-11 w-full px-3 uppercase">save connection</button>
+      </details>
+      <div id="connectionStatus" class="break-words text-sm text-neutral-400 empty:hidden" role="status"></div>` : ''}
     </section>
   </main>
 `;
@@ -112,12 +123,28 @@ const debugRefs = DEBUG_UI ? {
 } : null;
 
 const params = new URLSearchParams(location.search);
-const initialApiBase = params.get('api') ?? (PROTOTYPE_MODE ? '' : localStorage.getItem('aliveApiBase') || '');
+let initialApiBase = params.get('api') ?? (PROTOTYPE_MODE ? '' : localStorage.getItem('aliveApiBase') || import.meta.env.VITE_ALIVE_API_URL || '');
 const initialApiToken = params.get('token') ?? (PROTOTYPE_MODE ? '' : sessionStorage.getItem('aliveApiToken') ?? '');
 if (debugRefs) {
   debugRefs.apiBase.value = initialApiBase;
   debugRefs.apiToken.value = initialApiToken;
 }
+const visitorApiBase = document.querySelector<HTMLInputElement>('#visitorApiBase');
+if (visitorApiBase) visitorApiBase.value = initialApiBase;
+document.querySelector('#saveConnection')?.addEventListener('click', () => {
+  try {
+    initialApiBase = normalizeApiBase(visitorApiBase!.value);
+    if (initialApiBase) localStorage.setItem('aliveApiBase', initialApiBase);
+    else localStorage.removeItem('aliveApiBase');
+    const url = new URL(location.href);
+    url.searchParams.delete('api');
+    history.replaceState(null, '', url);
+    requiredElement<HTMLDetailsElement>('#connectionSettings').open = false;
+    requiredElement('#connectionStatus').textContent = 'Connection saved. Try send or play signal again.';
+  } catch (error) {
+    showConnectionError(error);
+  }
+});
 
 const levels = new SignalLevelTracker();
 const decoder = new SignalReceiver();
@@ -251,13 +278,13 @@ async function sendContactMessage(): Promise<void> {
       body: JSON.stringify({ message })
     });
     if (!response.ok) {
-      const failure = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(failure?.error ?? `HTTP ${response.status}`);
+      throw await apiFailure(response);
     }
     const payload = (await response.json()) as { reply?: string; message?: string; duration?: number };
     reportStatus(DEBUG_UI ? (payload.reply ?? payload.message ?? 'sent') : 'sent', refs.send, 'send');
     refs.prompt.value = '';
   } catch (error) {
+    if (error instanceof ApiConnectionError || error instanceof TypeError) showConnectionError(error);
     reportStatus(error instanceof Error ? error.message : 'send failed', refs.send, 'send');
   } finally {
     refs.prompt.disabled = false;
@@ -337,6 +364,7 @@ async function playCurrentSignal(): Promise<void> {
   } catch (error) {
     cancelRecording();
     unlockReplay();
+    if (error instanceof ApiConnectionError || error instanceof TypeError) showConnectionError(error);
     reportStatus(error instanceof Error ? error.message : 'play failed', refs.playSignal, 'play signal');
   } finally {
     playPending = false;
@@ -351,9 +379,9 @@ async function requestPlayWhenReady(apiBase: string): Promise<Response> {
       body: JSON.stringify(signalStrip ? { soundDirection: signalStrip.sound() } : {})
     });
     if (response.ok) return response;
-    if (response.status === 405) throw new Error(DEBUG_UI ? 'HTTP 405: enter the NAS API URL above' : 'HTTP 405: no signal API');
-    const failure = (await response.json().catch(() => null)) as { error?: string } | null;
-    const error = failure?.error ?? `HTTP ${response.status}`;
+    const failure = await apiFailure(response);
+    if (failure instanceof ApiConnectionError) throw failure;
+    const error = failure.message;
     const replayWait = response.status === 429 ? /^Wait (\d+)s before replaying$/.exec(error) : null;
     if (!DEBUG_UI && replayWait && Date.now() + Number(replayWait[1]) * 1000 <= retryUntil) {
       const waitSeconds = Number(replayWait[1]);
@@ -495,11 +523,21 @@ function reportStatus(text: string, button: HTMLButtonElement, restoreLabel: str
 }
 
 function normalizedApiBase(): string {
-  return (debugRefs?.apiBase.value ?? initialApiBase).trim().replace(/\/+$/, '');
+  return normalizeApiBase(debugRefs?.apiBase.value ?? initialApiBase);
+}
+
+function showConnectionError(error: unknown): void {
+  const settings = document.querySelector<HTMLDetailsElement>('#connectionSettings') ?? debugRefs?.apiBase.closest('details');
+  if (settings) settings.open = true;
+  const status = document.querySelector('#connectionStatus') ?? debugRefs?.contactStatus;
+  if (status) status.textContent = error instanceof TypeError
+    ? 'Cannot reach the ALIVE API. Check its URL and that it allows this site to connect.'
+    : error instanceof Error ? error.message : 'Check the ALIVE API URL.';
+  (visitorApiBase ?? debugRefs?.apiBase)?.focus();
 }
 
 function requestApiBase(): string {
-  if (PROTOTYPE_MODE && signalStrip) return signalStrip.api();
+  if (PROTOTYPE_MODE && signalStrip) return normalizedApiBase() || signalStrip.api() || location.origin;
   const apiBase = normalizedApiBase();
   if (apiBase) localStorage.setItem('aliveApiBase', apiBase);
   // An explicit URL wins; otherwise the API lives at this page's own origin
