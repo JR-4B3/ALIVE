@@ -75,23 +75,3 @@ A `401` can mean public demo mode is off or an operator action lacks its token. 
 The firmware keeps at least 220 ms of silence between letters, uses 24 ms fades, and adds a one-second tail. The web decoder also uses letter spacing to resolve ambiguous low tones. The Wi-Fi sender polls every 2 seconds with Wi-Fi modem sleep on, reuses its HTTPS connection, and runs the amplifier clock only while it plays. It restarts itself after 3 minutes without a valid poll, and a 30-second watchdog resets it if a network call or audio write hangs. The API advertises playback duration and a replay deadline so the page does not enable the next play too early. Keep the firmware, API, and static page builds on matching revisions.
 
 After an update, run `sudo deploy/install.sh` again when the API changes, and republish `docs/` when the phone page changes. Back up `/etc/alive/api.env` and `/var/lib/alive`.
-
-## Battery runtime test
-
-Use one fully charged cell in its protected holder and regulated supply, with the ESP32, amplifier, speaker, Wi-Fi, and API configured exactly as they will be used. Keep USB and other external power disconnected during the run. The monitor needs a separate computer that stays on. If the computer can ping the ESP32 directly, use its IP address and no API token is needed:
-
-```bash
-python battery_runtime_monitor.py --host 192.0.2.10 --output battery-runs/baseline-1
-```
-
-The ESP32's IP address appears as `WiFi ready: ...` in its USB serial log. Confirm that ping works before unplugging USB. Keep the ESP32 on the same Wi-Fi network during the run, and check its IP again after the battery boot; DHCP may assign a different address. Ping proves network reachability, not that the API is working.
-
-If direct ping is unavailable, the monitor can instead read the API's existing `deviceOnline` field without sending device heartbeats itself. Set the API URL and the web/operator token in the monitor computer's environment. Keep the token out of command history and reports. For example, load it from a local private environment file, then run:
-
-```bash
-python battery_runtime_monitor.py --api-url https://api.example.com --output battery-runs/baseline-1
-```
-
-The monitor writes `battery-runs/baseline-1.csv` after every check and updates `battery-runs/baseline-1.json` with the current status. Leave it running, then switch on the battery. Wait for `Device first online` before leaving the test. Write down the switch-on time and make a few representative plays during the run. A continuous two-minute offline period is flagged as `offline_unverified`; the monitor continues so it can record a recovery. Once that happens, check whether the battery protection cut off, the ESP32 lost power, Wi-Fi failed, or the API went down. Stop the monitor with Ctrl-C after the physical check.
-
-The runtime estimate is between the first-online time and the last-online/first-offline times in the JSON report. In API mode, the monitor reads `/api/emitter/main/status`, which does not refresh device presence. `deviceOnline` stays true for up to 30 seconds after the last ESP32 poll, so API-mode times are accurate to about 30 seconds; the monitor checks every two seconds. In ping mode, an occasional lost packet or IP change can look like a power outage, so check any offline result against the hardware and Wi-Fi. Probe errors are logged separately and do not count as device death. The script does not measure current, voltage, cell capacity, or remaining charge; use a USB power meter or battery logger for those measurements. Keep the monitor computer awake for the whole test and use a new output prefix for each run. If the monitor stops early, restart it with the same `--output` and `--resume` to append to the run.

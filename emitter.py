@@ -190,11 +190,6 @@ def make_handler(state: ApiState):
                 state.current_emitter_message()
                 self._send_json({"status": "ok"})
                 return
-            if parsed.path == "/api/emitter/main/status":
-                # Operator view of device presence that, unlike polling, does not refresh it.
-                if self._authorized("ALIVE_WEB_TOKEN"):
-                    self._send_json(state.current_emitter_message())
-                return
             if parsed.path.startswith("/api/") and not self._authorized("ALIVE_WEB_TOKEN"):
                 return
             if parsed.path in {"/", "/index.html"}:
