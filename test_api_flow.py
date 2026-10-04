@@ -208,3 +208,39 @@ def test_health_endpoint_needs_no_token():
         finally:
             server.shutdown()
             server.server_close()
+
+
+def test_board_polls_are_logged_per_day_and_old_days_pruned(tmp_path):
+    state = ApiState("HELLO", state_file=tmp_path / "state.json")
+    folder = tmp_path / "device-polls"
+    folder.mkdir()
+    (folder / "2026-09-01.csv").write_text("old\n")
+    (folder / "2026-09-25.csv").write_text("recent\n")
+    with patch("emitter.time.time", return_value=1_791_115_200):  # 2026-10-04T12:00:00Z
+        state.device_command("70:AF:09:0D:AB:24", "123456", "9")
+        state.device_command("70:AF:09:0D:AB:24", "not-a-number", "1")
+        state.device_command("70:AF:09:0D:AB:24,x", "1", "1")
+        state.device_command()
+    assert (folder / "2026-10-04.csv").read_text() == (
+        "received_utc,board,uptime_ms,reset_reason\n"
+        "2026-10-04T12:00:00Z,70:AF:09:0D:AB:24,123456,9\n")
+    assert sorted(path.name for path in folder.iterdir()) == ["2026-09-25.csv", "2026-10-04.csv"]
+    assert state.current_emitter_message()["deviceOnline"] is True
+
+
+def test_device_poll_headers_reach_the_log_and_health_checks_do_not(tmp_path):
+    state = ApiState("HELLO", state_file=tmp_path / "state.json")
+    with patch.dict("os.environ", {"ALIVE_DEVICE_TOKEN": "device-secret"}):
+        server = QuietThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            urllib.request.urlopen(base + "/healthz", timeout=2).close()
+            urllib.request.urlopen(urllib.request.Request(base + "/api/emitter/main/current", headers={
+                "Authorization": "Bearer device-secret", "X-Alive-Board": "AC:27:6E:45:B9:4C",
+                "X-Alive-Uptime-Ms": "2000", "X-Alive-Reset": "1"}), timeout=2).close()
+        finally:
+            server.shutdown()
+            server.server_close()
+    rows = next((tmp_path / "device-polls").glob("*.csv")).read_text().splitlines()
+    assert len(rows) == 2 and rows[1].endswith(",AC:27:6E:45:B9:4C,2000,1")

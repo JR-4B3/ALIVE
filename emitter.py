@@ -7,6 +7,7 @@ import http.client
 import json
 import mimetypes
 import os
+import re
 import socket
 import ssl
 import subprocess
@@ -30,6 +31,8 @@ STATIC_PHONE_APP = Path(__file__).parent / "docs" / "index.html"
 RECEIVER_CAPTURES = Path.home() / ".local" / "state" / "alive" / "receiver-captures"
 # Boards stop polling while they play, and a message lasts up to 15 seconds.
 DEVICE_LEASE_SECONDS = 30
+# Per-board poll rows, one file per UTC day, used to time battery runtime.
+POLL_LOG_DAYS = 14
 
 
 def save_receiver_capture(data: bytes, message: str) -> str:
@@ -125,10 +128,33 @@ class ApiState:
         with self._lock:
             return self._current_message()
 
-    def device_command(self) -> dict[str, object]:
+    def device_command(self, board: str = "", uptime_ms: str = "", reset: str = "") -> dict[str, object]:
         with self._lock:
             self._device_last_seen_at = time.monotonic()
+            if re.fullmatch(r"[0-9A-F]{2}(:[0-9A-F]{2}){5}", board) and uptime_ms.isdigit() and reset.isdigit():
+                self._log_poll(f"{board},{uptime_ms},{reset}")
             return {"revision": self.reply_revision, "message": self.command_message}
+
+    def _log_poll(self, row: str) -> None:
+        """A board's last row is the moment it went quiet, e.g. its battery ran out."""
+        if self.state_file is None:
+            return
+        now = time.time()
+        folder = self.state_file.parent / "device-polls"
+        path = folder / time.strftime("%Y-%m-%d.csv", time.gmtime(now))
+        try:
+            if not path.exists():
+                folder.mkdir(parents=True, exist_ok=True)
+                oldest = time.strftime("%Y-%m-%d.csv", time.gmtime(now - POLL_LOG_DAYS * 86400))
+                for old in folder.glob("*.csv"):
+                    if old.name < oldest:
+                        old.unlink()
+                path.write_text("received_utc,board,uptime_ms,reset_reason\n", encoding="utf-8")
+            with path.open("a", encoding="utf-8") as file:
+                file.write(time.strftime("%Y-%m-%dT%H:%M:%SZ,", time.gmtime(now)) + row + "\n")
+        except OSError as exc:
+            # Polling must keep working even when the log cannot be written.
+            print(f"Could not log device poll: {exc}", flush=True)
 
     def _current_message(self) -> dict[str, object]:
         """Build a response while holding the state lock."""
@@ -183,7 +209,9 @@ def make_handler(state: ApiState):
             parsed = urlparse(self.path)
             if parsed.path == "/api/emitter/main/current":
                 if self._authorized("ALIVE_DEVICE_TOKEN"):
-                    self._send_json(state.device_command())
+                    self._send_json(state.device_command(
+                        self.headers.get("x-alive-board", ""), self.headers.get("x-alive-uptime-ms", ""),
+                        self.headers.get("x-alive-reset", "")))
                 return
             if parsed.path == "/healthz":
                 # Taking the state lock proves request handling is not wedged.
