@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import io
 import hmac
+import http.client
 import json
 import mimetypes
 import os
@@ -27,6 +28,8 @@ from reply_engine import (
 DEFAULT_MESSAGE = "WE ARE HERE"
 STATIC_PHONE_APP = Path(__file__).parent / "docs" / "index.html"
 RECEIVER_CAPTURES = Path.home() / ".local" / "state" / "alive" / "receiver-captures"
+# Boards stop polling while they play, and a message lasts up to 15 seconds.
+DEVICE_LEASE_SECONDS = 30
 
 
 def save_receiver_capture(data: bytes, message: str) -> str:
@@ -57,6 +60,9 @@ class ApiState:
         self.initial_message = normalize_reply(message) or "ALIVE"
         self.latest_reply = self.initial_message
         self.reply_revision = 0
+        # Text of the last Play command. Boards play this, so preparing a new
+        # reply cannot change a command that is already queued.
+        self.command_message = self.latest_reply
         self._lock = threading.Lock()
         self._device_last_seen_at = 0.0
         self._public_message_window_at = time.monotonic()
@@ -65,23 +71,29 @@ class ApiState:
         self._public_play_ready_at = 0.0
         self.state_file = state_file
         if state_file and state_file.is_file():
-            saved = json.loads(state_file.read_text(encoding="utf-8"))
-            if isinstance(saved, dict):
+            try:
+                saved = json.loads(state_file.read_text(encoding="utf-8"))
                 self.latest_reply = normalize_reply(str(saved.get("message", ""))) or self.latest_reply
                 self.reply_revision = max(0, int(saved.get("revision", 0)))
+            except (ValueError, TypeError, AttributeError) as exc:
+                # Boards treat a lower revision as a server reset, so starting
+                # fresh replays nothing. Keep the bad file for inspection.
+                kept = state_file.with_name(f"{state_file.name}.invalid-{time.time_ns()}")
+                os.replace(state_file, kept)
+                print(f"Ignored unreadable state ({exc}); kept it as {kept}", flush=True)
+            self.command_message = self.latest_reply
 
-    def _save_state(self) -> None:
+    def _save_state(self, message: str, revision: int) -> None:
+        """Write state before publishing it, so a failed write changes nothing."""
         if self.state_file is None:
             return
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_file.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"message": self.latest_reply, "revision": self.reply_revision}),
-                             encoding="utf-8")
+        with temporary.open("w", encoding="utf-8") as file:
+            json.dump({"message": message, "revision": revision}, file)
+            file.flush()
+            os.fsync(file.fileno())
         os.replace(temporary, self.state_file)
-
-    def note_device_poll(self) -> None:
-        with self._lock:
-            self._device_last_seen_at = time.monotonic()
 
     def reserve_public_message(self) -> int:
         """Bound public model usage even when callers bypass the browser UI."""
@@ -113,6 +125,11 @@ class ApiState:
         with self._lock:
             return self._current_message()
 
+    def device_command(self) -> dict[str, object]:
+        with self._lock:
+            self._device_last_seen_at = time.monotonic()
+            return {"revision": self.reply_revision, "message": self.command_message}
+
     def _current_message(self) -> dict[str, object]:
         """Build a response while holding the state lock."""
         return {
@@ -125,14 +142,14 @@ class ApiState:
             "replayAfterSeconds": max(0, round(self._public_play_ready_at - time.monotonic(), 3)),
             "active": False,
             "output": "esp32",
-            "deviceOnline": time.monotonic() - self._device_last_seen_at < 5,
+            "deviceOnline": time.monotonic() - self._device_last_seen_at < DEVICE_LEASE_SECONDS,
         }
 
     def set_reply(self, reply: str) -> dict[str, object]:
         cleaned = normalize_reply(reply) or "ALIVE"
         with self._lock:
+            self._save_state(cleaned, self.reply_revision)
             self.latest_reply = cleaned
-            self._save_state()
             return self._current_message()
 
     def reset_reply(self) -> dict[str, object]:
@@ -140,10 +157,11 @@ class ApiState:
 
     def play_current_once(self) -> dict[str, object]:
         with self._lock:
-            if time.monotonic() - self._device_last_seen_at >= 5:
+            if time.monotonic() - self._device_last_seen_at >= DEVICE_LEASE_SECONDS:
                 raise TimeoutError("ESP32 is offline; check its Wi-Fi connection")
+            self._save_state(self.latest_reply, self.reply_revision + 1)
             self.reply_revision += 1
-            self._save_state()
+            self.command_message = self.latest_reply
             return self._current_message()
 
 
@@ -158,13 +176,19 @@ class QuietThreadingHTTPServer(ThreadingHTTPServer):
 def make_handler(state: ApiState):
     class Handler(BaseHTTPRequestHandler):
         server_version = "ALIVEEmitter/0.4"
+        # Drop clients that stall mid-request instead of holding a thread forever.
+        timeout = 30
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/api/emitter/main/current":
                 if self._authorized("ALIVE_DEVICE_TOKEN"):
-                    state.note_device_poll()
-                    self._send_json(state.current_emitter_message())
+                    self._send_json(state.device_command())
+                return
+            if parsed.path == "/healthz":
+                # Taking the state lock proves request handling is not wedged.
+                state.current_emitter_message()
+                self._send_json({"status": "ok"})
                 return
             if parsed.path.startswith("/api/") and not self._authorized("ALIVE_WEB_TOKEN"):
                 return
@@ -410,6 +434,31 @@ def print_qr_hint(url: str) -> None:
     print(terminal_qr(url))
 
 
+def notify_systemd(message: str) -> None:
+    address = os.environ.get("NOTIFY_SOCKET", "")
+    if not address:
+        return
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+        sock.sendto(message.encode(), address)
+
+
+def feed_systemd_watchdog(port: int, interval: float) -> None:
+    """Pet systemd's watchdog only while this process still answers HTTP."""
+    while True:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            connection.request("GET", "/healthz")
+            if connection.getresponse().status == HTTPStatus.OK:
+                notify_systemd("WATCHDOG=1")
+        except OSError:
+            pass
+        finally:
+            connection.close()
+        time.sleep(interval)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="ALIVE Wi-Fi emitter API")
     parser.add_argument("--host", default="0.0.0.0")
@@ -435,6 +484,11 @@ def main() -> int:
     elif not args.http:
         print("[HTTPS] Local certificate unavailable; serving HTTP")
     print_qr_hint(url)
+    notify_systemd("READY=1")
+    watchdog_usec = int(os.environ.get("WATCHDOG_USEC", "0"))
+    if watchdog_usec and not https_active:
+        threading.Thread(target=feed_systemd_watchdog, args=(args.port, watchdog_usec / 3e6),
+                         daemon=True).start()
 
     try:
         server.serve_forever()
