@@ -354,6 +354,10 @@ void pollForMessage() {
         ? String(stations.sta[0].rssi) : String(-127));
   }
 #endif
+  // The API logs these per board to time battery runtime and spot brownouts.
+  http.addHeader("X-Alive-Board", WiFi.macAddress());
+  http.addHeader("X-Alive-Uptime-Ms", String(millis()));
+  http.addHeader("X-Alive-Reset", String(static_cast<int>(esp_reset_reason())));
   const int status = http.GET();
   if (status == HTTP_CODE_OK) {
     JsonDocument json;

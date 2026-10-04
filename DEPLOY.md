@@ -75,4 +75,14 @@ A `401` can mean public demo mode is off or an operator action lacks its token. 
 
 The firmware keeps at least 220 ms of silence between letters, uses 24 ms fades, and adds a one-second tail. The web decoder also uses letter spacing to resolve ambiguous low tones. The Wi-Fi sender polls every 2 seconds with Wi-Fi modem sleep on, reuses its HTTPS connection, and runs the amplifier clock only while it plays. It restarts itself after 3 minutes without a valid poll, and a 30-second watchdog resets it if a network call or audio write hangs. The API advertises playback duration and a replay deadline so the page does not enable the next play too early. Keep the firmware, API, and static page builds on matching revisions.
 
+## Measure battery runtime
+
+Each poll sends the board's MAC address, its uptime, and its last reset reason. The API appends one row per poll to `/var/lib/alive/device-polls/<UTC date>.csv` and keeps 14 days. To time a battery:
+
+1. Charge the battery, connect the board, and note the switch-on time.
+2. Leave it running until it stops. Do not open its serial port meanwhile, because that resets the board.
+3. Read its last row: `sudo grep -h <MAC> /var/lib/alive/device-polls/*.csv | tail -1`. Runtime is the switch-on time to that row, accurate to about 2 seconds, or 15 seconds if it was playing.
+
+Rows that simply stop mean the battery cut off. Uptime that keeps falling back near zero with reset reason `9` (brownout) means the voltage sagged and the board reboot-looped; the end of the last steady stretch is the useful runtime. Reason `1` is power-on, `3` a software restart, and `6` the task watchdog.
+
 After an update, run `sudo deploy/install.sh` again when the API changes, and republish `docs/` when the phone page changes. Back up `/etc/alive/api.env` and `/var/lib/alive`.
