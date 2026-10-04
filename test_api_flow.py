@@ -19,7 +19,7 @@ def test_esp32_duration_matches_audio_including_rounded_gaps():
 def test_public_replay_deadline_uses_firmware_duration():
     state = ApiState("HI")
     with patch("emitter.time.monotonic", return_value=1000):
-        state.note_device_poll()
+        state.device_command()
         assert state.reserve_public_play() == 0
         payload = state.play_current_once()
         assert payload["duration"] == 2.108
@@ -36,12 +36,12 @@ def test_wifi_command_persists_across_restart(tmp_path):
     state.set_reply("I AM HERE")
     assert state.current_emitter_message()["revision"] == 0
     assert state.current_emitter_message()["deviceOnline"] is False
-    state.note_device_poll()
+    state.device_command()
     assert state.play_current_once()["revision"] == 1
     restored = ApiState("HELLO", state_file=file)
     assert restored.current_emitter_message()["message"] == "I AM HERE"
     assert restored.current_emitter_message()["revision"] == 1
-    restored.note_device_poll()
+    restored.device_command()
     assert restored.play_current_once()["revision"] == 2
     assert restored.reset_reply()["message"] == "HELLO"
     assert ApiState("HELLO",
@@ -132,7 +132,7 @@ def test_public_exhibition_page_can_send_and_play_with_bounded_requests():
                 assert False, "Public LLM calls must be rate limited"
             except urllib.error.HTTPError as error:
                 assert error.code == 429
-            state.note_device_poll()
+            state.device_command()
             with post("/api/emitter/main/play") as response:
                 assert json.load(response)["revision"] == 1
             try:
@@ -149,3 +149,62 @@ def test_public_exhibition_page_can_send_and_play_with_bounded_requests():
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+
+def test_playing_board_stays_online_for_the_longest_message():
+    # A 12-letter reply plays for about 14 s, during which the board does not poll.
+    state = ApiState("ZZZZZZZZZZZZ")
+    with patch("emitter.time.monotonic", return_value=1000):
+        state.device_command()
+    with patch("emitter.time.monotonic", return_value=1015):
+        assert state.current_emitter_message()["deviceOnline"] is True
+        assert state.play_current_once()["revision"] == 1
+    with patch("emitter.time.monotonic", return_value=1031):
+        assert state.current_emitter_message()["deviceOnline"] is False
+
+
+def test_preparing_a_reply_does_not_change_a_queued_command():
+    state = ApiState("HELLO")
+    state.device_command()
+    state.play_current_once()
+    state.set_reply("HI")
+    assert state.device_command() == {"revision": 1, "message": "HELLO"}
+    state.play_current_once()
+    assert state.device_command() == {"revision": 2, "message": "HI"}
+
+
+def test_failed_save_publishes_nothing(tmp_path):
+    state = ApiState("HELLO", state_file=tmp_path / "state.json")
+    state.device_command()
+    with patch("emitter.os.replace", side_effect=OSError("disk full")):
+        for action in (state.play_current_once, lambda: state.set_reply("HI")):
+            try:
+                action()
+                assert False, "the save error must reach the caller"
+            except OSError:
+                pass
+    assert state.device_command() == {"revision": 0, "message": "HELLO"}
+    assert state.current_emitter_message()["message"] == "HELLO"
+
+
+def test_unreadable_state_is_kept_aside_and_startup_continues(tmp_path):
+    file = tmp_path / "state.json"
+    file.write_text("{not json", encoding="utf-8")
+    state = ApiState("HELLO", state_file=file)
+    assert state.device_command() == {"revision": 0, "message": "HELLO"}
+    kept = list(tmp_path.glob("state.json.invalid-*"))
+    assert len(kept) == 1 and kept[0].read_text(encoding="utf-8") == "{not json"
+
+
+def test_health_endpoint_needs_no_token():
+    state = ApiState("HELLO")
+    with patch.dict("os.environ", {"ALIVE_WEB_TOKEN": "web-secret"}):
+        server = QuietThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/healthz",
+                                        timeout=2) as response:
+                assert json.load(response) == {"status": "ok"}
+        finally:
+            server.shutdown()
+            server.server_close()

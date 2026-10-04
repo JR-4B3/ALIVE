@@ -24,5 +24,5 @@ for (const status of [401, 502]) {
 test('handles an interrupted upload without losing the local recording', async () => {
   const result = await uploadRecording(new ArrayBuffer(8), 'https://example.invalid', 'ABC', { authorization: 'Bearer test' },
     async () => { throw new TypeError('Network connection lost'); });
-  expect(result).toBe('NAS upload unavailable. The local WAV is ready.');
+  expect(result).toBe('Upload unavailable. The local WAV is ready.');
 });

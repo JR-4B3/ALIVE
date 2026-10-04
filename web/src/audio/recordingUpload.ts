@@ -13,10 +13,10 @@ export async function uploadRecording(
       method: 'POST', headers: { 'content-type': 'audio/wav', ...headers },
       body: wav, signal: controller.signal
     });
-    return response.ok ? 'Recording also saved to the NAS.' :
-      `NAS upload failed (HTTP ${response.status}). The local WAV is ready.`;
+    return response.ok ? 'Recording also saved to the API server.' :
+      `Upload failed (HTTP ${response.status}). The local WAV is ready.`;
   } catch {
-    return 'NAS upload unavailable. The local WAV is ready.';
+    return 'Upload unavailable. The local WAV is ready.';
   } finally {
     globalThis.clearTimeout(timer);
   }

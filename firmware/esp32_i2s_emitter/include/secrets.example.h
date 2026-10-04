@@ -6,7 +6,7 @@
 #define ALIVE_SERVER_URL "https://api.example.com"
 #define ALIVE_DEVICE_TOKEN "YOUR_SEPARATE_DEVICE_TOKEN"
 
-// For a NAS domain with a trusted certificate, add its CA certificate as a
+// For an API with a trusted certificate, add its CA certificate as a
 // PEM string here to verify the server during Wi-Fi polling. Keep the
 // multi-line string in a C++ variable, then define the macro used by main.cpp:
 // static constexpr char ALIVE_CA_PEM[] = R"PEM(-----BEGIN CERTIFICATE-----

@@ -1,0 +1,31 @@
+[Unit]
+Description=ALIVE API
+Wants=network-online.target
+After=network-online.target
+# Keep retrying after repeated failures instead of giving up.
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+DynamicUser=yes
+StateDirectory=alive
+WorkingDirectory=/opt/alive
+EnvironmentFile=/etc/alive/api.env
+Environment=ALIVE_STATE_FILE=/var/lib/alive/state.json
+# Receiver recordings are written below $HOME/.local/state/alive.
+Environment=HOME=/var/lib/alive
+ExecStart=/usr/bin/python3 -u /opt/alive/emitter.py --host 127.0.0.1 --port 8765 --http
+# emitter.py sends WATCHDOG=1 only after its own /healthz request succeeds,
+# so a hung server is killed and restarted like a crashed one.
+WatchdogSec=30
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
