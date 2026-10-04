@@ -8,7 +8,7 @@ phone page -> HTTPS API -> ESP32 over Wi-Fi -> amplifier -> speaker
      +-------------- phone microphone -------------+
 ```
 
-The phone does the decoding locally. The API creates replies and queues a one-time play command. See [the deployment guide](NAS_SETUP.md) for the server, network, firmware, and publishing steps. The guide uses placeholders for every deployment-specific address.
+The phone does the decoding locally. The API creates replies and queues a one-time play command. See [the deployment guide](DEPLOY.md) for the server, network, firmware, and publishing steps. The guide uses placeholders for every deployment-specific address.
 
 ## Build and run
 
@@ -23,7 +23,7 @@ bun run build:debug
 
 The builds write to `docs/` and `docs/debug/`. Publish `docs/` with any static host that serves the debug subdirectory too. The visitor page has translation, microphone, contact controls, and API connection settings. The debug page adds signal diagnostics, operator settings, and an optional recording download or upload.
 
-The page accepts an API URL through `?api=https%3A%2F%2Fapi.example.com` or its connection settings. It saves the URL in that browser's local storage. For a public installation, generate a visitor link or QR code with the URL parameter, or set `VITE_ALIVE_API_URL` when building both pages. Do not commit a deployment address. When a page is served directly by the API, same-origin requests work without an override. GitHub Pages only serves the frontend; it cannot handle API requests. The API must allow the static site's exact origin with `ALIVE_WEB_ORIGIN`.
+The published pages call the API named by `PUBLISHED_API` in `web/vite.config.ts`, so the plain GitHub Pages link works on any phone. A link can name another API with `?api=https%3A%2F%2Fapi.example.com`. The debug page also has an API URL field, which it remembers. Under `vite dev`, requests go to the page's own origin. The API must allow the static site's exact origin with `ALIVE_WEB_ORIGIN`.
 
 For local development, `python emitter.py` serves the app and Wi-Fi API. `python debug_host.py` can serve the debug page and proxy API requests. Use `python emitter.py --help` and `python debug_host.py --help` for options. Set `OPENAI_API_KEY` in the environment or an ignored `.env` file to generate replies. The default model can be overridden with `ALIVE_OPENAI_MODEL`.
 
@@ -39,7 +39,7 @@ The ESP32-C3 and MAX98357 connections are shown in [the wiring diagram](docs/ali
 - `emitter.py`, `reply_engine.py`: API, one-time play state, and reply handling.
 - `firmware/esp32_i2s_emitter/`: hardware sender.
 - `docs/`: built static pages and wiring diagram.
-- `NAS_SETUP.md`: reusable deployment and test guide.
+- `DEPLOY.md`: deployment and test guide.
 
 ## Checks
 

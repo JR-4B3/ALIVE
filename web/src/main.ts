@@ -9,6 +9,7 @@ import { normalizeApiBase, apiFailure, ApiConnectionError } from './api/connecti
 // Set at build time: `bun run build` publishes the clean visitor page to docs/,
 // `bun run build:debug` keeps every diagnostic control for local testing.
 declare const __DEBUG_UI__: boolean;
+declare const __PUBLISHED_API__: string;
 const DEBUG_UI = __DEBUG_UI__;
 
 if (DEBUG_UI) { document.title = 'ALIVE Receiver · debug'; document.body.classList.add('debug-ui'); }
@@ -62,7 +63,7 @@ app.innerHTML = `
         <details class="min-w-0 border-t border-neutral-700 pt-2 text-sm text-neutral-400">
           <summary class="cursor-pointer uppercase tracking-[0.1em]">connection settings</summary>
           <label class="mt-3 grid min-w-0 grid-cols-1 gap-1 uppercase tracking-[0.1em]" for="apiBase">
-            NAS API URL
+            API URL
             <input id="apiBase" class="min-h-11 min-w-0 w-full px-3 text-lg normal-case tracking-normal" type="url" placeholder="https://api.example.com">
           </label>
           <label class="mt-3 grid min-w-0 grid-cols-1 gap-1 uppercase tracking-[0.1em]" for="apiToken">
@@ -123,7 +124,10 @@ const debugRefs = DEBUG_UI ? {
 } : null;
 
 const params = new URLSearchParams(location.search);
-let initialApiBase = params.get('api') ?? (PROTOTYPE_MODE ? '' : localStorage.getItem('aliveApiBase') || import.meta.env.VITE_ALIVE_API_URL || '');
+// A link or a manually saved URL wins; otherwise the published API. The
+// prototype server proxies /api on its own origin.
+let initialApiBase = params.get('api')?.trim() || (PROTOTYPE_MODE ? '' :
+  localStorage.getItem('aliveApiBase') || __PUBLISHED_API__);
 const initialApiToken = params.get('token') ?? (PROTOTYPE_MODE ? '' : sessionStorage.getItem('aliveApiToken') ?? '');
 if (debugRefs) {
   debugRefs.apiBase.value = initialApiBase;
@@ -275,7 +279,9 @@ async function sendContactMessage(): Promise<void> {
     const response = await fetch(`${apiBase}/api/message`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...apiAuthHeaders() },
-      body: JSON.stringify({ message })
+      body: JSON.stringify({ message }),
+      // The API gives the reply model 12 seconds before answering with an error.
+      signal: AbortSignal.timeout(20000)
     });
     if (!response.ok) {
       throw await apiFailure(response);
@@ -359,7 +365,7 @@ async function playCurrentSignal(): Promise<void> {
     }
     if ((micActive || signalStrip?.remoteActive()) && payload.duration) decoder.setCaptureDuration(performance.now(), payload.duration);
     setContactStatus('ESP32 signal queued');
-    // Match the NAS replay deadline, including compatibility with older NAS builds.
+    // Match the API's replay deadline; older API builds only report the duration.
     lockReplay(Math.max(payload.duration ?? 0, payload.replayAfterSeconds ?? ((payload.duration ?? 0) + 1)));
   } catch (error) {
     cancelRecording();
@@ -376,20 +382,21 @@ async function requestPlayWhenReady(apiBase: string): Promise<Response> {
   while (true) {
     const response = await fetch(`${apiBase}/api/emitter/main/play`, {
       method: 'POST', headers: { ...apiAuthHeaders(), 'content-type': 'application/json' },
-      body: JSON.stringify(signalStrip ? { soundDirection: signalStrip.sound() } : {})
+      body: JSON.stringify(signalStrip ? { soundDirection: signalStrip.sound() } : {}),
+      signal: AbortSignal.timeout(8000)
     });
     if (response.ok) return response;
     const failure = await apiFailure(response);
     if (failure instanceof ApiConnectionError) throw failure;
     const error = failure.message;
     const replayWait = response.status === 429 ? /^Wait (\d+)s before replaying$/.exec(error) : null;
-    if (!DEBUG_UI && replayWait && Date.now() + Number(replayWait[1]) * 1000 <= retryUntil) {
+    if (replayWait && Date.now() + Number(replayWait[1]) * 1000 <= retryUntil) {
       const waitSeconds = Number(replayWait[1]);
       lockReplay(waitSeconds);
       await new Promise<void>((resolve) => window.setTimeout(resolve, waitSeconds * 1000));
       continue;
     }
-    if (DEBUG_UI || response.status !== 503 || !error.startsWith('ESP32 is offline') || Date.now() >= retryUntil) {
+    if (response.status !== 503 || !error.startsWith('ESP32 is offline') || Date.now() >= retryUntil) {
       throw new Error(error);
     }
     showPlayLoading();
@@ -539,9 +546,9 @@ function showConnectionError(error: unknown): void {
 function requestApiBase(): string {
   if (PROTOTYPE_MODE && signalStrip) return normalizedApiBase() || signalStrip.api() || location.origin;
   const apiBase = normalizedApiBase();
-  if (apiBase) localStorage.setItem('aliveApiBase', apiBase);
-  // An explicit URL wins; otherwise the API lives at this page's own origin
-  // (API container, local development server, or debug host proxy).
+  if (DEBUG_UI) localStorage.setItem('aliveApiBase', apiBase);
+  // Without a URL the API lives at this page's own origin (local development
+  // server or the debug host's /api proxy).
   return apiBase || location.origin;
 }
 
