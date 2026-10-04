@@ -63,6 +63,8 @@ def main() -> int:
                         help="seconds between checks (default: 2)")
     parser.add_argument("--offline-seconds", type=float, default=120.0,
                         help="sustained offline period to flag (default: 120)")
+    parser.add_argument("--resume", action="store_true",
+                        help="append to an existing run after moving the files")
     args = parser.parse_args()
     if args.host:
         try:
@@ -74,12 +76,15 @@ def main() -> int:
     if args.interval <= 0 or args.offline_seconds <= 0:
         parser.error("interval and offline-seconds must be positive")
 
-    endpoint = args.api_url.rstrip("/") + "/api/emitter/main/current" if not args.host else None
+    endpoint = args.api_url.rstrip("/") + "/api/emitter/main/status" if not args.host else None
     token = os.environ.get("ALIVE_WEB_TOKEN", "")
     csv_path = args.output.with_suffix(".csv")
     json_path = args.output.with_suffix(".json")
     csv_path.parent.mkdir(parents=True, exist_ok=True)
-    if csv_path.exists() or json_path.exists():
+    if args.resume:
+        if not csv_path.is_file() or not json_path.is_file():
+            parser.error("--resume requires both existing .csv and .json files")
+    elif csv_path.exists() or json_path.exists():
         parser.error("output files already exist; choose a new --output for this run")
 
     summary = {
@@ -100,12 +105,35 @@ def main() -> int:
     first_online_mono = None
     offline_mono = None
     last_summary_write = 0.0
+    if args.resume:
+        try:
+            summary = json.loads(json_path.read_text())
+            if summary.get("method") != ("ping" if args.host else "api_device_online"):
+                parser.error("saved monitor method differs from requested method")
+            if summary.get("target") != (args.host if args.host else args.api_url):
+                parser.error("saved monitor target differs from requested target")
+            monitor_age = (datetime.now(timezone.utc) -
+                           datetime.fromisoformat(summary["monitor_started_utc"])).total_seconds()
+            started_mono -= monitor_age
+            first_online = summary.get("first_online_utc")
+            if first_online:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(first_online)).total_seconds()
+                first_online_mono = time.monotonic() - age
+            first_offline = summary.get("first_offline_utc")
+            if first_offline and summary.get("status") in ("offline_pending", "offline_unverified"):
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(first_offline)).total_seconds()
+                offline_mono = time.monotonic() - age
+            summary["monitor_resumed_utc"] = utc_now()
+            summary["resume_count"] = summary.get("resume_count", 0) + 1
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            parser.error(f"could not resume saved run: {exc}")
     write_summary(json_path, summary)
-    print(f"Monitor armed: {csv_path} and {json_path}", flush=True)
+    print(f"Monitor {'resumed' if args.resume else 'armed'}: {csv_path} and {json_path}", flush=True)
 
-    with csv_path.open("x", newline="") as stream:
+    with csv_path.open("a" if args.resume else "x", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["utc", "monitor_elapsed_seconds", "device_online", "error"])
+        if not args.resume:
+            writer.writerow(["utc", "monitor_elapsed_seconds", "device_online", "error"])
         stream.flush()
         try:
             while True:
