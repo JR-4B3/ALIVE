@@ -5,15 +5,6 @@ import urllib.request
 from unittest.mock import patch
 
 from emitter import ApiState, QuietThreadingHTTPServer, make_handler
-from reply_engine import signal_duration_seconds
-
-
-def test_esp32_duration_matches_audio_including_rounded_gaps():
-    # HI: 2 * 220 ms tones + 293/325 ms gaps + 50 ms lead + 1000 ms tail.
-    assert signal_duration_seconds("HI") == 2.108
-    # The short A gap is clamped to 220 ms for reliable microphone decoding.
-    assert signal_duration_seconds("A") == 1.49
-    assert signal_duration_seconds("A A") == 3.19
 
 
 def test_public_replay_deadline_uses_firmware_duration():
@@ -22,11 +13,11 @@ def test_public_replay_deadline_uses_firmware_duration():
         state.device_command()
         assert state.reserve_public_play() == 0
         payload = state.play_current_once()
-        assert payload["duration"] == 2.108
-        assert payload["replayAfterSeconds"] == 2.608
-    with patch("emitter.time.monotonic", return_value=1002.60):
+        assert payload["duration"] == 3.53
+        assert payload["replayAfterSeconds"] == 4.03
+    with patch("emitter.time.monotonic", return_value=1004.02):
         assert state.reserve_public_play() == 1
-    with patch("emitter.time.monotonic", return_value=1002.61):
+    with patch("emitter.time.monotonic", return_value=1004.04):
         assert state.reserve_public_play() == 0
 
 

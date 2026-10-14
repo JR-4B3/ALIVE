@@ -1,6 +1,7 @@
 import './styles.css';
 import { SignalLevelTracker } from './sensing/signalLevelTracker';
-import { TranslationDecoder } from './sensing/translationDecoder';
+import { BeaconDecoder } from './sensing/beaconDecoder';
+import { mountSignalStrip } from './signalStrip';
 import { encodeRecording } from './audio/recording';
 import { uploadRecording } from './audio/recordingUpload';
 import type { ReceiverStatus } from './types';
@@ -11,7 +12,7 @@ declare const __DEBUG_UI__: boolean;
 declare const __PUBLISHED_API__: string;
 const DEBUG_UI = __DEBUG_UI__;
 
-if (DEBUG_UI) document.title = 'ALIVE Receiver · debug';
+if (DEBUG_UI) { document.title = 'ALIVE Receiver · debug'; document.body.classList.add('debug-ui'); }
 
 const app = requiredElement<HTMLDivElement>('#app');
 app.innerHTML = `
@@ -27,10 +28,16 @@ app.innerHTML = `
       <div class="flex min-h-48 flex-1 items-center justify-center px-4 py-8">
         <div id="message" class="w-full break-words text-center font-mono text-4xl leading-tight sm:text-6xl">---</div>
       </div>
+      <button id="mic" type="button" class="mic-toggle" aria-label="Enable microphone" aria-pressed="false" title="Enable microphone">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <rect x="9" y="3" width="6" height="12" rx="3" />
+          <path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v3M8 21h8" />
+          <path class="mic-off-cross" d="M3 3l18 18" />
+        </svg>
+      </button>
     </section>
 
     <section class="grid min-w-0 grid-cols-1 gap-3">
-      <button id="mic" class="min-h-14 px-4 text-lg uppercase tracking-[0.12em]">enable microphone</button>
       <form id="contactForm" class="grid min-w-0 grid-cols-1 gap-3 border border-white px-3 py-3">
         <div class="flex min-w-0 items-center gap-2">
           <div class="shrink-0 text-sm uppercase tracking-[0.12em] text-neutral-400">contact</div>
@@ -71,6 +78,10 @@ app.innerHTML = `
   </main>
 `;
 
+// Visitors get the spectrogram layout. The debug page keeps its scrolling
+// diagnostics layout.
+const signalStrip = DEBUG_UI ? null : mountSignalStrip();
+
 const refs = {
   translationState: requiredElement<HTMLDivElement>('#translationState'),
   message: requiredElement<HTMLDivElement>('#message'),
@@ -108,7 +119,7 @@ if (debugRefs) {
 }
 
 const levels = new SignalLevelTracker();
-const decoder = new TranslationDecoder();
+const decoder = new BeaconDecoder();
 let levelSnapshot = levels.snapshot();
 let translationSnapshot = decoder.snapshot();
 let audioCtx: AudioContext | null = null;
@@ -172,16 +183,10 @@ async function startMicrophone(): Promise<void> {
       }
       const nowMs = performance.now();
       levelSnapshot = levels.process(input, nowMs);
-      translationSnapshot = decoder.process(
-        input,
-        audioCtx.sampleRate,
-        levelSnapshot.levelDb,
-        levelSnapshot.noiseFloorDb,
-        audioCtx.currentTime,
-        nowMs
-      );
+      translationSnapshot = decoder.process(input, audioCtx.sampleRate);
       render();
     };
+    signalStrip?.connect(sourceNode);
     sourceNode.connect(processor);
     processor.connect(silentNode).connect(audioCtx.destination);
     await audioCtx.resume();
@@ -189,7 +194,6 @@ async function startMicrophone(): Promise<void> {
     levels.startCalibration(performance.now());
     levelSnapshot = levels.snapshot();
     translationSnapshot = decoder.reset('decoded message will appear here');
-    refs.mic.textContent = 'disable microphone';
     renderStatus('calibrating');
     render();
   } catch (error) {
@@ -200,6 +204,7 @@ async function startMicrophone(): Promise<void> {
 
 async function stopMicrophone(): Promise<void> {
   cancelRecording();
+  signalStrip?.stop();
   processor?.disconnect();
   sourceNode?.disconnect();
   silentNode?.disconnect();
@@ -213,7 +218,6 @@ async function stopMicrophone(): Promise<void> {
   micActive = false;
   levels.stop();
   levelSnapshot = levels.snapshot();
-  refs.mic.textContent = 'enable microphone';
   render();
 }
 
@@ -312,7 +316,6 @@ async function playCurrentSignal(): Promise<void> {
         recording.timer = window.setTimeout(() => void saveRecording(), Math.min(23, (payload.duration ?? 20) + 1.5) * 1000);
       }
     }
-    if (micActive && payload.duration) decoder.setCaptureDuration(performance.now(), payload.duration);
     setContactStatus('ESP32 signal queued');
     // Match the API's replay deadline; older API builds only report the duration.
     lockReplay(Math.max(payload.duration ?? 0, payload.replayAfterSeconds ?? ((payload.duration ?? 0) + 1)));
@@ -428,6 +431,10 @@ function unlockReplay(): void {
 }
 
 function render(): void {
+  refs.mic.dataset.active = String(micActive);
+  refs.mic.setAttribute('aria-pressed', String(micActive));
+  refs.mic.setAttribute('aria-label', micActive ? 'Disable microphone' : 'Enable microphone');
+  refs.mic.title = micActive ? 'Disable microphone' : 'Enable microphone';
   refs.translationState.textContent = `${translationSnapshot.title} · ${translationSnapshot.verdict}`;
   refs.message.textContent = translationSnapshot.message;
   if (DEBUG_UI) {

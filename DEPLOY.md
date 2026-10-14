@@ -13,7 +13,7 @@ The phone and ESP32 may use separate networks, but both must reach the public AP
 
 ## Publish the phone page
 
-Build the visitor and debug pages from `web/` with `bun run build` and `bun run build:debug`. Publish `docs/` on a static HTTPS host. The visitor page has no connection settings; pass the public API base URL in the `api` query parameter of the visitor link or a privately generated QR code. It is saved in that browser after the first request. A new browser needs the parameter in its link. The debug page also has a manual API URL field and recording controls. Its local WAV download remains available if an optional API upload fails.
+Build the visitor and debug pages from `web/` with `bun run build` and `bun run build:debug`. Publish `docs/` on a static HTTPS host. The visitor page has no connection settings. It calls `PUBLISHED_API` from `web/vite.config.ts`, unless the link names another API base URL in its `api` query parameter. The debug page also has a manual API URL field and recording controls. Its local WAV download remains available if an optional API upload fails.
 
 Set `ALIVE_WEB_ORIGIN` to the page's exact origin, such as `https://site.example`, without a path or trailing slash. Neither page should contain an access token. In public demo mode, visitors can send short messages and request playback without logging in. Message requests are limited to one every 10 seconds and 300 per rolling 24 hours, and playback requests cannot overlap. Device and operator endpoints use separate tokens.
 
@@ -67,12 +67,12 @@ Power the ESP32 from a suitable USB supply for operation. It polls the public AP
 
 1. Confirm that `alive-api` and Tailscale Funnel are running.
 2. Power the ESP32 and wait for it to join Wi-Fi and poll the API.
-3. Open the visitor link with its `api` parameter on a phone, enable the microphone, send a short message, then press **Play signal** once. Hold the phone near the speaker and observe the translation.
+3. Open the visitor link on a phone, enable the microphone, send a short message, then press **Play signal** once. The reply is inaudible. Watch for the chirps in the top part of the spectrogram, above the 17.5 kHz line, and for the decoded reply in the translation.
 4. Repeat with the phone on a separate network to confirm public access.
 
-A `401` can mean public demo mode is off or an operator action lacks its token. For **device offline**, check the ESP32 network, API URL, token, CA certificate, and polling. For a fetch or CORS error, check HTTPS and `ALIVE_WEB_ORIGIN`. If audio plays but letters are missed, check speaker level, phone placement, and room noise; use a diagnostic recording from the debug page.
+A `401` can mean public demo mode is off or an operator action lacks its token. For **device offline**, check the ESP32 network, API URL, token, CA certificate, and polling. For a fetch or CORS error, check HTTPS and `ALIVE_WEB_ORIGIN`. If chirps show on the spectrogram but letters are missed, check speaker level, phone placement, and room noise; use a diagnostic recording from the debug page. Only an iPhone 13 Pro has been tested so far; other phones may filter frequencies near 20 kHz.
 
-The firmware keeps at least 220 ms of silence between letters, uses 24 ms fades, and adds a one-second tail. The web decoder also uses letter spacing to resolve ambiguous low tones. The Wi-Fi sender polls every 2 seconds with Wi-Fi modem sleep on, reuses its HTTPS connection, and runs the amplifier clock only while it plays. It restarts itself after 3 minutes without a valid poll, and a 30-second watchdog resets it if a network call or audio write hangs. The API advertises playback duration and a replay deadline so the page does not enable the next play too early. Keep the firmware, API, and static page builds on matching revisions.
+Each letter is a 360 ms chirp that falls by 48 Hz around its own center frequency. Centers start at 18,450 Hz for A and are 64 Hz apart, with space at 20,114 Hz. Two 18,200 Hz sync chirps open a message and one closes it, with 180 ms of silence after each chirp. A 12-character reply lasts 8.93 seconds. The codec has framing but no checksum. The Wi-Fi sender polls every 2 seconds with Wi-Fi modem sleep on, reuses its HTTPS connection, and runs the amplifier clock only while it plays. It restarts itself after 3 minutes without a valid poll, and a 30-second watchdog resets it if a network call or audio write hangs. The API advertises playback duration and a replay deadline so the page does not enable the next play too early. Keep the firmware, API, and static page builds on matching revisions.
 
 ## Measure battery runtime
 

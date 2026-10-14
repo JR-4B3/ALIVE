@@ -5,9 +5,9 @@
 #include <WiFiClientSecure.h>
 #include <driver/i2s.h>
 #include <esp_task_wdt.h>
-#include <math.h>
 #include <time.h>
 
+#include "beacon_voice.h"
 #include "secrets.h"
 
 // ESP32-C3 Super Mini -> MAX98357. Change these if your board layout needs it.
@@ -22,37 +22,11 @@ static_assert(SAMPLE_RATE == 8000 || SAMPLE_RATE == 16000 ||
               SAMPLE_RATE == 32000 || SAMPLE_RATE == 44100 ||
               SAMPLE_RATE == 48000 || SAMPLE_RATE == 88200 ||
               SAMPLE_RATE == 96000, "Unsupported MAX98357 sample rate");
-constexpr float GAP_SCALE = 0.65f;
-// Leave time for room reflections and the receiver's 4096-sample window to clear.
-constexpr uint32_t MIN_GAP_MS = 220;
 constexpr uint32_t POLL_MS = 2000;
 constexpr uint32_t WIFI_JOIN_TIMEOUT_MS = 15000;
 constexpr uint32_t RESTART_AFTER_MS = 180000;
 constexpr uint32_t WATCHDOG_S = 30;
-// GAIN stays open. 1200 is +6 dB over 600, with ample digital headroom.
-constexpr int16_t AMPLITUDE = 1200;
-constexpr uint32_t MESSAGE_BURST_FRAMES = SAMPLE_RATE * 220 / 1000;
-constexpr uint32_t MESSAGE_FADE_FRAMES = SAMPLE_RATE * 24 / 1000;
-constexpr uint32_t MESSAGE_SINE_FRAMES = SAMPLE_RATE / 100;
-enum class MessageSegment { Idle, Lead, Tone, Gap, Pause };
-#if defined(ALIVE_MESSAGE_TEST)
-MessageSegment messageSegment = MessageSegment::Lead;
-uint32_t messageSegmentLength = SAMPLE_RATE * 2;
-#else
-MessageSegment messageSegment = MessageSegment::Idle;
-uint32_t messageSegmentLength = 0;
-char serialLine[32] = {};
-size_t serialLineLength = 0;
-#endif
-char messageText[21] = "HELLO";
-uint32_t messageSegmentFrame = 0;
-uint32_t messageGapFrames = 0;
-size_t messageLetterIndex = 0;
-uint16_t messageLowStep = 0;
-uint16_t messageHighStep = 0;
-uint16_t messageLowPhase = 0;
-uint16_t messageHighPhase = 0;
-int16_t messageSine[MESSAGE_SINE_FRAMES];
+static_assert(SAMPLE_RATE == beacon::rate, "The chirp tables assume 48 kHz");
 
 long lastRevision = -1;
 uint32_t lastPollAt = 0;
@@ -62,136 +36,55 @@ uint32_t wifiJoinStartedAt = 0;
 WiFiClientSecure pollClient;
 HTTPClient pollHttp;
 
-bool frequenciesFor(char ch, float &low, float &high, uint16_t &rawGapMs) {
-  if (ch == ' ') {
-    low = 1000; high = 2600; rawGapMs = 1600;
-    return true;
-  }
-  if (ch < 'A' || ch > 'Z') return false;
-  const uint8_t index = ch - 'A';
-  low = 400 + (index / 4) * 100;
-  high = 2000 + (index % 4) * 300;
-  rawGapMs = 100 + index * 50;
-  return true;
-}
-
-void startMessageLetter() {
-  float low = 0;
-  float high = 0;
-  uint16_t rawGapMs = 0;
-  frequenciesFor(messageText[messageLetterIndex], low, high, rawGapMs);
-  messageLowStep = static_cast<uint16_t>(low / 100);
-  messageHighStep = static_cast<uint16_t>(high / 100);
-  messageGapFrames = SAMPLE_RATE *
-      max<uint32_t>(MIN_GAP_MS, lroundf(rawGapMs * GAP_SCALE)) / 1000;
-  messageLowPhase = 0;
-  messageHighPhase = 0;
-  messageSegment = MessageSegment::Tone;
-  messageSegmentFrame = 0;
-  messageSegmentLength = MESSAGE_BURST_FRAMES;
-}
-
-void advanceMessageSegment() {
-  if (messageSegment == MessageSegment::Lead) {
-    startMessageLetter();
-    return;
-  } else if (messageSegment == MessageSegment::Tone) {
-    messageSegment = MessageSegment::Gap;
-    messageSegmentLength = messageGapFrames;
-  } else if (messageSegment == MessageSegment::Gap) {
-    if (++messageLetterIndex < strlen(messageText)) {
-      startMessageLetter();
-      return;
-    }
-    messageSegment = MessageSegment::Pause;
-    // Trade trailing silence for clearer letter separation. For API replies
-    // (<=12 characters), total playback still fits its legacy duration budget.
-    messageSegmentLength = SAMPLE_RATE;
-  } else if (messageSegment == MessageSegment::Pause) {
-#if defined(ALIVE_MESSAGE_TEST)
-    messageLetterIndex = 0;
-    startMessageLetter();
-    return;
-#else
-    messageSegment = MessageSegment::Idle;
-    messageSegmentLength = 0;
-    Serial.println("DONE");
-#endif
-  }
-  messageSegmentFrame = 0;
-}
-
-#if defined(ALIVE_SERIAL_MESSAGE)
-void receiveSerialCommand() {
-  while (Serial.available()) {
-    const char ch = static_cast<char>(Serial.read());
-    if (ch == '\r') continue;
-    if (ch != '\n') {
-      if (serialLineLength < sizeof(serialLine) - 1)
-        serialLine[serialLineLength++] = ch;
-      continue;
-    }
-    serialLine[serialLineLength] = '\0';
-    if (strncmp(serialLine, "PLAY ", 5) == 0) {
-      size_t count = 0;
-      for (size_t i = 5; i < serialLineLength && count < 20; ++i) {
-        const char letter = serialLine[i];
-        if (letter >= 'A' && letter <= 'Z') messageText[count++] = letter;
-        else if (letter == ' ' && count > 0) messageText[count++] = letter;
-      }
-      while (count > 0 && messageText[count - 1] == ' ') --count;
-      messageText[count] = '\0';
-      if (count > 0) {
-        messageLetterIndex = 0;
-        messageSegment = MessageSegment::Lead;
-        messageSegmentFrame = 0;
-        messageSegmentLength = SAMPLE_RATE / 4;
-        Serial.printf("QUEUED %s\n", messageText);
-      }
-    }
-    serialLineLength = 0;
-  }
-}
-#endif
-
 // Returns false when the amplifier stream fails, so playback stops instead of
 // reporting a message it never sent.
-bool writeContinuousMessageAudio() {
-  int16_t samples[512];
-  bool startedMessage = false;
-  for (uint32_t i = 0; i < 256; ++i) {
-    if (messageSegment != MessageSegment::Idle &&
-        messageSegmentFrame >= messageSegmentLength) {
-      advanceMessageSegment();
-      if (messageSegment == MessageSegment::Tone && messageLetterIndex == 0)
-        startedMessage = true;
-    }
-    int16_t sample = 0;
-    if (messageSegment == MessageSegment::Tone) {
-      const uint32_t fade = min(MESSAGE_FADE_FRAMES,
-                                min(messageSegmentFrame,
-                                    MESSAGE_BURST_FRAMES - messageSegmentFrame - 1));
-      const int32_t mixed = messageSine[messageLowPhase] * 53 +
-                            messageSine[messageHighPhase] * 47;
-      sample = mixed * fade / (100 * MESSAGE_FADE_FRAMES);
-      messageLowPhase = (messageLowPhase + messageLowStep) % MESSAGE_SINE_FRAMES;
-      messageHighPhase = (messageHighPhase + messageHighStep) % MESSAGE_SINE_FRAMES;
-    }
-    samples[i * 2] = sample;
-    samples[i * 2 + 1] = sample;
-    ++messageSegmentFrame;
-  }
+bool writeFrames(const int16_t *samples, size_t frames) {
   size_t written = 0;
-  const esp_err_t error = i2s_write(I2S_PORT, samples, sizeof(samples),
-                                   &written, pdMS_TO_TICKS(1000));
+  // Interleaved left/right samples keep the I2S frame unambiguous for the amp.
+  const size_t bytes = frames * 2 * sizeof(int16_t);
+  const esp_err_t error = i2s_write(I2S_PORT, samples, bytes, &written, pdMS_TO_TICKS(1000));
   esp_task_wdt_reset();
-  if (error != ESP_OK || written != sizeof(samples)) {
+  if (error != ESP_OK || written != bytes) {
     Serial.printf("I2S write failed: error=%d, bytes=%u\n", error,
                   static_cast<unsigned>(written));
     return false;
   }
-  if (startedMessage) Serial.printf("START %s\n", messageText);
   return true;
+}
+
+bool writeSilence(uint32_t durationMs) {
+  static const int16_t zeros[512] = {};
+  for (uint32_t remaining = SAMPLE_RATE * durationMs / 1000; remaining > 0;) {
+    const uint32_t count = min<uint32_t>(remaining, 256);
+    if (!writeFrames(zeros, count)) return false;
+    remaining -= count;
+  }
+  return true;
+}
+
+// One 360 ms chirp. Symbol -1 is the sync chirp that frames a message.
+bool writeChirp(int symbol) {
+  beacon::Voice voice;
+  voice.reset(symbol);
+  int16_t samples[512];
+  for (uint32_t frame = 0; frame < beacon::frames; frame += 256) {
+    const uint32_t count = min<uint32_t>(256, beacon::frames - frame);
+    for (uint32_t i = 0; i < count; ++i) samples[i * 2] = samples[i * 2 + 1] = voice.next();
+    if (!writeFrames(samples, count)) return false;
+  }
+  return true;
+}
+
+// Two sync chirps, one chirp per character, and a closing sync chirp. The
+// timing must match signal_duration_seconds() in reply_engine.py.
+bool writeMessage(const char *text) {
+  if (!writeSilence(150) || !writeChirp(-1) || !writeSilence(180) ||
+      !writeChirp(-1) || !writeSilence(280))
+    return false;
+  for (size_t i = 0; text[i]; ++i) {
+    if (!writeChirp(beacon::symbolFor(text[i])) || !writeSilence(180)) return false;
+  }
+  return writeChirp(-1) && writeSilence(760);
 }
 
 void startAudio() {
@@ -221,25 +114,18 @@ void startAudio() {
 }
 
 void playMessage(const String &message) {
-  // Use the same continuously buffered synthesis as the verified USB playback.
+  char text[21] = {};
   size_t count = 0;
-  for (size_t i = 0; i < message.length() && count < sizeof(messageText) - 1; ++i) {
+  for (size_t i = 0; i < message.length() && count < sizeof(text) - 1; ++i) {
     const char ch = message[i];
-    if ((ch >= 'A' && ch <= 'Z') || ch == ' ') messageText[count++] = ch;
+    if ((ch >= 'A' && ch <= 'Z') || ch == ' ') text[count++] = ch;
   }
-  messageText[count] = '\0';
   if (count == 0) return;
   // The I2S clocks run only during playback; without them the amplifier
   // shuts down, which is most of the idle battery saving.
   startAudio();
-  Serial.printf("Playing revision %ld: %s\n", lastRevision, messageText);
-  messageLetterIndex = 0;
-  messageSegment = MessageSegment::Lead;
-  messageSegmentFrame = 0;
-  messageSegmentLength = SAMPLE_RATE / 20; // 50 ms to prime the audio buffers.
-  while (messageSegment != MessageSegment::Idle) {
-    if (!writeContinuousMessageAudio()) messageSegment = MessageSegment::Idle;
-  }
+  Serial.printf("Playing revision %ld: %s\n", lastRevision, text);
+  if (!writeMessage(text)) Serial.println("Playback stopped early");
   ESP_ERROR_CHECK(i2s_driver_uninstall(I2S_PORT));
 }
 
@@ -351,31 +237,11 @@ void setup() {
   // A stuck TLS handshake, HTTP read, or I2S write resets the board.
   esp_task_wdt_init(WATCHDOG_S, true);
   enableLoopWDT();
-  for (uint32_t i = 0; i < MESSAGE_SINE_FRAMES; ++i) {
-    messageSine[i] = static_cast<int16_t>(sinf(TWO_PI * i / MESSAGE_SINE_FRAMES) * AMPLITUDE);
-  }
-#if defined(ALIVE_MESSAGE_TEST) || defined(ALIVE_SERIAL_MESSAGE)
-  startAudio();
-  Serial.println(
-  #if defined(ALIVE_MESSAGE_TEST)
-      "ALIVE message test: continuous 48 kHz I2S, sending HELLO repeatedly"
-  #else
-      "ALIVE serial message ready: send PLAY <TEXT> followed by newline"
-  #endif
-  );
-#else
   setupWifi();
-  Serial.println("ALIVE I2S emitter ready");
-#endif
+  Serial.println("ALIVE ultrasound emitter ready");
 }
 
 void loop() {
-#if defined(ALIVE_MESSAGE_TEST)
-  writeContinuousMessageAudio();
-#elif defined(ALIVE_SERIAL_MESSAGE)
-  receiveSerialCommand();
-  writeContinuousMessageAudio();
-#else
   // A restart clears Wi-Fi, DNS, TLS, and HTTP state together. It is the one
   // recovery path for every outage that outlasts ordinary reconnects.
   if (millis() - lastHealthyAt >= RESTART_AFTER_MS) {
@@ -389,5 +255,4 @@ void loop() {
     pollForMessage();
   }
   delay(10);
-#endif
 }
