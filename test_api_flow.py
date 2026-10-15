@@ -235,3 +235,41 @@ def test_device_poll_headers_reach_the_log_and_health_checks_do_not(tmp_path):
             server.server_close()
     rows = next((tmp_path / "device-polls").glob("*.csv")).read_text().splitlines()
     assert len(rows) == 2 and rows[1].endswith(",AC:27:6E:45:B9:4C,2000,1")
+
+
+def test_quiet_board_alerts_separate_dead_batteries_from_wifi_outages():
+    state = ApiState("HI")
+    with patch("emitter.time.monotonic", return_value=1000):
+        state.device_command("AC:27:6E:45:E5:90", "10000", "1")
+        state.device_command("70:AF:09:0D:AB:24", "10000", "3")
+    with patch("emitter.time.monotonic", return_value=1290):
+        state.device_command("70:AF:09:0D:AB:24", "300000", "3")
+    with patch("emitter.time.monotonic", return_value=1310):
+        assert state.quiet_board_alerts() == [
+            "ALIVE board AC:27:6E:45:E5:90 stopped polling; its battery is probably empty. "
+            "It ran 0 h 00 min since power-on."]
+        assert state.quiet_board_alerts() == []
+    with patch("emitter.time.monotonic", return_value=1600):
+        assert state.quiet_board_alerts() == [
+            "ALIVE: no board has polled for 5 minutes. Check the Wi-Fi and the API before the batteries."]
+        assert state.quiet_board_alerts() == []
+    with patch("emitter.time.monotonic", return_value=1650):
+        state.device_command("70:AF:09:0D:AB:24", "5000", "3")
+        assert state.quiet_board_alerts() == ["ALIVE boards are polling again."]
+        state.device_command("AC:27:6E:45:E5:90", "5000", "1")
+        assert state.quiet_board_alerts() == ["ALIVE board AC:27:6E:45:E5:90 is polling again."]
+
+
+def test_a_board_that_died_during_a_wifi_outage_still_gets_its_alert():
+    state = ApiState("HI")
+    with patch("emitter.time.monotonic", return_value=1000):
+        state.device_command("AC:27:6E:45:E5:90", "10000", "1")
+        state.device_command("70:AF:09:0D:AB:24", "10000", "1")
+    with patch("emitter.time.monotonic", return_value=1400):
+        assert len(state.quiet_board_alerts()) == 1
+    with patch("emitter.time.monotonic", return_value=1500):
+        state.device_command("70:AF:09:0D:AB:24", "5000", "3")
+        assert state.quiet_board_alerts() == [
+            "ALIVE boards are polling again.",
+            "ALIVE board AC:27:6E:45:E5:90 stopped polling; its battery is probably empty. "
+            "It ran 0 h 00 min since power-on."]

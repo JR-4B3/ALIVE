@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import wave
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,6 +34,9 @@ RECEIVER_CAPTURES = Path.home() / ".local" / "state" / "alive" / "receiver-captu
 DEVICE_LEASE_SECONDS = 30
 # Per-board poll rows, one file per UTC day, used to time battery runtime.
 POLL_LOG_DAYS = 14
+# A board quiet this long while others poll has most likely lost power. Wi-Fi
+# outages make boards restart after 3 minutes and return seconds later.
+BOARD_QUIET_SECONDS = 300
 
 
 def save_receiver_capture(data: bytes, message: str) -> str:
@@ -68,6 +72,11 @@ class ApiState:
         self.command_message = self.latest_reply
         self._lock = threading.Lock()
         self._device_last_seen_at = 0.0
+        # Per-board monotonic poll times and battery start times for alerts.
+        self._board_seen: dict[str, float] = {}
+        self._board_power_on: dict[str, float] = {}
+        self._quiet_alerted: set[str] = set()
+        self._all_quiet_alerted = False
         self._public_message_window_at = time.monotonic()
         self._public_message_count = 0
         self._public_message_last_at = 0.0
@@ -133,7 +142,42 @@ class ApiState:
             self._device_last_seen_at = time.monotonic()
             if re.fullmatch(r"[0-9A-F]{2}(:[0-9A-F]{2}){5}", board) and uptime_ms.isdigit() and reset.isdigit():
                 self._log_poll(f"{board},{uptime_ms},{reset}")
+                now = time.monotonic()
+                self._board_seen[board] = now
+                if reset == "1":  # Power-on, e.g. a fresh battery
+                    self._board_power_on[board] = now - int(uptime_ms) / 1000
             return {"revision": self.reply_revision, "message": self.command_message}
+
+    def quiet_board_alerts(self) -> list[str]:
+        """Return one message per newly quiet or returning board."""
+        with self._lock:
+            now = time.monotonic()
+            alerts = []
+            for board in sorted(self._quiet_alerted):
+                if now - self._board_seen[board] < BOARD_QUIET_SECONDS:
+                    self._quiet_alerted.discard(board)
+                    alerts.append(f"ALIVE board {board} is polling again.")
+            quiet = [board for board, seen in self._board_seen.items()
+                     if now - seen >= BOARD_QUIET_SECONDS and board not in self._quiet_alerted]
+            # When every board is quiet, blame Wi-Fi once and judge each board
+            # again after the others return.
+            if all(now - seen >= 60 for seen in self._board_seen.values()):
+                if quiet and not self._all_quiet_alerted:
+                    self._all_quiet_alerted = True
+                    alerts.append(f"ALIVE: no board has polled for {BOARD_QUIET_SECONDS // 60} minutes. "
+                                  "Check the Wi-Fi and the API before the batteries.")
+                return alerts
+            if self._all_quiet_alerted:
+                self._all_quiet_alerted = False
+                alerts.append("ALIVE boards are polling again.")
+            self._quiet_alerted.update(quiet)
+            for board in sorted(quiet):
+                text = f"ALIVE board {board} stopped polling; its battery is probably empty."
+                if board in self._board_power_on:
+                    hours, rest = divmod(round(self._board_seen[board] - self._board_power_on[board]), 3600)
+                    text += f" It ran {hours} h {rest // 60:02d} min since power-on."
+                alerts.append(text)
+            return alerts
 
     def _log_poll(self, row: str) -> None:
         """A board's last row is the moment it went quiet, e.g. its battery ran out."""
@@ -487,6 +531,28 @@ def feed_systemd_watchdog(port: int, interval: float) -> None:
         time.sleep(interval)
 
 
+def send_notification(url: str, text: str) -> None:
+    """Post to a Discord webhook as JSON, or to any other URL (e.g. ntfy) as plain text."""
+    if "discord.com/api/webhooks/" in url:
+        body, content_type = json.dumps({"content": text}).encode(), "application/json"
+    else:
+        body, content_type = text.encode(), "text/plain; charset=utf-8"
+    request = urllib.request.Request(url, data=body, headers={"Content-Type": content_type})
+    try:
+        urllib.request.urlopen(request, timeout=10).close()
+    except OSError as exc:
+        print(f"Could not send notification ({exc}): {text}", flush=True)
+    else:
+        print(f"Notification: {text}", flush=True)
+
+
+def watch_boards(state: ApiState, url: str) -> None:
+    while True:
+        time.sleep(30)
+        for text in state.quiet_board_alerts():
+            send_notification(url, text)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="ALIVE Wi-Fi emitter API")
     parser.add_argument("--host", default="0.0.0.0")
@@ -517,6 +583,10 @@ def main() -> int:
     if watchdog_usec and not https_active:
         threading.Thread(target=feed_systemd_watchdog, args=(args.port, watchdog_usec / 3e6),
                          daemon=True).start()
+
+    notify_url = os.environ.get("ALIVE_NOTIFY_URL", "")
+    if notify_url:
+        threading.Thread(target=watch_boards, args=(state, notify_url), daemon=True).start()
 
     try:
         server.serve_forever()

@@ -82,6 +82,10 @@ Each poll sends the board's MAC address, its uptime, and its last reset reason. 
 2. Leave it running until it stops. Do not open its serial port meanwhile, because that resets the board.
 3. Read its last row: `sudo grep -h <MAC> /var/lib/alive/device-polls/*.csv | tail -1`. Runtime is the switch-on time to that row, accurate to about 2 seconds, or 15 seconds if it was playing.
 
+`sudo python3 battery_runtime.py` prints every board's runtime since its last power-on and whether it is still running, so you do not need to note switch-on times.
+
 Rows that simply stop mean the battery cut off. Uptime that keeps falling back near zero with reset reason `9` (brownout) means the voltage sagged and the board reboot-looped; the end of the last steady stretch is the useful runtime. Reason `1` is power-on, `3` a software restart, and `6` the task watchdog.
+
+To get a phone alert when a board goes quiet, set `ALIVE_NOTIFY_URL` in `/etc/alive/api.env` to an [ntfy](https://ntfy.sh) topic URL with a long random name, or to a Discord webhook URL, then restart the service. The API sends one message when a board has not polled for 5 minutes while others still poll, with its runtime since power-on, and another when it polls again. If every board goes quiet, it sends a single message that points to Wi-Fi or the API instead, then judges each board again once the others return.
 
 After an update, run `sudo deploy/install.sh` again when the API changes, and republish `docs/` when the phone page changes. Back up `/etc/alive/api.env` and `/var/lib/alive`.
