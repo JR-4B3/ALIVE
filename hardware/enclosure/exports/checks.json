@@ -10,7 +10,7 @@
       60.0
     ],
     "step_valid": true,
-    "step_volume_error_mm3": 1.979060471057892e-09
+    "step_volume_error_mm3": 1.9936123862862587e-09
   },
   "lid": {
     "valid_cad": true,
@@ -216,6 +216,18 @@
     "maximum_shaft_diameter": 4.0,
     "wall_to_head_underside_when_seated": 4.100000000000001,
     "head_to_holder_plug_space": 1.2999999999999972
+  },
+  "switch_opening_mm": {
+    "depth_from_battery_facing_board_surface": 5.0,
+    "board_surface_z": 31.6,
+    "opening_z_range": [
+      31.6,
+      36.6
+    ],
+    "length_along_board": 20.0,
+    "distance_from_board_right_edge_to_case_exterior": 4.0,
+    "fully_through_side_wall": true,
+    "wall_intact_immediately_above_and_below": true
   },
   "measured_dimensions_mm": {
     "holder_without_usb": 100,

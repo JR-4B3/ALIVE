@@ -22,6 +22,7 @@ Ruler measurements take priority over the approximate iPhone scans supplied on 1
 | Battery holder | 100 mm board length, 106 mm including USB-A socket, 140 mm including the current connected plug and cable bend |
 | Holder mounting holes | 3 mm diameter, about 25 mm transverse and confirmed 95 mm longitudinal centre spacing |
 | Holder switch | Right side with USB pointing up, 82 to 90 mm from the opposite bottom end |
+| Switch access opening | 5 mm in depth from the battery-facing board surface toward the back lid, 20 mm along the board |
 | Speaker | 40 mm outside metal rim diameter, 20 mm total depth |
 | Speaker rear profile | 30 mm rear step diameter at 13 mm behind the rim, then a 15 mm magnet diameter with 5 mm additional depth |
 | Electronics assembly | Approximately 44 × 20 × 25 mm, including solder and terminal block |
@@ -31,6 +32,8 @@ Ruler measurements take priority over the approximate iPhone scans supplied on 1
 The holder width is about 30 mm from the scans. The 60 mm case has 2 mm walls and 56 mm inside width. The electronics and holder have nominal 2 mm gaps at both outer sides and between their width envelopes. Mounts occupy some of those gaps. The wider holder scan leaves about 1 mm at the right wall, so measurement error matters.
 
 The electronics reference reserves 10 mm behind the brown PCB and 18 mm above its underside. This is a conservative 28 mm total allowance, larger than the measured 25 mm assembly. The reserved rear space ends 1 mm above the tray, and the highest point is 0.9 mm below the closed lid. The current holder plug and bend end 2 mm before the inside upper wall.
+
+The switch opening starts at the battery-facing surface of the holder PCB and extends 5 mm toward the back lid. The assumed holder PCB thickness is 1.6 mm, so its opening is at Z 31.6 to 36.6 mm. It does not extend below the board. Its 20 mm length along the board leaves access around the measured switch position. The nominal distance from the board's right edge to the case exterior is 4 mm.
 
 The speaker depths imply about 2 mm forward projection, which is inferred. The nominal moving-cone clearance to the grille is 4 mm. The speaker seat has a 39 mm opening and a locating collar with 0.5 mm radial clearance around the 40 mm frame.
 

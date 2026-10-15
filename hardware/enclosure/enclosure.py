@@ -16,9 +16,12 @@ LID_BOTTOM = 55.9
 BATTERY_BOARD_L, BATTERY_WITH_USB_L, BATTERY_CONNECTED_L = 100.0, 106.0, 140.0
 BATTERY_HOLE_D, BATTERY_HOLE_X = 3.0, 25.0
 BATTERY_BOARD_W, BATTERY_HOLE_Y = 30.0, 95.0
+BATTERY_BOARD_THICKNESS = 1.6
 BOARD_X, BOARD_Y, BOARD_Z = 26.0, 6.0, 30.0
 BOARD_CENTRE_X = BOARD_X + BATTERY_BOARD_W / 2
 SWITCH_START, SWITCH_END = 82.0, 90.0
+SWITCH_OPENING_DEPTH = 5.0
+SWITCH_OPENING_Z = BOARD_Z + BATTERY_BOARD_THICKNESS
 
 # The foam must touch only the outer fixed metal edge.
 SPEAKER_D, SPEAKER_SEAT_INNER_D = 40.0, 39.0
@@ -90,8 +93,8 @@ def build():
         body = body.union(box(x, WALL, 54, 2, LENGTH - 2 * WALL, 1.6))
         body = body.union(box(x, WALL, 58.2, 2, LENGTH - 2 * WALL, 1.8))
     body = body.union(box(0, 0, 58.2, WIDTH, WALL, 1.8))
-    body = body.cut(box(57, BOARD_Y + SWITCH_START - 6, BOARD_Z - 4,
-                        4, SWITCH_END - SWITCH_START + 12, 16))
+    body = body.cut(box(WIDTH - WALL - 1, BOARD_Y + SWITCH_START - 6, SWITCH_OPENING_Z,
+                        WALL + 2, SWITCH_END - SWITCH_START + 12, SWITCH_OPENING_DEPTH))
     # Corner supports leave the coil space open below the removable tray.
     for x, y in CARRIER_SCREWS:
         start_x, w = (2, 8) if x < 30 else (49, 9)
@@ -160,13 +163,13 @@ def build():
                                     WALL_MOUNT_SLOT_W / 2, 5))
     lid = lid.cut(keyhole)
 
-    board = box(BOARD_X, BOARD_Y, BOARD_Z, BATTERY_BOARD_W, BATTERY_BOARD_L, 1.6)
+    board = box(BOARD_X, BOARD_Y, BOARD_Z, BATTERY_BOARD_W, BATTERY_BOARD_L, BATTERY_BOARD_THICKNESS)
     for x, y in holder_holes():
         board = board.cut(cylinder(x, y, BOARD_Z - 1, BATTERY_HOLE_D / 2, 4))
     cell = (cylinder(0, 0, 0, 9.25, 65).rotate((0, 0, 0), (1, 0, 0), -90)
             .translate((BOARD_CENTRE_X, BOARD_Y + 11, BOARD_Z + 11)))
-    usb = box(BOARD_CENTRE_X - 7, BOARD_Y + 100, BOARD_Z + 1.6, 14, 6, 7.5)
-    bend = box(BOARD_CENTRE_X - 9, BOARD_Y + 106, BOARD_Z + 1.6, 18, 34, 20)
+    usb = box(BOARD_CENTRE_X - 7, BOARD_Y + 100, BOARD_Z + BATTERY_BOARD_THICKNESS, 14, 6, 7.5)
+    bend = box(BOARD_CENTRE_X - 9, BOARD_Y + 106, BOARD_Z + BATTERY_BOARD_THICKNESS, 18, 34, 20)
     coil = cq.Workplane('XY').ellipse(COIL_W / 2, COIL_L / 2).extrude(COIL_H).translate((30, 53, 3))
     pcb = box(ELECTRONICS_X, ELECTRONICS_Y, ELECTRONICS_PCB_Z,
               ELECTRONICS_W, ELECTRONICS_L, PERFBOARD_THICKNESS)
@@ -334,6 +337,19 @@ def main():
         'maximum_shaft_diameter':WALL_SCREW_SHAFT_D,
         'wall_to_head_underside_when_seated':DEPTH-LID_BOTTOM,
         'head_to_holder_plug_space':head_z-(BOARD_Z+1.6+20)}
+    switch_y = BOARD_Y + SWITCH_START - 6
+    switch_length = SWITCH_END - SWITCH_START + 12
+    opening = box(WIDTH-WALL, switch_y, SWITCH_OPENING_Z,
+                  WALL, switch_length, SWITCH_OPENING_DEPTH)
+    assert parts['body'].intersect(opening).val().Volume() < 0.001
+    # The wall directly above and below the opening must remain intact.
+    for z in (SWITCH_OPENING_Z-1, SWITCH_OPENING_Z+SWITCH_OPENING_DEPTH):
+        border = box(WIDTH-WALL, switch_y, z, WALL, switch_length, 1)
+        assert abs(parts['body'].intersect(border).val().Volume() - WALL*switch_length) < 0.001
+    checks['switch_opening_mm'] = {'depth_from_battery_facing_board_surface':SWITCH_OPENING_DEPTH,
+        'board_surface_z':SWITCH_OPENING_Z,'opening_z_range':[SWITCH_OPENING_Z,SWITCH_OPENING_Z+SWITCH_OPENING_DEPTH],
+        'length_along_board':switch_length,'distance_from_board_right_edge_to_case_exterior':WIDTH-(BOARD_X+BATTERY_BOARD_W),
+        'fully_through_side_wall':True,'wall_intact_immediately_above_and_below':True}
     checks['measured_dimensions_mm'] = {'holder_without_usb':100,'holder_with_usb':106,
         'holder_with_current_plug_and_bend':140,'board_hole_diameter':3,
         'approximate_transverse_hole_centre_spacing':25,'longitudinal_hole_spacing':95,
