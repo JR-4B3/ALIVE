@@ -23,7 +23,7 @@
       3.2
     ],
     "step_valid": true,
-    "step_volume_error_mm3": 1.8189894035458565e-11
+    "step_volume_error_mm3": 2.546585164964199e-11
   },
   "carrier": {
     "valid_cad": true,
@@ -123,6 +123,65 @@
     "speaker_bridge": 0.0,
     "electronics": 0.0,
     "speaker": 0.0
+  },
+  "wall_mount_overlaps_mm3": {
+    "head_insertion/body": 0.0,
+    "head_insertion/lid": 0.0,
+    "head_insertion/carrier": 0.0,
+    "head_insertion/speaker_bridge": 0.0,
+    "head_insertion/battery_board": 0.0,
+    "head_insertion/battery_cell": 0.0,
+    "head_insertion/electronics_envelope": 0.0,
+    "head_insertion/speaker_envelope": 0.0,
+    "head_insertion/speaker_pad": 0.0,
+    "head_insertion/cable_space": 0.0,
+    "head_insertion/usb_port_envelope": 0.0,
+    "head_insertion/plug_bend_space": 0.0,
+    "head_insertion/electronics_plug_space": 0.0,
+    "head_seating/body": 0.0,
+    "head_seating/lid": 0.0,
+    "head_seating/carrier": 0.0,
+    "head_seating/speaker_bridge": 0.0,
+    "head_seating/battery_board": 0.0,
+    "head_seating/battery_cell": 0.0,
+    "head_seating/electronics_envelope": 0.0,
+    "head_seating/speaker_envelope": 0.0,
+    "head_seating/speaker_pad": 0.0,
+    "head_seating/cable_space": 0.0,
+    "head_seating/usb_port_envelope": 0.0,
+    "head_seating/plug_bend_space": 0.0,
+    "head_seating/electronics_plug_space": 0.0,
+    "seated_shaft/body": 0.0,
+    "seated_shaft/lid": 0.0,
+    "seated_shaft/carrier": 0.0,
+    "seated_shaft/speaker_bridge": 0.0,
+    "seated_shaft/battery_board": 0.0,
+    "seated_shaft/battery_cell": 0.0,
+    "seated_shaft/electronics_envelope": 0.0,
+    "seated_shaft/speaker_envelope": 0.0,
+    "seated_shaft/speaker_pad": 0.0,
+    "seated_shaft/cable_space": 0.0,
+    "seated_shaft/usb_port_envelope": 0.0,
+    "seated_shaft/plug_bend_space": 0.0,
+    "seated_shaft/electronics_plug_space": 0.0
+  },
+  "wall_mount_mm": {
+    "entry_diameter": 9.0,
+    "slot_width": 4.5,
+    "entry_centre": [
+      30.0,
+      130.0
+    ],
+    "upper_seat_centre": [
+      30.0,
+      140.0
+    ],
+    "minimum_head_diameter": 6,
+    "maximum_head_diameter": 8.0,
+    "maximum_head_thickness": 3.0,
+    "maximum_shaft_diameter": 4.0,
+    "wall_to_head_underside_when_seated": 4.100000000000001,
+    "head_to_holder_plug_space": 1.2999999999999972
   },
   "measured_dimensions_mm": {
     "holder_without_usb": 100,

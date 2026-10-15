@@ -31,6 +31,9 @@ ELECTRONICS_PCB_Z, ELECTRONICS_BOTTOM_Z = 35.0, 28.0
 COIL_W, COIL_L, COIL_H = 50.0, 80.0, 19.0
 CARRIER_BOTTOM, CARRIER_TOP = 24.0, 26.0
 CARRIER_SCREWS = [(6.0, 8.0), (53.0, 18.0), (6.0, 106.0), (54.0, 114.0)]
+WALL_MOUNT_X, WALL_MOUNT_ENTRY_Y, WALL_MOUNT_SEAT_Y = WIDTH / 2, 130.0, 140.0
+WALL_MOUNT_ENTRY_D, WALL_MOUNT_SLOT_W = 9.0, 4.5
+WALL_SCREW_HEAD_D, WALL_SCREW_HEAD_H, WALL_SCREW_SHAFT_D = 8.0, 3.0, 4.0
 
 
 def box(x, y, z, w, length, h):
@@ -135,6 +138,15 @@ def build():
     lid = lid.union(ramp)
     for y in (8, 11, 14):
         lid = lid.cut(box(26, y, 57.6, 8, 0.8, 0.5))
+    # Lower the upright case to seat the screw shaft in the narrow upper slot.
+    keyhole = cylinder(WALL_MOUNT_X, WALL_MOUNT_ENTRY_Y, LID_BOTTOM - 1,
+                       WALL_MOUNT_ENTRY_D / 2, 5)
+    keyhole = keyhole.union(box(WALL_MOUNT_X - WALL_MOUNT_SLOT_W / 2, WALL_MOUNT_ENTRY_Y,
+                               LID_BOTTOM - 1, WALL_MOUNT_SLOT_W,
+                               WALL_MOUNT_SEAT_Y - WALL_MOUNT_ENTRY_Y, 5))
+    keyhole = keyhole.union(cylinder(WALL_MOUNT_X, WALL_MOUNT_SEAT_Y, LID_BOTTOM - 1,
+                                    WALL_MOUNT_SLOT_W / 2, 5))
+    lid = lid.cut(keyhole)
 
     board = box(BOARD_X, BOARD_Y, BOARD_Z, BATTERY_BOARD_W, BATTERY_BOARD_L, 1.6)
     for x, y in holder_holes():
@@ -227,6 +239,36 @@ def main():
         volume = sweep.intersect(obstacle).val().Volume()
         checks['battery_removal_sweep_overlaps_mm3'][name] = round(volume,6)
         assert volume<0.001, f'Battery extraction intersects {name}'
+    head_z = LID_BOTTOM - WALL_SCREW_HEAD_H
+    head_sweep = cylinder(WALL_MOUNT_X, WALL_MOUNT_ENTRY_Y, head_z,
+                          WALL_SCREW_HEAD_D / 2, WALL_SCREW_HEAD_H)
+    head_sweep = head_sweep.union(box(WALL_MOUNT_X - WALL_SCREW_HEAD_D / 2,
+                                     WALL_MOUNT_ENTRY_Y, head_z, WALL_SCREW_HEAD_D,
+                                     WALL_MOUNT_SEAT_Y - WALL_MOUNT_ENTRY_Y, WALL_SCREW_HEAD_H))
+    head_sweep = head_sweep.union(cylinder(WALL_MOUNT_X, WALL_MOUNT_SEAT_Y, head_z,
+                                          WALL_SCREW_HEAD_D / 2, WALL_SCREW_HEAD_H))
+    entry_sweep = cylinder(WALL_MOUNT_X, WALL_MOUNT_ENTRY_Y, head_z,
+                           WALL_SCREW_HEAD_D / 2, DEPTH + 2 - head_z)
+    shaft = cylinder(WALL_MOUNT_X, WALL_MOUNT_SEAT_Y, LID_BOTTOM,
+                     WALL_SCREW_SHAFT_D / 2, DEPTH + 2 - LID_BOTTOM)
+    checks['wall_mount_overlaps_mm3'] = {}
+    for motion_name,motion in [('head_insertion',entry_sweep),('head_seating',head_sweep),
+                               ('seated_shaft',shaft)]:
+        for name,obstacle in {**parts,**references}.items():
+            volume = motion.intersect(obstacle).val().Volume()
+            checks['wall_mount_overlaps_mm3'][f'{motion_name}/{name}'] = round(volume,6)
+            assert volume<0.001, f'Wall screw {motion_name} intersects {name}'
+    # The narrow slot retains the head at the upper seat.
+    head_at_seat = cylinder(WALL_MOUNT_X, WALL_MOUNT_SEAT_Y, LID_BOTTOM, 3, 2)
+    assert parts['lid'].intersect(head_at_seat).val().Volume()>0
+    checks['wall_mount_mm'] = {'entry_diameter':WALL_MOUNT_ENTRY_D,
+        'slot_width':WALL_MOUNT_SLOT_W,'entry_centre':[WALL_MOUNT_X,WALL_MOUNT_ENTRY_Y],
+        'upper_seat_centre':[WALL_MOUNT_X,WALL_MOUNT_SEAT_Y],
+        'minimum_head_diameter':6,'maximum_head_diameter':WALL_SCREW_HEAD_D,
+        'maximum_head_thickness':WALL_SCREW_HEAD_H,
+        'maximum_shaft_diameter':WALL_SCREW_SHAFT_D,
+        'wall_to_head_underside_when_seated':DEPTH-LID_BOTTOM,
+        'head_to_holder_plug_space':head_z-(BOARD_Z+1.6+20)}
     checks['measured_dimensions_mm'] = {'holder_without_usb':100,'holder_with_usb':106,
         'holder_with_current_plug_and_bend':140,'board_hole_diameter':3,
         'approximate_transverse_hole_centre_spacing':25,'longitudinal_hole_spacing':95,

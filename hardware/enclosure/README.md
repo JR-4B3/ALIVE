@@ -52,6 +52,14 @@ Initial assembly uses small screws, soft pads and cable ties or reusable straps.
 5. Fit a fabric pull ribbon under the battery. Check that the cell lifts out with the mounts fixed and that the side switch is accessible.
 6. Close the lid and test the project, including audio output, ALIVE reception and wireless connection with the cable coiled inside.
 
+## Wall mounting
+
+The back lid has one keyhole slot near the upper end. Its lower entry is 9 mm in diameter, with a 4.5 mm wide slot leading to a seat 10 mm above the entry. Hang the case upright with the speaker at the top. Push the larger opening over a headed wall fastener, then lower the case to seat its shaft in the narrow slot.
+
+Choose a fastener suitable for the wall with a shaft no wider than 4 mm, a head about 6 to 8 mm across and no thicker than 3 mm. The recessed lid needs about 4.1 mm between the wall and the underside of the seated head, plus a little sliding clearance. Adjust the fastener depth for a fit that lifts off without force. The head path has nominal 1.3 mm clearance to the assumed USB plug space. Keep the cable out of this path and verify the actual fastener against the prototype.
+
+Lift the complete case off the wall before opening the back for a battery change. With the case upright, the lid's upper edge rests against the body's closed upper end. Test the printed keyhole, lid retention and fastener with the assembled case before leaving it hanging. This is a mounting prototype without a tested load rating.
+
 ## Printing and remaining checks
 
 PETG FDM is the intended starting process. Ask the printer to review the body rails, overhangs, support removal and thin strap loops. Start the body with its front on the bed, and print the tray and bridge flat. The lid needs an orientation review because the latch projects beyond its back face.
@@ -60,7 +68,7 @@ The lid has 0.3 mm nominal clearance above and below. Its fit, release force and
 
 Before more prints, check final cable fit, speaker gasket contact, electronics support and strap contact, screw clearance, switch reach and battery removal. The grille and enclosure can change acoustic output, so check the assembled project.
 
-`exports/checks.json` records CAD validity, one connected watertight STL per part, STEP round trips, simplified component bounds, selected collisions and nominal clearances. It also checks a straight battery removal path with the lid removed. These checks do not model the holder contacts, complete wiring, screws or actual printed tolerances.
+`exports/checks.json` records CAD validity, one connected watertight STL per part, STEP round trips, simplified component bounds, selected collisions and nominal clearances. It also checks a straight battery removal path with the lid removed and the wall fastener's insertion and seating paths. These checks do not model the holder contacts, complete wiring, assembly screws, mounting strength or actual printed tolerances.
 
 ## Rebuild
 
