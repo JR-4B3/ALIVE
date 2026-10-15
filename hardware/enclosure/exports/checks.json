@@ -33,10 +33,10 @@
     "stl_dimensions_mm": [
       55.0,
       114.5,
-      19.0
+      13.0
     ],
     "step_valid": true,
-    "step_volume_error_mm3": 2.764863893389702e-10
+    "step_volume_error_mm3": 2.1827872842550278e-11
   },
   "speaker_bridge": {
     "valid_cad": true,
@@ -95,7 +95,18 @@
     "electronics_plug_space/body": 0.0,
     "electronics_plug_space/lid": 0.0,
     "electronics_plug_space/carrier": 0.0,
-    "electronics_plug_space/speaker_bridge": 0.0
+    "electronics_plug_space/speaker_bridge": 0.0,
+    "electronics_spacers/body": 0.0,
+    "electronics_spacers/lid": 0.0,
+    "electronics_spacers/carrier": 0.0,
+    "electronics_spacers/speaker_bridge": 0.0,
+    "electronics_fasteners/body": 0.0,
+    "electronics_fasteners/lid": 0.0,
+    "electronics_fasteners/carrier": 0.0,
+    "electronics_fasteners/speaker_bridge": 0.0
+  },
+  "permitted_thread_engagement_mm3": {
+    "electronics_fasteners": 10.857344
   },
   "component_pair_overlaps_mm3": {
     "battery_board/electronics_envelope": 0.0,
@@ -103,7 +114,12 @@
     "cable_space/electronics_envelope": 0.0,
     "speaker_envelope/plug_bend_space": 0.0,
     "electronics_plug_space/battery_board": 0.0,
-    "electronics_plug_space/battery_cell": 0.0
+    "electronics_plug_space/battery_cell": 0.0,
+    "electronics_envelope/electronics_spacers": 0.0,
+    "electronics_envelope/electronics_fasteners": 0.0,
+    "electronics_spacers/electronics_fasteners": 0.0,
+    "battery_board/electronics_fasteners": 0.0,
+    "battery_cell/electronics_fasteners": 0.0
   },
   "reference_bounds_mm": {
     "speaker_envelope": [
@@ -114,9 +130,21 @@
     "electronics_envelope": [
       20.0,
       44.0,
-      25.0
+      28.0
     ]
   },
+  "electronics_bearing_areas_mm2": [
+    {
+      "post_on_perfboard": 15.509,
+      "spacer_on_perfboard": 5.031,
+      "spacer_on_amplifier": 5.65
+    },
+    {
+      "post_on_perfboard": 15.509,
+      "spacer_on_perfboard": 5.031,
+      "spacer_on_amplifier": 5.65
+    }
+  ],
   "battery_removal_sweep_overlaps_mm3": {
     "body": 0.0,
     "carrier": 0.0,
@@ -138,6 +166,8 @@
     "head_insertion/usb_port_envelope": 0.0,
     "head_insertion/plug_bend_space": 0.0,
     "head_insertion/electronics_plug_space": 0.0,
+    "head_insertion/electronics_spacers": 0.0,
+    "head_insertion/electronics_fasteners": 0.0,
     "head_seating/body": 0.0,
     "head_seating/lid": 0.0,
     "head_seating/carrier": 0.0,
@@ -151,6 +181,8 @@
     "head_seating/usb_port_envelope": 0.0,
     "head_seating/plug_bend_space": 0.0,
     "head_seating/electronics_plug_space": 0.0,
+    "head_seating/electronics_spacers": 0.0,
+    "head_seating/electronics_fasteners": 0.0,
     "seated_shaft/body": 0.0,
     "seated_shaft/lid": 0.0,
     "seated_shaft/carrier": 0.0,
@@ -163,7 +195,9 @@
     "seated_shaft/cable_space": 0.0,
     "seated_shaft/usb_port_envelope": 0.0,
     "seated_shaft/plug_bend_space": 0.0,
-    "seated_shaft/electronics_plug_space": 0.0
+    "seated_shaft/electronics_plug_space": 0.0,
+    "seated_shaft/electronics_spacers": 0.0,
+    "seated_shaft/electronics_fasteners": 0.0
   },
   "wall_mount_mm": {
     "entry_diameter": 9.0,
@@ -204,27 +238,63 @@
       44,
       20,
       25
-    ]
+    ],
+    "amplifier_hole_centre_spacing": 13.0,
+    "amplifier_hole_centre_to_perfboard_end_range": [
+      1.0,
+      1.5
+    ],
+    "approximate_amplifier_to_perfboard_gap": 2.0
   },
   "provisional_dimensions_mm": {
     "holder_width": 30,
     "speaker_seat_inner_diameter": 39.0,
     "speaker_front_projection_inferred": 2.0,
-    "electronics_height_above_pcb": 18,
-    "electronics_underside_allowance": 7,
+    "electronics_height_above_pcb": 18.0,
+    "electronics_underside_allowance": 10.0,
+    "electronics_reserved_total_height": 28.0,
     "coil_oval_width_length_height": [
       50.0,
       80.0,
       19.0
     ]
   },
+  "electronics_mount_mm": {
+    "hole_centres": [
+      [
+        7.5,
+        98.75
+      ],
+      [
+        20.5,
+        98.75
+      ]
+    ],
+    "hole_centre_to_perfboard_end_nominal": 1.25,
+    "holes_assumed_centred_across_perfboard": true,
+    "perfboard_and_amplifier_thickness_assumed": 1.6,
+    "perfboard_end_notch_width": 2.6,
+    "support_diameter": 6,
+    "spacer_outer_diameter": 4.0,
+    "spacer_height": 2.0,
+    "pilot_diameter": 1.6,
+    "provisional_screw_diameter": 2.0,
+    "provisional_screw_length": 10.0,
+    "provisional_head_diameter": 4.0,
+    "provisional_head_height": 1.6,
+    "screw_engagement": 4.799999999999997,
+    "pilot_depth": 6,
+    "brown_board_has_no_retaining_edge_at_clearance_notches": true
+  },
   "clearances_mm": {
     "current_holder_plug_end_to_wall": 2.0,
     "cone_to_grille": 4.0,
     "coil_top_to_carrier": 2.0,
-    "electronics_top_to_closed_lid": 2.8999999999999986,
+    "electronics_rear_allowance_to_carrier": 1.0,
+    "electronics_top_to_closed_lid": 0.8999999999999986,
+    "electronics_screw_tip_to_pilot_bottom": 1.2000000000000028,
     "battery_top_to_closed_lid": 5.649999999999999,
     "speaker_bridge_to_holder_plug": 1.2000000000000028
   },
-  "status": "Prototype. Verify speaker rim contact, bare perfboard strap contact, mounting dimensions and final cable fit before ordering."
+  "status": "Prototype. Verify amplifier hole alignment, clear perfboard notches, spacer fit, screw fit, speaker rim contact and final cable fit before ordering more."
 }

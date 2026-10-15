@@ -5,7 +5,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle, Ellipse
-from enclosure import BOARD_X, BOARD_Y, BOARD_CENTRE_X, SPEAKER_D, holder_holes
+from enclosure import BOARD_X, BOARD_Y, BOARD_CENTRE_X, SPEAKER_D, holder_holes, amplifier_holes
 
 ROOT = Path(__file__).parent
 fig = plt.figure(figsize=(210 / 25.4, 297 / 25.4))
@@ -25,6 +25,10 @@ for x, y in holder_holes():
     ax.plot([20 + x - 2, 20 + x + 2], [105 + y, 105 + y], color='#51806a', lw=.3)
 ax.text(20 + BOARD_CENTRE_X, 150, 'Holder', ha='center', rotation=90, fontsize=9, color='#386950')
 ax.add_patch(Rectangle((24, 161), 20, 44, fill=False, ec='#80679a', lw=1))
+for x, y in amplifier_holes():
+    ax.add_patch(Circle((20 + x, 105 + y), 1.3, fill=False, ec='#80679a', lw=.7))
+    ax.plot([20 + x - 2, 20 + x + 2], [105 + y, 105 + y], color='#80679a', lw=.3)
+    ax.plot([20 + x] * 2, [105 + y - 2, 105 + y + 2], color='#80679a', lw=.3)
 ax.text(34, 182, 'Electronics', ha='center', rotation=90, fontsize=8, color='#75578e')
 ax.add_patch(Rectangle((20 + BOARD_CENTRE_X - 7, 211), 14, 6, fill=False, ec='#666666', lw=.7))
 ax.add_patch(Rectangle((20 + BOARD_CENTRE_X - 9, 217), 18, 34, fill=False, ec='#ac782b', ls='--', lw=.7))
@@ -40,9 +44,10 @@ for mm in range(0, 101, 10):
     ax.text(20 + mm, 74, str(mm), ha='center', fontsize=6)
 ax.text(20, 86, 'This bar must measure exactly 100 mm.', fontsize=8)
 notes = ['Holder hole centres are 25 mm apart across the board and 95 mm along its length.',
+         'Amplifier holes are 13 mm apart, centred across the board and 1.25 mm from its upper end.',
          'The two layers occupy different depths. This sheet checks their footprints only.',
-         'Electronics height is 25 mm. Coil height allowance is 19 mm and needs a physical check.',
-         'The lid, strap contact, printed tolerances and acoustic output still need physical checks.']
+         'Electronics measure 25 mm high. The reserve is 28 mm, with 10 mm behind the brown board.',
+         'Check hole alignment, notch areas, 2 mm spacers, cable fit, lid and printed tolerances.']
 for index, text in enumerate(notes):
     ax.text(15, 61 - 7 * index, text, fontsize=7.5)
 fig.savefig(ROOT / 'paper-fit-check.pdf')

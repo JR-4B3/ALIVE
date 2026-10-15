@@ -27,7 +27,16 @@ SPEAKER_RIM_Z, SPEAKER_BACK_Z, SPEAKER_BRIDGE_Z = 8.0, 26.0, 28.0
 SPEAKER_FRONT_Z = 6.0
 ELECTRONICS_X, ELECTRONICS_Y = 4.0, 56.0
 ELECTRONICS_W, ELECTRONICS_L, ELECTRONICS_H = 20.0, 44.0, 25.0
-ELECTRONICS_PCB_Z, ELECTRONICS_BOTTOM_Z = 35.0, 28.0
+ELECTRONICS_PCB_Z, ELECTRONICS_REAR_ALLOWANCE, ELECTRONICS_FRONT_ALLOWANCE = 37.0, 10.0, 18.0
+ELECTRONICS_BOTTOM_Z = ELECTRONICS_PCB_Z - ELECTRONICS_REAR_ALLOWANCE
+PERFBOARD_THICKNESS, AMPLIFIER_BOARD_THICKNESS, AMPLIFIER_GAP = 1.6, 1.6, 2.0
+AMPLIFIER_HOLE_SPACING, AMPLIFIER_END_OFFSET = 13.0, 1.25
+AMPLIFIER_END_OFFSET_RANGE = [1.0, 1.5]
+AMPLIFIER_CLEARANCE_D, AMPLIFIER_PILOT_D = 2.6, 1.6
+AMPLIFIER_SCREW_D, AMPLIFIER_SCREW_LENGTH = 2.0, 10.0
+AMPLIFIER_HEAD_D, AMPLIFIER_HEAD_H, AMPLIFIER_SPACER_D = 4.0, 1.6, 4.0
+AMPLIFIER_UNDERSIDE_Z = ELECTRONICS_PCB_Z + PERFBOARD_THICKNESS + AMPLIFIER_GAP
+AMPLIFIER_TOP_Z = AMPLIFIER_UNDERSIDE_Z + AMPLIFIER_BOARD_THICKNESS
 COIL_W, COIL_L, COIL_H = 50.0, 80.0, 19.0
 CARRIER_BOTTOM, CARRIER_TOP = 24.0, 26.0
 CARRIER_SCREWS = [(6.0, 8.0), (53.0, 18.0), (6.0, 106.0), (54.0, 114.0)]
@@ -58,6 +67,12 @@ def holder_holes():
             for dx in (-BATTERY_HOLE_X / 2, BATTERY_HOLE_X / 2)
             for dy in ((BATTERY_BOARD_L - BATTERY_HOLE_Y) / 2,
                        (BATTERY_BOARD_L + BATTERY_HOLE_Y) / 2)]
+
+
+def amplifier_holes():
+    return [(ELECTRONICS_X + ELECTRONICS_W / 2 + dx,
+             ELECTRONICS_Y + ELECTRONICS_L - AMPLIFIER_END_OFFSET)
+            for dx in (-AMPLIFIER_HOLE_SPACING / 2, AMPLIFIER_HOLE_SPACING / 2)]
 
 
 def exact_bounds(part):
@@ -115,15 +130,12 @@ def build():
         carrier = carrier.union(cylinder(x, y, CARRIER_TOP, 3, BOARD_Z - CARRIER_TOP))
         # Keep the pilot open at the top when the post height changes.
         carrier = carrier.cut(cylinder(x, y, 24.6, 1.1, BOARD_Z - 24.6 + 1))
-    # The perfboard rests on its bare edges, above underside joints.
-    for x, width in ((2.5, 2), (23.5, 1)):
-        carrier = carrier.union(box(x, ELECTRONICS_Y, CARRIER_TOP, width, ELECTRONICS_L,
-                                    ELECTRONICS_PCB_Z - CARRIER_TOP))
-    for x, width in ((2.5, 1.3), (24.2, 0.8)):
-        carrier = carrier.union(box(x, ELECTRONICS_Y, ELECTRONICS_PCB_Z, width, ELECTRONICS_L, 2))
-    # Verify a bare perfboard strip beneath the strap before assembly.
-    for x in (2.5, 24.2):
-        carrier = carrier.union(tie_anchor(x, 78, ELECTRONICS_PCB_Z + 2, 1.3))
+    # Support the clear underside beneath the amplifier, clear of rear wire loops.
+    for x, y in amplifier_holes():
+        carrier = carrier.union(cylinder(x, y, CARRIER_TOP, 3,
+                                         ELECTRONICS_PCB_Z - CARRIER_TOP))
+        carrier = carrier.cut(cylinder(x, y, ELECTRONICS_PCB_Z - 6,
+                                       AMPLIFIER_PILOT_D / 2, 7))
     carrier = carrier.union(tie_anchor(26, 106, CARRIER_TOP, 4))
 
     bridge = box(2, SPEAKER_Y - 3.5, SPEAKER_BRIDGE_Z, 56, 7, 2.4)
@@ -156,12 +168,35 @@ def build():
     usb = box(BOARD_CENTRE_X - 7, BOARD_Y + 100, BOARD_Z + 1.6, 14, 6, 7.5)
     bend = box(BOARD_CENTRE_X - 9, BOARD_Y + 106, BOARD_Z + 1.6, 18, 34, 20)
     coil = cq.Workplane('XY').ellipse(COIL_W / 2, COIL_L / 2).extrude(COIL_H).translate((30, 53, 3))
-    pcb = box(ELECTRONICS_X, ELECTRONICS_Y, ELECTRONICS_PCB_Z, 20, 44, 1.6)
-    electronics = pcb.union(box(5, 58, ELECTRONICS_BOTTOM_Z, 18, 40, 7))
-    electronics = electronics.union(box(5, 56, 36.6, 18, 24, 7))
-    electronics = electronics.union(box(4, 84, 36.6, 20, 16, 7.4))
-    electronics = electronics.union(box(10, 93, 44, 8, 7, 9))
-    electronics_usb = box(8, 20, 36.6, 12, 36, 8)
+    pcb = box(ELECTRONICS_X, ELECTRONICS_Y, ELECTRONICS_PCB_Z,
+              ELECTRONICS_W, ELECTRONICS_L, PERFBOARD_THICKNESS)
+    # End clearance notches may open into the edge at the measured 1 to 1.5 mm offset.
+    for x, y in amplifier_holes():
+        pcb = pcb.cut(cylinder(x, y, ELECTRONICS_PCB_Z - 1, AMPLIFIER_CLEARANCE_D / 2, 4))
+        pcb = pcb.cut(box(x - AMPLIFIER_CLEARANCE_D / 2, y, ELECTRONICS_PCB_Z - 1,
+                          AMPLIFIER_CLEARANCE_D, ELECTRONICS_Y + ELECTRONICS_L - y + 1, 4))
+    electronics = pcb.union(box(5, 56, ELECTRONICS_BOTTOM_Z, 18, 30, ELECTRONICS_REAR_ALLOWANCE))
+    electronics = electronics.union(box(5, 56, ELECTRONICS_PCB_Z + PERFBOARD_THICKNESS, 18, 28, 7))
+    amplifier = box(4, 84, AMPLIFIER_UNDERSIDE_Z, 20, 16, AMPLIFIER_BOARD_THICKNESS)
+    for x, y in amplifier_holes():
+        amplifier = amplifier.cut(cylinder(x, y, AMPLIFIER_UNDERSIDE_Z - 1,
+                                           AMPLIFIER_CLEARANCE_D / 2, 4))
+    electronics = electronics.union(amplifier)
+    electronics = electronics.union(box(8, 84, AMPLIFIER_TOP_Z, 12, 9, 3.8))
+    electronics = electronics.union(box(10, 93, AMPLIFIER_TOP_Z, 8, 7,
+                                         ELECTRONICS_PCB_Z + ELECTRONICS_FRONT_ALLOWANCE - AMPLIFIER_TOP_Z))
+    spacers, fasteners = None, None
+    for x, y in amplifier_holes():
+        spacer = cylinder(x, y, ELECTRONICS_PCB_Z + PERFBOARD_THICKNESS,
+                           AMPLIFIER_SPACER_D / 2, AMPLIFIER_GAP)
+        spacer = spacer.cut(cylinder(x, y, ELECTRONICS_PCB_Z,
+                                     AMPLIFIER_CLEARANCE_D / 2, 7))
+        screw = cylinder(x, y, AMPLIFIER_TOP_Z - AMPLIFIER_SCREW_LENGTH,
+                          AMPLIFIER_SCREW_D / 2, AMPLIFIER_SCREW_LENGTH)
+        screw = screw.union(cylinder(x, y, AMPLIFIER_TOP_Z, AMPLIFIER_HEAD_D / 2, AMPLIFIER_HEAD_H))
+        spacers = spacer if spacers is None else spacers.union(spacer)
+        fasteners = screw if fasteners is None else fasteners.union(screw)
+    electronics_usb = box(8, 20, ELECTRONICS_PCB_Z + PERFBOARD_THICKNESS, 12, 36, 8)
     rim = cylinder(SPEAKER_X, SPEAKER_Y, SPEAKER_RIM_Z, SPEAKER_D / 2, 0.8)
     rim = rim.cut(cylinder(SPEAKER_X, SPEAKER_Y, 7, 18.8, 3))
     speaker = rim.union(cone(SPEAKER_X, SPEAKER_Y, 8.8, 19, 15, 12.2))
@@ -172,7 +207,8 @@ def build():
             'speaker_bridge': bridge.clean()}, {
         'battery_board': board, 'battery_cell': cell, 'electronics_envelope': electronics,
         'speaker_envelope': speaker, 'speaker_pad': speaker_pad, 'cable_space': coil,
-        'usb_port_envelope': usb, 'plug_bend_space': bend, 'electronics_plug_space': electronics_usb}
+        'usb_port_envelope': usb, 'plug_bend_space': bend, 'electronics_plug_space': electronics_usb,
+        'electronics_spacers': spacers, 'electronics_fasteners': fasteners}
 
 
 def main():
@@ -182,7 +218,8 @@ def main():
     colours = {'body': '#b5c2ce', 'lid': '#8c9eaf', 'carrier': '#94a99c', 'speaker_bridge': '#91a6b9',
         'battery_board': '#4e746a', 'battery_cell': '#bb8962', 'electronics_envelope': '#7b68a1',
         'speaker_envelope': '#293847', 'speaker_pad': '#92908d', 'cable_space': '#4a97b6',
-        'usb_port_envelope': '#9b9c9d', 'plug_bend_space': '#c7943d', 'electronics_plug_space': '#c7943d'}
+        'usb_port_envelope': '#9b9c9d', 'plug_bend_space': '#c7943d', 'electronics_plug_space': '#c7943d',
+        'electronics_spacers': '#d9bd83', 'electronics_fasteners': '#697989'}
     for name, part in {**parts, **references}.items():
         shape = part.val()
         vertices, faces = shape.tessellate(0.15, 0.2)
@@ -210,24 +247,52 @@ def main():
             checks['printed_part_overlaps_mm3'][f'{a}/{b}'] = round(volume,6)
             assert volume<0.001, f'{a} intersects {b}'
     checks['component_mount_overlaps_mm3'] = {}
+    checks['permitted_thread_engagement_mm3'] = {}
     for name,reference in references.items():
         for part_name,part in parts.items():
-            volume = part.intersect(reference).val().Volume()
+            intersection = part.intersect(reference)
+            if name == 'electronics_fasteners' and part_name == 'carrier':
+                # Only the screw tips intentionally enter the printed pilot walls.
+                checks['permitted_thread_engagement_mm3'][name] = round(intersection.val().Volume(), 6)
+                assert intersection.val().Volume() > 0
+                for x, y in amplifier_holes():
+                    intersection = intersection.cut(cylinder(x, y,
+                        AMPLIFIER_TOP_Z - AMPLIFIER_SCREW_LENGTH, AMPLIFIER_SCREW_D / 2,
+                        ELECTRONICS_PCB_Z - (AMPLIFIER_TOP_Z - AMPLIFIER_SCREW_LENGTH)))
+            volume = intersection.val().Volume()
             checks['component_mount_overlaps_mm3'][f'{name}/{part_name}'] = round(volume,6)
             assert volume<0.001, f'{name} intersects {part_name}'
     checks['component_pair_overlaps_mm3'] = {}
     for a,b in [('battery_board','electronics_envelope'),('battery_cell','electronics_envelope'),
                 ('cable_space','electronics_envelope'),('speaker_envelope','plug_bend_space'),
-                ('electronics_plug_space','battery_board'),('electronics_plug_space','battery_cell')]:
+                ('electronics_plug_space','battery_board'),('electronics_plug_space','battery_cell'),
+                ('electronics_envelope','electronics_spacers'),
+                ('electronics_envelope','electronics_fasteners'),
+                ('electronics_spacers','electronics_fasteners'),
+                ('battery_board','electronics_fasteners'),('battery_cell','electronics_fasteners')]:
         volume = references[a].intersect(references[b]).val().Volume()
         checks['component_pair_overlaps_mm3'][f'{a}/{b}'] = round(volume,6)
         assert volume<0.001, f'{a} intersects {b}'
     checks['reference_bounds_mm'] = {}
-    for name,expected in [('speaker_envelope',(40,40,20)),('electronics_envelope',(20,44,25))]:
+    for name,expected in [('speaker_envelope',(40,40,20)),
+                          ('electronics_envelope',(ELECTRONICS_W,ELECTRONICS_L,
+                              ELECTRONICS_REAR_ALLOWANCE + ELECTRONICS_FRONT_ALLOWANCE))]:
         xmin,ymin,zmin,xmax,ymax,zmax = exact_bounds(references[name])
         actual = [xmax-xmin,ymax-ymin,zmax-zmin]
         assert all(abs(a-b)<0.00001 for a,b in zip(actual,expected)), name
         checks['reference_bounds_mm'][name] = actual
+    checks['electronics_bearing_areas_mm2'] = []
+    for x, y in amplifier_holes():
+        # Thin slices measure contact against the actual notched reference boards.
+        contacts = {}
+        for name, z, radius in [('post_on_perfboard', ELECTRONICS_PCB_Z, 3),
+                               ('spacer_on_perfboard', ELECTRONICS_PCB_Z + PERFBOARD_THICKNESS - 0.01,
+                                AMPLIFIER_SPACER_D / 2),
+                               ('spacer_on_amplifier', AMPLIFIER_UNDERSIDE_Z, AMPLIFIER_SPACER_D / 2)]:
+            area = cylinder(x, y, z, radius, 0.01).intersect(references['electronics_envelope']).val().Volume() / 0.01
+            assert area > 0, f'No {name} bearing at {x}, {y}'
+            contacts[name] = round(area, 3)
+        checks['electronics_bearing_areas_mm2'].append(contacts)
     # Check a straight lift through the open back, without the lid or holder contacts.
     xmin,ymin,zmin,xmax,ymax,zmax = exact_bounds(references['battery_cell'])
     sweep = box(xmin,ymin,zmin,xmax-xmin,ymax-ymin,DEPTH-zmin+20)
@@ -274,19 +339,37 @@ def main():
         'approximate_transverse_hole_centre_spacing':25,'longitudinal_hole_spacing':95,
         'switch_position_from_bottom':[82,90],'speaker_outer_diameter':40,'speaker_total_depth':20,
         'speaker_rear_step_diameter':30,'speaker_rim_to_rear_step':13,
-        'speaker_magnet_diameter':15,'speaker_magnet_depth':5,'electronics_maximum':[44,20,25]}
+        'speaker_magnet_diameter':15,'speaker_magnet_depth':5,'electronics_maximum':[44,20,25],
+        'amplifier_hole_centre_spacing':AMPLIFIER_HOLE_SPACING,
+        'amplifier_hole_centre_to_perfboard_end_range':AMPLIFIER_END_OFFSET_RANGE,
+        'approximate_amplifier_to_perfboard_gap':AMPLIFIER_GAP}
     checks['provisional_dimensions_mm'] = {'holder_width':30,
         'speaker_seat_inner_diameter':SPEAKER_SEAT_INNER_D,
         'speaker_front_projection_inferred':SPEAKER_RIM_Z-SPEAKER_FRONT_Z,
-        'electronics_height_above_pcb':18,'electronics_underside_allowance':7,
+        'electronics_height_above_pcb':ELECTRONICS_FRONT_ALLOWANCE,
+        'electronics_underside_allowance':ELECTRONICS_REAR_ALLOWANCE,
+        'electronics_reserved_total_height':ELECTRONICS_REAR_ALLOWANCE + ELECTRONICS_FRONT_ALLOWANCE,
         'coil_oval_width_length_height':[COIL_W,COIL_L,COIL_H]}
+    checks['electronics_mount_mm'] = {'hole_centres':amplifier_holes(),
+        'hole_centre_to_perfboard_end_nominal':AMPLIFIER_END_OFFSET,
+        'holes_assumed_centred_across_perfboard':True,
+        'perfboard_and_amplifier_thickness_assumed':PERFBOARD_THICKNESS,
+        'perfboard_end_notch_width':AMPLIFIER_CLEARANCE_D,
+        'support_diameter':6,'spacer_outer_diameter':AMPLIFIER_SPACER_D,
+        'spacer_height':AMPLIFIER_GAP,'pilot_diameter':AMPLIFIER_PILOT_D,
+        'provisional_screw_diameter':AMPLIFIER_SCREW_D,'provisional_screw_length':AMPLIFIER_SCREW_LENGTH,
+        'provisional_head_diameter':AMPLIFIER_HEAD_D,'provisional_head_height':AMPLIFIER_HEAD_H,
+        'screw_engagement':ELECTRONICS_PCB_Z - (AMPLIFIER_TOP_Z - AMPLIFIER_SCREW_LENGTH),
+        'pilot_depth':6,'brown_board_has_no_retaining_edge_at_clearance_notches':True}
     checks['clearances_mm'] = {'current_holder_plug_end_to_wall':LENGTH-WALL-(BOARD_Y+140),
         'cone_to_grille':SPEAKER_FRONT_Z-WALL,'coil_top_to_carrier':CARRIER_BOTTOM-(3+COIL_H),
-        'electronics_top_to_closed_lid':LID_BOTTOM-(ELECTRONICS_BOTTOM_Z+ELECTRONICS_H),
+        'electronics_rear_allowance_to_carrier':ELECTRONICS_BOTTOM_Z-CARRIER_TOP,
+        'electronics_top_to_closed_lid':LID_BOTTOM-(ELECTRONICS_PCB_Z+ELECTRONICS_FRONT_ALLOWANCE),
+        'electronics_screw_tip_to_pilot_bottom':AMPLIFIER_TOP_Z-AMPLIFIER_SCREW_LENGTH-(ELECTRONICS_PCB_Z-6),
         'battery_top_to_closed_lid':LID_BOTTOM-(BOARD_Z+11+9.25),
         'speaker_bridge_to_holder_plug':BOARD_Z+1.6-(SPEAKER_BRIDGE_Z+2.4)}
     assert min(checks['clearances_mm'].values())>0
-    checks['status'] = 'Prototype. Verify speaker rim contact, bare perfboard strap contact, mounting dimensions and final cable fit before ordering.'
+    checks['status'] = 'Prototype. Verify amplifier hole alignment, clear perfboard notches, spacer fit, screw fit, speaker rim contact and final cable fit before ordering more.'
     (OUT/'checks.json').write_text(json.dumps(checks,indent=2)+'\n')
     template = (ROOT/'preview-template.html').read_text()
     (ROOT/'preview.html').write_text(template.replace('__MESH_DATA__',json.dumps(meshes,separators=(',',':'))))
