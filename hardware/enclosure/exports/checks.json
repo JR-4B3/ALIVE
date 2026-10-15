@@ -1,0 +1,171 @@
+{
+  "body": {
+    "valid_cad": true,
+    "solid_count": 1,
+    "stl_watertight": true,
+    "stl_connected_parts": 1,
+    "stl_dimensions_mm": [
+      60.0,
+      150.0,
+      60.0
+    ],
+    "step_valid": true,
+    "step_volume_error_mm3": 1.979060471057892e-09
+  },
+  "lid": {
+    "valid_cad": true,
+    "solid_count": 1,
+    "stl_watertight": true,
+    "stl_connected_parts": 1,
+    "stl_dimensions_mm": [
+      55.4,
+      147.4,
+      3.2
+    ],
+    "step_valid": true,
+    "step_volume_error_mm3": 1.8189894035458565e-11
+  },
+  "carrier": {
+    "valid_cad": true,
+    "solid_count": 1,
+    "stl_watertight": true,
+    "stl_connected_parts": 1,
+    "stl_dimensions_mm": [
+      55.0,
+      114.5,
+      19.0
+    ],
+    "step_valid": true,
+    "step_volume_error_mm3": 2.764863893389702e-10
+  },
+  "speaker_bridge": {
+    "valid_cad": true,
+    "solid_count": 1,
+    "stl_watertight": true,
+    "stl_connected_parts": 1,
+    "stl_dimensions_mm": [
+      56.0,
+      7.0,
+      2.4
+    ],
+    "step_valid": true,
+    "step_volume_error_mm3": 1.1368683772161603e-12
+  },
+  "printed_part_overlaps_mm3": {
+    "body/lid": 0.0,
+    "body/carrier": 0.0,
+    "body/speaker_bridge": 0.0,
+    "lid/carrier": 0.0,
+    "lid/speaker_bridge": 0.0,
+    "carrier/speaker_bridge": 0.0
+  },
+  "component_mount_overlaps_mm3": {
+    "battery_board/body": 0.0,
+    "battery_board/lid": 0.0,
+    "battery_board/carrier": 0.0,
+    "battery_board/speaker_bridge": 0.0,
+    "battery_cell/body": 0.0,
+    "battery_cell/lid": 0.0,
+    "battery_cell/carrier": 0.0,
+    "battery_cell/speaker_bridge": 0.0,
+    "electronics_envelope/body": 0.0,
+    "electronics_envelope/lid": 0.0,
+    "electronics_envelope/carrier": 0.0,
+    "electronics_envelope/speaker_bridge": 0.0,
+    "speaker_envelope/body": 0.0,
+    "speaker_envelope/lid": 0.0,
+    "speaker_envelope/carrier": 0.0,
+    "speaker_envelope/speaker_bridge": 0.0,
+    "speaker_pad/body": 0.0,
+    "speaker_pad/lid": 0.0,
+    "speaker_pad/carrier": 0.0,
+    "speaker_pad/speaker_bridge": 0.0,
+    "cable_space/body": 0.0,
+    "cable_space/lid": 0.0,
+    "cable_space/carrier": 0.0,
+    "cable_space/speaker_bridge": 0.0,
+    "usb_port_envelope/body": 0.0,
+    "usb_port_envelope/lid": 0.0,
+    "usb_port_envelope/carrier": 0.0,
+    "usb_port_envelope/speaker_bridge": 0.0,
+    "plug_bend_space/body": 0.0,
+    "plug_bend_space/lid": 0.0,
+    "plug_bend_space/carrier": 0.0,
+    "plug_bend_space/speaker_bridge": 0.0,
+    "electronics_plug_space/body": 0.0,
+    "electronics_plug_space/lid": 0.0,
+    "electronics_plug_space/carrier": 0.0,
+    "electronics_plug_space/speaker_bridge": 0.0
+  },
+  "component_pair_overlaps_mm3": {
+    "battery_board/electronics_envelope": 0.0,
+    "battery_cell/electronics_envelope": 0.0,
+    "cable_space/electronics_envelope": 0.0,
+    "speaker_envelope/plug_bend_space": 0.0,
+    "electronics_plug_space/battery_board": 0.0,
+    "electronics_plug_space/battery_cell": 0.0
+  },
+  "reference_bounds_mm": {
+    "speaker_envelope": [
+      40.0,
+      40.0,
+      20.0
+    ],
+    "electronics_envelope": [
+      20.0,
+      44.0,
+      25.0
+    ]
+  },
+  "battery_removal_sweep_overlaps_mm3": {
+    "body": 0.0,
+    "carrier": 0.0,
+    "speaker_bridge": 0.0,
+    "electronics": 0.0,
+    "speaker": 0.0
+  },
+  "measured_dimensions_mm": {
+    "holder_without_usb": 100,
+    "holder_with_usb": 106,
+    "holder_with_current_plug_and_bend": 140,
+    "board_hole_diameter": 3,
+    "approximate_transverse_hole_centre_spacing": 25,
+    "longitudinal_hole_spacing": 95,
+    "switch_position_from_bottom": [
+      82,
+      90
+    ],
+    "speaker_outer_diameter": 40,
+    "speaker_total_depth": 20,
+    "speaker_rear_step_diameter": 30,
+    "speaker_rim_to_rear_step": 13,
+    "speaker_magnet_diameter": 15,
+    "speaker_magnet_depth": 5,
+    "electronics_maximum": [
+      44,
+      20,
+      25
+    ]
+  },
+  "provisional_dimensions_mm": {
+    "holder_width": 30,
+    "speaker_seat_inner_diameter": 39.0,
+    "speaker_front_projection_inferred": 2.0,
+    "electronics_height_above_pcb": 18,
+    "electronics_underside_allowance": 7,
+    "coil_oval_width_length_height": [
+      50.0,
+      80.0,
+      19.0
+    ]
+  },
+  "clearances_mm": {
+    "current_holder_plug_end_to_wall": 2.0,
+    "cone_to_grille": 4.0,
+    "coil_top_to_carrier": 2.0,
+    "electronics_top_to_closed_lid": 2.8999999999999986,
+    "battery_top_to_closed_lid": 5.649999999999999,
+    "speaker_bridge_to_holder_plug": 1.2000000000000028
+  },
+  "status": "Prototype. Verify speaker rim contact, bare perfboard strap contact, mounting dimensions and final cable fit before ordering."
+}

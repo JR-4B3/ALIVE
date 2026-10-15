@@ -1,0 +1,3 @@
+exports/*.step binary
+preview.html linguist-generated=true
+exports/checks.json linguist-generated=true
