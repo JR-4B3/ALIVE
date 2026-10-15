@@ -1,0 +1,50 @@
+/* Phone-only visitor layout. One viewport, including the on-screen keyboard. */
+.signal-strip { font-family: ui-monospace, monospace; }
+.signal-strip #app > main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(100px, 1fr) minmax(80px, .85fr) auto;
+  width: 100%; max-width: 430px;
+  height: var(--alive-height, 100dvh); min-height: 0;
+  position: fixed; top: var(--alive-top, 0px); left: 0; right: 0; margin: 0 auto;
+  padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  gap: 10px;
+}
+.signal-strip .translation-panel {
+  position: relative; min-height: 0; min-width: 0;
+  display: flex; flex-direction: column; border-color: #777;
+}
+.signal-strip .translation-panel > div:first-child { padding: 6px 10px; min-height: 44px; border-color: #777; }
+.signal-strip .translation-panel > div:first-child > div > div:first-child { display: none; }
+.signal-strip #translationState { margin: 0; font-size: 12px; letter-spacing: .06em; }
+.signal-strip #clear { min-width: 62px; min-height: 32px; padding: 4px 8px; font-size: 12px; }
+.signal-strip .translation-panel > div:nth-child(2) { flex: 1; min-height: 0; padding: 8px 12px 58px; overflow: hidden; }
+.signal-strip #message { font-size: clamp(28px, 9vw, 40px); line-height: 1.12; }
+.signal-strip #mic { position: absolute; right: 10px; bottom: 10px; width: 44px; height: 44px; min-height: 44px; padding: 0; border-color: #aaa; }
+.signal-strip #mic svg { width: 24px; height: 24px; }
+.signal-strip .spectrum-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; border: 1px solid #777; }
+.spectrum-heading, .spectrum-scale { flex: none; display: flex; justify-content: space-between; gap: 6px; text-transform: uppercase; letter-spacing: .06em; }
+.spectrum-heading { min-height: 28px; align-items: center; padding: 6px 9px; border-bottom: 1px solid #444; font-size: 11px; }
+#inputState { color: #999; font-size: 10px; }
+.spectrum-history { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+#spectrogram { position: absolute; inset: 0; display: block; width: 100%; height: 100%; background: #000; }
+.spectrum-scale { min-height: 22px; align-items: center; padding: 4px 9px; font-size: 9px; color: #999; }
+.signal-strip .contact-panel { display: block; min-width: 0; min-height: 0; }
+.signal-strip #contactForm { display: grid; grid-template-rows: 48px 48px; gap: 8px; padding: 8px; border-color: #777; }
+.signal-strip #contactForm > div:first-child { display: none; }
+.signal-strip #prompt { width: 100%; min-width: 0; min-height: 48px; height: 48px; padding: 8px 10px; font-size: 18px; }
+.signal-strip #contactForm > div:nth-of-type(2) { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.signal-strip #send, .signal-strip #playSignal { height: 48px; min-height: 48px; padding: 6px; font-size: 14px; letter-spacing: .04em; }
+.signal-strip button:disabled { opacity: .55; }
+@media (max-height: 520px) {
+  .signal-strip #app > main { gap: 6px; padding: 6px 10px; }
+  .signal-strip #contactForm { grid-template-rows: 44px 44px; gap: 6px; }
+  .signal-strip #prompt, .signal-strip #send, .signal-strip #playSignal { height: 44px; min-height: 44px; }
+  .signal-strip #message { font-size: 26px; }
+  .signal-strip .translation-panel > div:nth-child(2) { padding-bottom: 46px; }
+}
+.spectrum-boundary {
+  position: absolute; left: 0; right: 0; pointer-events: none;
+  border-top: 1px dashed #555; padding: 1px 6px; text-align: right;
+  font-size: 9px; letter-spacing: .06em; color: #888;
+}

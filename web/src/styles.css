@@ -89,3 +89,35 @@
 @media (prefers-reduced-motion: reduce) {
   .play-loading span { animation: none; opacity: 1; }
 }
+
+/* The exhibition receiver fits the phone viewport, including its safe areas. */
+html, body, #app { height: 100dvh; min-height: 0; overflow: hidden; }
+#app > main {
+  height: 100dvh;
+  min-height: 0;
+  max-width: 430px;
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+#app > main > section:first-child { min-height: 0; }
+#app > main > section:first-child > div:nth-child(2) { min-height: 0; padding-top: 12px; padding-bottom: 12px; }
+#message { font-size: clamp(24px, 9vw, 44px); }
+@media (max-height: 620px) {
+  #app > main { gap: 8px; padding: 8px 12px; }
+  #app > main > section:last-child { gap: 8px; }
+  #mic { min-height: 42px; font-size: 14px; }
+  #contactForm { gap: 8px; padding: 8px; }
+  #prompt, #send, #playSignal { min-height: 36px; }
+}
+
+#app > main > section:first-child { position: relative; }
+.mic-toggle {
+  position: absolute; right: 10px; bottom: 10px; width: 42px; height: 42px;
+  min-height: 42px; padding: 0; display: grid; place-items: center;
+}
+.mic-toggle[data-active=true] .mic-off-cross { display: none; }
+#app > main > section:first-child > div:nth-child(2) { padding-bottom: 58px; }
+
+/* Diagnostics retain scrolling for connection settings and recording controls. */
+html:has(body.debug-ui), body.debug-ui, body.debug-ui #app { height: auto; min-height: 100%; overflow: auto; }
+body.debug-ui #app > main { height: auto; min-height: 100dvh; max-width: 36rem; }

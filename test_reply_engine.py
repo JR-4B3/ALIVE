@@ -25,10 +25,11 @@ def test_sanitize_message_keeps_firmware_characters():
     assert sanitize_message("hello world") == "HELLO WORLD"
 
 
-def test_reply_duration_matches_wifi_firmware():
-    assert signal_duration_seconds("HI") == 2.108
-    assert signal_duration_seconds("A") == 1.49
-    assert signal_duration_seconds("A A") == 3.19
+def test_reply_duration_matches_ultrasound_firmware():
+    # 150 ms lead, two sync chirps, 540 ms per character, closing chirp and tail.
+    assert signal_duration_seconds("HI") == 3.53
+    assert signal_duration_seconds("A") == 2.99
+    assert signal_duration_seconds("A A") == 4.07
 
 
 def test_reply_is_short_and_transport_safe():

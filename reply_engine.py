@@ -38,15 +38,9 @@ def sanitize_message(text: str) -> str:
 
 
 def signal_duration_seconds(text: str) -> float:
-    """Match the ESP32's lead, 220 ms tones/gaps, and one-second tail."""
-    gap_ms = sum(max(220, (raw_gap_ms(char) * 65 + 50) // 100) for char in text)
-    return (50 + len(text) * 220 + gap_ms + 1000) / 1000
-
-
-def raw_gap_ms(char: str) -> int:
-    if char == " ":
-        return 1600
-    return 100 + (ord(char) - ord("A")) * 50
+    """Match the ESP32's ultrasound framing: two sync chirps, one 360 ms chirp
+    and 180 ms gap per character, a closing sync chirp, and the tail."""
+    return round(2.45 + len(text) * 0.54, 3)
 
 
 def normalize_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:

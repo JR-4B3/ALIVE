@@ -3,7 +3,7 @@
 
 GitHub Pages stays the clean visitor page. For testing, this script hosts the
 debugging build of the same page (docs/debug) from this computer: microphone
-and room levels, tone/stream diagnostics, connection settings, and the
+and room levels, chirp/stream diagnostics, connection settings, and the
 diagnostic recording upload. Run it, then scan the printed QR code or type the
 printed URL/IP with the phone.
 
