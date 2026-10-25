@@ -30,6 +30,12 @@ def clock():
         yield value
 
 
+def started(state, clock):
+    """Skip the silence a freshly started API keeps for boards still playing."""
+    clock.now += emitter.STARTUP_SILENCE_SECONDS
+    return state
+
+
 def poll(state, board):
     return state.device_command(board, "5000", "3")
 
@@ -68,7 +74,7 @@ def test_noise_chirps_stay_apart_so_a_phone_hears_each_one():
 
 
 def test_only_one_board_is_ever_on_the_air(clock):
-    state = ApiState(rng=random.Random(7))
+    state = started(ApiState(rng=random.Random(7)), clock)
     played = run(state, clock, 1800)
     assert len(played) > 40
     for (start, _, play), (next_start, _, _) in zip(played, played[1:]):
@@ -89,7 +95,7 @@ def test_five_boards_get_one_intelligent_role_and_at_most_one_dead(clock):
 
 
 def test_each_kind_plays_from_a_board_with_that_role(clock):
-    state = ApiState(rng=random.Random(3))
+    state = started(ApiState(rng=random.Random(3)), clock)
     poll_all(state)
     played = run(state, clock, 500)
     roles = {board: poll(state, board)["role"] for board in BOARDS}
@@ -98,13 +104,13 @@ def test_each_kind_plays_from_a_board_with_that_role(clock):
 
 
 def test_a_single_board_plays_every_kind(clock):
-    state = ApiState(rng=random.Random(5))
+    state = started(ApiState(rng=random.Random(5)), clock)
     played = run(state, clock, 900, boards=BOARDS[:1])
     assert {play["kind"] for _, _, play in played} == {"noise", "clock", "intelligent"}
 
 
 def test_roles_change_over_time_but_not_during_a_conversation(clock):
-    state = ApiState(rng=random.Random(11))
+    state = started(ApiState(rng=random.Random(11)), clock)
     roles = lambda: {board: poll(state, board)["role"] for board in BOARDS}
     poll_all(state)
     first = roles()
@@ -121,7 +127,7 @@ def test_roles_change_over_time_but_not_during_a_conversation(clock):
 
 
 def test_the_intelligent_role_moves_when_its_board_goes_quiet(clock):
-    state = ApiState(rng=random.Random(2))
+    state = started(ApiState(rng=random.Random(2)), clock)
     poll_all(state)
     intelligent = next(board for board in BOARDS if poll(state, board)["role"] == "intelligent")
     others = [board for board in BOARDS if board != intelligent]
@@ -131,7 +137,7 @@ def test_the_intelligent_role_moves_when_its_board_goes_quiet(clock):
 
 
 def test_a_reply_waits_for_the_air_and_goes_to_the_intelligent_board(clock):
-    state = ApiState(rng=random.Random(8))
+    state = started(ApiState(rng=random.Random(8)), clock)
     played = run(state, clock, 4)
     assert played and played[0][2]["kind"] == "intelligent"
     state.queue_reply("visitor-0001", "who are you", "WE ARE LANTERN")
@@ -143,7 +149,7 @@ def test_a_reply_waits_for_the_air_and_goes_to_the_intelligent_board(clock):
 
 
 def test_old_replies_expire_when_no_board_plays_them(clock):
-    state = ApiState(rng=random.Random(1))
+    state = started(ApiState(rng=random.Random(1)), clock)
     poll(state, BOARDS[0])
     state.queue_reply("", "hi", "OLD")
     clock.now += emitter.REPLY_EXPIRY_SECONDS + 1
@@ -152,7 +158,7 @@ def test_old_replies_expire_when_no_board_plays_them(clock):
 
 
 def test_contact_needs_a_decoded_transmission(clock):
-    state = ApiState(rng=random.Random(8))
+    state = started(ApiState(rng=random.Random(8)), clock)
     assert not state.has_contact("visitor-0001", "IS ANYONE THERE")
     played = run(state, clock, 4)
     text = played[0][2]["text"]
@@ -218,8 +224,8 @@ def http_error(call):
     raise AssertionError("expected an HTTP error")
 
 
-def test_web_and_device_use_separate_tokens_and_restricted_origin():
-    state = ApiState(rng=random.Random(8))
+def test_web_and_device_use_separate_tokens_and_restricted_origin(clock):
+    state = started(ApiState(rng=random.Random(8)), clock)
     base, stop = serve(state, {"ALIVE_WEB_TOKEN": "web-secret", "ALIVE_DEVICE_TOKEN": "device-secret",
                                "ALIVE_WEB_ORIGIN": "https://site.example"})
     try:
@@ -250,7 +256,7 @@ def test_web_and_device_use_separate_tokens_and_restricted_origin():
 
 
 def test_public_visitor_reaches_the_model_only_after_hearing_a_signal(clock):
-    state = ApiState(rng=random.Random(8))
+    state = started(ApiState(rng=random.Random(8)), clock)
     environment = {"ALIVE_WEB_TOKEN": "operator-secret", "ALIVE_DEVICE_TOKEN": "device-secret",
                    "ALIVE_WEB_ORIGIN": "https://site.example", "ALIVE_PUBLIC_DEMO": "1"}
     base, stop = serve(state, environment)
@@ -289,11 +295,46 @@ def test_public_visitor_reaches_the_model_only_after_hearing_a_signal(clock):
 
 def test_full_queue_and_offline_boards_refuse_replies(clock):
     state = ApiState()
-    assert state.reply_unavailable().startswith("No unit")
+    assert state.reserve_reply().startswith("No unit")
     poll(state, BOARDS[0])
+    # Places are held while the model runs, so a burst cannot overfill the queue.
     for _ in range(emitter.REPLY_QUEUE_LIMIT):
-        state.queue_reply("", "hi", "HELLO")
-    assert state.reply_unavailable().startswith("The channel is busy")
+        assert state.reserve_reply() == ""
+    assert state.reserve_reply().startswith("The channel is busy")
+    state.release_reply()
+    assert state.reserve_reply() == ""
+    state.queue_reply("", "hi", "HELLO")
+    assert state.reserve_reply().startswith("The channel is busy")
+
+
+def test_only_model_calls_count_against_the_daily_limit(clock):
+    state = ApiState()
+    poll(state, BOARDS[0])
+    with patch("emitter.PUBLIC_MESSAGES_PER_DAY", 1):
+        for _ in range(5):
+            assert state.throttle_public_message("") == 0
+            clock.now += emitter.SESSION_MESSAGE_SECONDS
+        assert state.reserve_reply(public=True) == ""
+        state.release_reply()
+        assert state.reserve_reply(public=True) == "Daily message limit reached"
+        clock.now += 86400
+        poll(state, BOARDS[0])
+        assert state.reserve_reply(public=True) == ""
+
+
+def test_a_restarted_api_waits_for_boards_that_may_still_be_playing(clock):
+    state = ApiState(rng=random.Random(8))
+    played = run(state, clock, 60)
+    assert played[0][0] >= 1000 + emitter.STARTUP_SILENCE_SECONDS
+    assert emitter.STARTUP_SILENCE_SECONDS > signal_duration_seconds("Z" * 40)
+
+
+def test_the_air_stays_reserved_for_a_late_delivery(clock):
+    state = started(ApiState(rng=random.Random(8)), clock)
+    play = poll(state, BOARDS[0])["play"]
+    # The board may start up to DELIVERY_SECONDS after the grant.
+    late_end = clock.now + emitter.DELIVERY_SECONDS + score_seconds(play)
+    assert state.status()["airFreeInSeconds"] >= round(late_end - clock.now + emitter.AIR_GAP_SECONDS, 1) - .1
 
 
 def test_health_endpoint_needs_no_token():

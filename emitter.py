@@ -35,6 +35,12 @@ RECEIVER_CAPTURES = Path.home() / ".local" / "state" / "alive" / "receiver-captu
 DEVICE_LEASE_SECONDS = 60
 # Silence between two transmissions, so a phone logs them as separate signals.
 AIR_GAP_SECONDS = 3.0
+# A board drops a signal whose poll took longer than this, so the air stays
+# reserved for any signal that does start.
+DELIVERY_SECONDS = 4.0
+# After a restart the API cannot know whether a board is still playing, so it
+# waits out the longest signal before granting a new one.
+STARTUP_SILENCE_SECONDS = 26.0
 # Random pause before the next unprompted signal.
 SIGNAL_PAUSE_SECONDS = (6.0, 20.0)
 # Share of unprompted signals that are noise, a clock, or an intelligent beacon.
@@ -103,12 +109,14 @@ class ApiState:
         self._roles: dict[str, str] = {}
         self._clocks: dict[str, tuple[int, int, int]] = {}
         self._roles_at = -math.inf
-        self._air_free_at = 0.0
+        self._air_free_at = time.monotonic() + STARTUP_SILENCE_SECONDS
         self._next_signal_at = 0.0
         # The first unprompted signal after a start is a beacon, so a test
         # visit hears an intelligent message quickly.
         self._next_kind = "intelligent"
         self._replies: deque[tuple[float, str]] = deque()
+        # Replies whose model call is running; they count against the queue limit.
+        self._pending_replies = 0
         # Intelligent texts that went on the air. Repeating one back proves a
         # visitor's phone heard it.
         self._transmitted: deque[tuple[float, str]] = deque()
@@ -186,23 +194,17 @@ class ApiState:
             self._transmitted.append((now, str(score["text"])))
             while now - self._transmitted[0][0] > CONTACT_SECONDS:
                 self._transmitted.popleft()
-        self._air_free_at = now + score_seconds(score) + AIR_GAP_SECONDS
+        self._air_free_at = now + DELIVERY_SECONDS + score_seconds(score) + AIR_GAP_SECONDS
         self._next_signal_at = self._air_free_at + self._rng.uniform(*SIGNAL_PAUSE_SECONDS)
         return score
 
-    def reserve_public_message(self, session: str) -> int:
-        """Bound public model usage even when callers bypass the browser UI."""
+    def throttle_public_message(self, session: str) -> int:
+        """Seconds this visitor must wait before sending again, or 0."""
         with self._lock:
             now = time.monotonic()
-            if now - self._public_message_window_at >= 86400:
-                self._public_message_window_at = now
-                self._public_message_count = 0
-            if self._public_message_count >= PUBLIC_MESSAGES_PER_DAY:
-                return -1
             wait = SESSION_MESSAGE_SECONDS - (now - float(self._sessions.get(session, {}).get("sentAt", -math.inf)))
             if wait > 0:
                 return max(1, int(wait + 0.999))
-            self._public_message_count += 1
             # Callers without a session share one entry, and so one limit.
             self._session(session, now)["sentAt"] = now
             return 0
@@ -233,20 +235,35 @@ class ApiState:
             assert isinstance(history, list)
             return list(history)
 
-    def reply_unavailable(self) -> str:
-        """Why a reply could not be queued now, or an empty string."""
+    def reserve_reply(self, public: bool = False) -> str:
+        """Hold a queue place for a reply before the model call. Returns why
+        there is none, or an empty string; then call queue_reply or release_reply."""
         with self._lock:
             now = time.monotonic()
             if not self._online(now):
                 return "No unit is listening. Try again in a minute."
-            if len(self._replies) >= REPLY_QUEUE_LIMIT:
+            if len(self._replies) + self._pending_replies >= REPLY_QUEUE_LIMIT:
                 return "The channel is busy. Try again in a moment."
+            if public:
+                # Bound public model usage even when callers bypass the browser UI.
+                if now - self._public_message_window_at >= 86400:
+                    self._public_message_window_at = now
+                    self._public_message_count = 0
+                if self._public_message_count >= PUBLIC_MESSAGES_PER_DAY:
+                    return "Daily message limit reached"
+                self._public_message_count += 1
+            self._pending_replies += 1
             return ""
+
+    def release_reply(self) -> None:
+        with self._lock:
+            self._pending_replies = max(0, self._pending_replies - 1)
 
     def queue_reply(self, session: str, message: str, reply: str) -> int:
         """Queue a reply for the intelligent board and return its place in line."""
         with self._lock:
             now = time.monotonic()
+            self._pending_replies = max(0, self._pending_replies - 1)
             self._replies.append((now, reply))
             self._conversation_at = now
             if session:
@@ -465,23 +482,26 @@ def make_handler(state: ApiState):
             if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", session):
                 session = ""
             if public_action:
-                wait = state.reserve_public_message(session)
+                wait = state.throttle_public_message(session)
                 if wait:
-                    message = "Daily message limit reached" if wait < 0 else f"Wait {wait}s before sending again"
-                    self._send_json({"error": message}, HTTPStatus.TOO_MANY_REQUESTS)
+                    self._send_json({"error": f"Wait {wait}s before sending again"}, HTTPStatus.TOO_MANY_REQUESTS)
                     return
             # Until the visitor's phone has decoded an intelligent message, a
             # message goes nowhere: no model call and no reply.
             if not state.has_contact(session, str(payload.get("heard") or "")):
                 self._send_json({"contact": False})
                 return
-            unavailable = state.reply_unavailable()
+            unavailable = state.reserve_reply(public_action)
             if unavailable:
-                self._send_json({"error": unavailable}, HTTPStatus.SERVICE_UNAVAILABLE)
+                status = HTTPStatus.TOO_MANY_REQUESTS if unavailable.startswith("Daily") else HTTPStatus.SERVICE_UNAVAILABLE
+                self._send_json({"error": unavailable}, status)
                 return
             try:
                 reply = generate_reply(player_text, state.conversation(session))
-            except ReplyUnavailableError as exc:
+            except BaseException as exc:
+                state.release_reply()
+                if not isinstance(exc, ReplyUnavailableError):
+                    raise
                 self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return
             position = state.queue_reply(session, player_text.strip(), reply)

@@ -29,6 +29,9 @@ constexpr uint32_t SWITCH_NETWORK_AFTER_MS = 60000;
 // Without the API the board plays its own noise, clock, and beacon signals.
 constexpr uint32_t OFFLINE_AFTER_MS = 60000;
 constexpr uint32_t RESTART_AFTER_MS = 600000;
+// The API keeps the air free for a signal for this long after granting it.
+// A later arrival is dropped, since another board may already be playing.
+constexpr uint32_t DELIVERY_MS = 4000;
 constexpr uint32_t WATCHDOG_S = 30;
 static_assert(SAMPLE_RATE == beacon::rate, "The chirp tables assume 48 kHz");
 
@@ -59,7 +62,9 @@ const char *const BEACON_LINES[] = {"IS ANYONE THERE", "WE ARE HERE", "THIS IS L
                                     "AURORA CALLING", "CAN YOU HEAR US", "ANSWER IF YOU HEAR"};
 
 int currentNetwork = -1;
-int failedNetwork = -1;
+// Networks that failed since the last good poll, one bit each.
+uint32_t failedNetworks = 0;
+static_assert(NETWORK_COUNT <= 32, "failedNetworks has one bit per network");
 uint32_t lastPollAt = 0;
 uint32_t lastHealthyAt = 0;
 uint32_t wifiJoinStartedAt = 0;
@@ -193,23 +198,26 @@ void playOfflineSignal() {
   playScore();
 }
 
-// Joins the first listed network the scan shows, skipping the one that just
-// failed unless nothing else is in range. Hidden or unseen networks are tried
-// in turn.
+// Joins the first listed network the scan shows that has not failed since the
+// last good poll. Once every visible network has failed, it starts over. With
+// none in range, it tries each listed network in turn, for hidden ones.
 void joinWifi() {
   const int found = WiFi.scanNetworks();
-  int choice = -1, fallback = -1;
-  for (int k = 0; k < NETWORK_COUNT && choice < 0; ++k) {
-    for (int i = 0; i < found; ++i) {
-      if (WiFi.SSID(i) != NETWORKS[k].ssid) continue;
-      Serial.printf("Found %s at %d dBm\n", NETWORKS[k].ssid, static_cast<int>(WiFi.RSSI(i)));
-      if (k != failedNetwork) choice = k;
-      else if (fallback < 0) fallback = k;
-      break;
+  int choice = -1;
+  for (int pass = 0; pass < 2 && choice < 0; ++pass) {
+    for (int k = 0; k < NETWORK_COUNT && choice < 0; ++k) {
+      if (failedNetworks & (1u << k)) continue;
+      for (int i = 0; i < found; ++i) {
+        if (WiFi.SSID(i) != NETWORKS[k].ssid) continue;
+        Serial.printf("Found %s at %d dBm\n", NETWORKS[k].ssid, static_cast<int>(WiFi.RSSI(i)));
+        choice = k;
+        break;
+      }
     }
+    if (choice < 0) failedNetworks = 0;
   }
   WiFi.scanDelete();
-  if (choice < 0) choice = fallback >= 0 ? fallback : (currentNetwork + 1) % NETWORK_COUNT;
+  if (choice < 0) choice = (currentNetwork + 1) % NETWORK_COUNT;
   currentNetwork = choice;
   WiFi.disconnect();
   WiFi.begin(NETWORKS[choice].ssid, NETWORKS[choice].password);
@@ -265,6 +273,7 @@ void pollForMessage() {
   http.addHeader("X-Alive-Board", WiFi.macAddress());
   http.addHeader("X-Alive-Uptime-Ms", String(millis()));
   http.addHeader("X-Alive-Reset", String(static_cast<int>(esp_reset_reason())));
+  const uint32_t requestedAt = millis();
   const int status = http.GET();
   if (status == HTTP_CODE_OK) {
     JsonDocument json;
@@ -276,11 +285,14 @@ void pollForMessage() {
                       NETWORKS[currentNetwork].ssid, json["role"].as<const char *>());
       serverReachable = true;
       offline = false;
-      failedNetwork = -1;
+      failedNetworks = 0;
       lastHealthyAt = millis();
       // The API hands out each signal once, to one board at a time.
       JsonObject play = json["play"].as<JsonObject>();
-      if (!play.isNull()) {
+      if (!play.isNull() && millis() - requestedAt > DELIVERY_MS) {
+        Serial.printf("Dropped a %s signal that arrived after %lu ms\n", play["kind"] | "",
+                      static_cast<unsigned long>(millis() - requestedAt));
+      } else if (!play.isNull()) {
         strlcpy(score.kind, play["kind"] | "signal", sizeof(score.kind));
         score.leadMs = min<uint32_t>(play["leadMs"] | 0, 2000);
         score.count = 0;
@@ -348,7 +360,7 @@ void loop() {
                        millis() - wifiJoinStartedAt >= SWITCH_NETWORK_AFTER_MS;
   if (joinTimedOut || noRoute) {
     if (noRoute) Serial.printf("No API reply over %s; trying another network\n", NETWORKS[currentNetwork].ssid);
-    failedNetwork = currentNetwork;
+    if (currentNetwork >= 0) failedNetworks |= 1u << currentNetwork;
     joinWifi();
   } else if (WiFi.status() == WL_CONNECTED && millis() - lastPollAt >= POLL_MS) {
     lastPollAt = millis();
