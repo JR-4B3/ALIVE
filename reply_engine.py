@@ -6,9 +6,11 @@ import re
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Sequence
 
-MAX_REPLY_CHARS = 12
-MAX_SIGNAL_SECONDS = 15.0
+# Ultrasound needs 0.54 s per character, so 40 characters play for 24 seconds.
+MAX_REPLY_CHARS = 40
+MAX_SIGNAL_SECONDS = 25.0
 DEFAULT_MODEL = "gpt-6-luna"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 LOCAL_ENV_FILE = Path(__file__).with_name(".env")
@@ -54,7 +56,8 @@ def normalize_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:
     return cleaned
 
 
-def generate_reply(player_text: str) -> str:
+def generate_reply(player_text: str, history: Sequence[tuple[str, str]] = ()) -> str:
+    """Reply to a visitor. History holds their earlier (message, reply) turns."""
     load_local_env()
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -63,9 +66,13 @@ def generate_reply(player_text: str) -> str:
     payload = {
         "model": os.environ.get("ALIVE_OPENAI_MODEL", DEFAULT_MODEL),
         "instructions": build_prompt(),
-        "input": player_text.strip()[:240],
+        "input": [
+            *({"role": role, "content": text} for turn in history
+              for role, text in zip(("user", "assistant"), turn)),
+            {"role": "user", "content": player_text.strip()[:240]},
+        ],
         "reasoning": {"effort": "none"},
-        "max_output_tokens": 40,
+        "max_output_tokens": 60,
     }
     request = urllib.request.Request(
         OPENAI_RESPONSES_URL,
@@ -100,10 +107,11 @@ def build_prompt() -> str:
             "Your crew launched you decades ago to help anyone who crossed this route.",
             "You remember fragments of their journey. Speak with calm urgency and a trace of longing.",
             "Answer the visitor's message directly. Give useful guidance when you can; admit uncertainty briefly.",
-            "Your transmitter has room for only one tiny burst.",
-            f"Reply with one to three short words, at most {MAX_REPLY_CHARS} characters total.",
+            "The visitor found you by decoding your ultrasound signal on their phone.",
+            "Your transmitter sends one letter at a time, so every letter costs power.",
+            f"Reply in at most {MAX_REPLY_CHARS} characters total, about two to seven short words.",
             "Use only uppercase A to Z and spaces. No punctuation, numbers, labels, or explanation.",
-            "Examples of the required length: STAY CLOSE, SEEK SHELTER, WE ARE HERE.",
+            "Examples of the required length: WE ARE HERE, WHO ARE YOU, OUR SHIP WENT DARK LONG AGO.",
         ]
     )
 

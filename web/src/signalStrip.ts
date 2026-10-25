@@ -1,4 +1,4 @@
-// Visitor layout: translation, a black-and-white spectrogram, and contact.
+// Visitor layout: reception log, a black-and-white spectrogram, and contact.
 import './signalStrip.css';
 
 const HIDDEN_LOW_HZ = 17500, HIDDEN_HIGH_HZ = 20500, HIDDEN_SHARE = .6;
@@ -6,10 +6,8 @@ const HIDDEN_LOW_HZ = 17500, HIDDEN_HIGH_HZ = 20500, HIDDEN_SHARE = .6;
 export function mountSignalStrip() {
   document.body.classList.add('signal-strip');
   const main = document.querySelector('main')!;
-  main.children[0].classList.add('translation-panel');
-  main.children[1].classList.add('contact-panel');
   main.children[0].insertAdjacentHTML('afterend', `<section class="spectrum-panel" aria-label="Live sound spectrum">
-    <div class="spectrum-heading"><span>Signal strip</span><span id="inputState" role="status">Microphone off</span></div>
+    <div class="spectrum-heading"><span>Spectrogram</span><span id="inputState" role="status">Microphone off</span></div>
     <div class="spectrum-history"><canvas id="spectrogram" aria-label="Black-and-white microphone spectrogram"></canvas>
       <span class="spectrum-boundary" style="top: ${HIDDEN_SHARE * 100}%">${HIDDEN_LOW_HZ / 1000} kHz</span></div>
     <div class="spectrum-scale"><span>${HIDDEN_HIGH_HZ / 1000} kHz</span><span>Frequency / time</span><span>100 Hz · now</span></div>

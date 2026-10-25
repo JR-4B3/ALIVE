@@ -8,7 +8,9 @@ phone page -> HTTPS API -> ESP32 over Wi-Fi -> amplifier -> speaker
      +-------------- phone microphone -------------+
 ```
 
-A visitor sends a message, and the API asks a language model for a reply of at most 12 characters. **Play signal** queues that reply once. Each ESP32 polls the API and plays the reply as one chirp per letter, framed by sync chirps. The phone decodes the sound locally, so the text it shows comes only from what its microphone heard. See [the deployment guide](DEPLOY.md) for the server, network, firmware, and publishing steps. The guide uses placeholders for every deployment-specific address.
+Five ESP32 units transmit on their own, one at a time. The API deals each unit a random role every 10 minutes: one is intelligent, the others are a clock, noise, or dead. Noise is a few chirps on random channels. A clock repeats one channel at a fixed period. Now and then the intelligent unit sends a beacon such as `IS ANYONE THERE`, as one chirp per letter framed by sync chirps. The phone decodes the sound locally and judges each reception from the sound alone. It shows noise and clocks in grey and framed messages in green.
+
+Once a phone has decoded a green message, its visitor can write back. The page sends the decoded text along, and the API asks a language model for a reply of at most 40 characters. The model sees the visitor's last six turns. The intelligent unit plays the reply as soon as the air is free. A message sent before the phone heard anything goes nowhere: the API makes no model call and nothing answers. See [the deployment guide](DEPLOY.md) for the server, network, firmware, and publishing steps. The guide uses placeholders for every deployment-specific address.
 
 ## Build and run
 
@@ -36,7 +38,9 @@ The ESP32-C3 and MAX98357 connections are shown in [the wiring diagram](docs/ali
 ## Source layout
 
 - `web/src/`: phone receiver and UI.
-- `emitter.py`, `reply_engine.py`: API, one-time play state, and reply handling.
+- `emitter.py`: API, unit roles, the shared air, and visitor conversations.
+- `signals.py`: the chirp sequences for messages, noise, and clocks.
+- `reply_engine.py`: reply model calls.
 - `firmware/esp32_i2s_emitter/`: hardware sender. `include/beacon_voice.h` and `web/src/audio/beacon.ts` define the same chirp alphabet, and a web test checks that they produce identical samples.
 - `docs/`: built static pages and wiring diagram.
 - `DEPLOY.md`: deployment and test guide.

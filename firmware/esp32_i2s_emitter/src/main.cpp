@@ -24,14 +24,50 @@ static_assert(SAMPLE_RATE == 8000 || SAMPLE_RATE == 16000 ||
               SAMPLE_RATE == 96000, "Unsupported MAX98357 sample rate");
 constexpr uint32_t POLL_MS = 2000;
 constexpr uint32_t WIFI_JOIN_TIMEOUT_MS = 15000;
-constexpr uint32_t RESTART_AFTER_MS = 180000;
+// A network that is joined but cannot reach the API is left for the next one.
+constexpr uint32_t SWITCH_NETWORK_AFTER_MS = 60000;
+// Without the API the board plays its own noise, clock, and beacon signals.
+constexpr uint32_t OFFLINE_AFTER_MS = 60000;
+constexpr uint32_t RESTART_AFTER_MS = 600000;
 constexpr uint32_t WATCHDOG_S = 30;
 static_assert(SAMPLE_RATE == beacon::rate, "The chirp tables assume 48 kHz");
 
-long lastRevision = -1;
+struct WifiNetwork {
+  const char *ssid;
+  const char *password;
+};
+#ifdef ALIVE_WIFI_NETWORKS
+const WifiNetwork NETWORKS[] = {ALIVE_WIFI_NETWORKS};
+#else
+const WifiNetwork NETWORKS[] = {{ALIVE_WIFI_SSID, ALIVE_WIFI_PASSWORD}};
+#endif
+constexpr int NETWORK_COUNT = sizeof(NETWORKS) / sizeof(NETWORKS[0]);
+
+// A chirp sequence: lead silence, then each chirp with the silence after it.
+// signals.py on the API builds the same sequences.
+struct Score {
+  char kind[16] = {};
+  uint32_t leadMs = 0;
+  size_t count = 0;
+  int8_t symbol[128] = {};
+  uint16_t gapMs[128] = {};
+};
+Score score;
+
+// Beacons for offline mode. The API sends the same lines.
+const char *const BEACON_LINES[] = {"IS ANYONE THERE", "WE ARE HERE", "THIS IS LANTERN",
+                                    "AURORA CALLING", "CAN YOU HEAR US", "ANSWER IF YOU HEAR"};
+
+int currentNetwork = -1;
+int failedNetwork = -1;
 uint32_t lastPollAt = 0;
 uint32_t lastHealthyAt = 0;
 uint32_t wifiJoinStartedAt = 0;
+uint32_t nextOfflineSignalAt = 0;
+bool offline = false;
+// This board's offline clock: channel, period, and tick count.
+int clockSymbol = 0;
+uint32_t clockPeriodMs = 1000, clockTicks = 8;
 // Retain the TLS session between polls instead of negotiating on every request.
 WiFiClientSecure pollClient;
 HTTPClient pollHttp;
@@ -75,16 +111,32 @@ bool writeChirp(int symbol) {
   return true;
 }
 
+bool writeScore() {
+  if (!writeSilence(score.leadMs)) return false;
+  for (size_t i = 0; i < score.count; ++i) {
+    if (!writeChirp(score.symbol[i]) || !writeSilence(score.gapMs[i])) return false;
+  }
+  return true;
+}
+
+void addChirp(int symbol, uint32_t gapMs) {
+  if (score.count >= sizeof(score.symbol)) return;
+  score.symbol[score.count] = symbol;
+  score.gapMs[score.count++] = gapMs;
+}
+
 // Two sync chirps, one chirp per character, and a closing sync chirp. The
 // timing must match signal_duration_seconds() in reply_engine.py.
-bool writeMessage(const char *text) {
-  if (!writeSilence(150) || !writeChirp(-1) || !writeSilence(180) ||
-      !writeChirp(-1) || !writeSilence(280))
-    return false;
+void composeMessage(const char *text) {
+  strlcpy(score.kind, "intelligent", sizeof(score.kind));
+  score.leadMs = 150;
+  score.count = 0;
+  addChirp(-1, 180);
+  addChirp(-1, 280);
   for (size_t i = 0; text[i]; ++i) {
-    if (!writeChirp(beacon::symbolFor(text[i])) || !writeSilence(180)) return false;
+    if (beacon::symbolFor(text[i]) >= 0) addChirp(beacon::symbolFor(text[i]), 180);
   }
-  return writeChirp(-1) && writeSilence(760);
+  addChirp(-1, 760);
 }
 
 void startAudio() {
@@ -113,35 +165,55 @@ void startAudio() {
   ESP_ERROR_CHECK(i2s_zero_dma_buffer(I2S_PORT));
 }
 
-void playMessage(const String &message) {
-  char text[21] = {};
-  size_t count = 0;
-  for (size_t i = 0; i < message.length() && count < sizeof(text) - 1; ++i) {
-    const char ch = message[i];
-    if ((ch >= 'A' && ch <= 'Z') || ch == ' ') text[count++] = ch;
-  }
-  if (count == 0) return;
+void playScore() {
+  if (score.count == 0) return;
   // The I2S clocks run only during playback; without them the amplifier
   // shuts down, which is most of the idle battery saving.
   startAudio();
-  Serial.printf("Playing revision %ld: %s\n", lastRevision, text);
-  if (!writeMessage(text)) Serial.println("Playback stopped early");
+  Serial.printf("Playing %s signal, %u chirps\n", score.kind, static_cast<unsigned>(score.count));
+  if (!writeScore()) Serial.println("Playback stopped early");
   ESP_ERROR_CHECK(i2s_driver_uninstall(I2S_PORT));
 }
 
+// Offline mode: noise, this board's clock, or now and then a beacon. Boards
+// cannot hear each other, so long random pauses keep overlaps rare.
+void playOfflineSignal() {
+  const long pick = random(100);
+  score.count = 0;
+  score.leadMs = 0;
+  if (pick < 15) {
+    composeMessage(BEACON_LINES[random(sizeof(BEACON_LINES) / sizeof(BEACON_LINES[0]))]);
+  } else if (pick < 50) {
+    strlcpy(score.kind, "clock", sizeof(score.kind));
+    for (uint32_t i = 0; i < clockTicks; ++i) addChirp(clockSymbol, clockPeriodMs - 360);
+  } else {
+    strlcpy(score.kind, "noise", sizeof(score.kind));
+    for (long i = random(3, 11); i > 0; --i) addChirp(random(27), random(180, 901));
+  }
+  playScore();
+}
+
+// Joins the first listed network the scan shows, skipping the one that just
+// failed unless nothing else is in range. Hidden or unseen networks are tried
+// in turn.
 void joinWifi() {
-  const int networkCount = WiFi.scanNetworks();
-  int bestTargetRssi = -127;
-  for (int i = 0; i < networkCount; ++i) {
-    if (WiFi.SSID(i) == ALIVE_WIFI_SSID)
-      bestTargetRssi = max(bestTargetRssi, static_cast<int>(WiFi.RSSI(i)));
+  const int found = WiFi.scanNetworks();
+  int choice = -1, fallback = -1;
+  for (int k = 0; k < NETWORK_COUNT && choice < 0; ++k) {
+    for (int i = 0; i < found; ++i) {
+      if (WiFi.SSID(i) != NETWORKS[k].ssid) continue;
+      Serial.printf("Found %s at %d dBm\n", NETWORKS[k].ssid, static_cast<int>(WiFi.RSSI(i)));
+      if (k != failedNetwork) choice = k;
+      else if (fallback < 0) fallback = k;
+      break;
+    }
   }
   WiFi.scanDelete();
-  if (bestTargetRssi == -127) Serial.println("Target WiFi not found in scan");
-  else Serial.printf("Target WiFi RSSI: %d dBm\n", bestTargetRssi);
+  if (choice < 0) choice = fallback >= 0 ? fallback : (currentNetwork + 1) % NETWORK_COUNT;
+  currentNetwork = choice;
   WiFi.disconnect();
-  WiFi.begin(ALIVE_WIFI_SSID, ALIVE_WIFI_PASSWORD);
-  Serial.printf("Connecting to %s\n", ALIVE_WIFI_SSID);
+  WiFi.begin(NETWORKS[choice].ssid, NETWORKS[choice].password);
+  Serial.printf("Connecting to %s\n", NETWORKS[choice].ssid);
   wifiJoinStartedAt = millis();
 }
 
@@ -198,19 +270,26 @@ void pollForMessage() {
     JsonDocument json;
     // Consume the entire body, including HTTP/1.1 chunk framing, before reuse.
     const DeserializationError error = deserializeJson(json, http.getString());
-    if (!error && json["revision"].is<long>() && json["message"].is<const char *>()) {
-      if (!serverReachable) Serial.println("API poll ready: HTTPS verified, device token accepted");
+    if (!error && json["role"].is<const char *>()) {
+      if (!serverReachable)
+        Serial.printf("API poll ready on %s: HTTPS verified, device token accepted, role %s\n",
+                      NETWORKS[currentNetwork].ssid, json["role"].as<const char *>());
       serverReachable = true;
+      offline = false;
+      failedNetwork = -1;
       lastHealthyAt = millis();
-      const long revision = json["revision"];
-      const String message = json["message"].as<const char *>();
-      if (lastRevision < 0 || revision < lastRevision) {
-        // Boot or server reset: observe the current command without replaying it.
-        lastRevision = revision;
-      } else if (revision > lastRevision && message.length() > 0) {
-        lastRevision = revision;
+      // The API hands out each signal once, to one board at a time.
+      JsonObject play = json["play"].as<JsonObject>();
+      if (!play.isNull()) {
+        strlcpy(score.kind, play["kind"] | "signal", sizeof(score.kind));
+        score.leadMs = min<uint32_t>(play["leadMs"] | 0, 2000);
+        score.count = 0;
+        for (JsonArray chirp : play["chirps"].as<JsonArray>()) {
+          const int symbol = chirp[0] | -2;
+          if (symbol >= -1 && symbol <= 26) addChirp(symbol, min<uint32_t>(chirp[1] | 0, 5000));
+        }
         http.end();
-        playMessage(message);
+        playScore();
         return;
       }
     } else {
@@ -238,19 +317,40 @@ void setup() {
   esp_task_wdt_init(WATCHDOG_S, true);
   enableLoopWDT();
   setupWifi();
+  // random() draws from the hardware generator, which the radio seeds.
+  clockSymbol = random(27);
+  clockPeriodMs = random(900, 1601);
+  clockTicks = random(6, 13);
   Serial.println("ALIVE ultrasound emitter ready");
 }
 
 void loop() {
-  // A restart clears Wi-Fi, DNS, TLS, and HTTP state together. It is the one
-  // recovery path for every outage that outlasts ordinary reconnects.
-  if (millis() - lastHealthyAt >= RESTART_AFTER_MS) {
-    Serial.println("No valid poll for 3 minutes; restarting");
+  // A restart clears Wi-Fi, DNS, TLS, and HTTP state together. It is the last
+  // recovery path for an outage that outlasts reconnects and network changes.
+  const uint32_t sinceHealthy = millis() - lastHealthyAt;
+  if (sinceHealthy >= RESTART_AFTER_MS) {
+    Serial.println("No valid poll for 10 minutes; restarting");
     ESP.restart();
   }
-  if (WiFi.status() != WL_CONNECTED) {
-    if (millis() - wifiJoinStartedAt >= WIFI_JOIN_TIMEOUT_MS) joinWifi();
-  } else if (millis() - lastPollAt >= POLL_MS) {
+  if (sinceHealthy >= OFFLINE_AFTER_MS) {
+    if (!offline) {
+      offline = true;
+      // Boards usually lose the API together; spread their first signals.
+      nextOfflineSignalAt = millis() + random(1000, 30000);
+      Serial.println("API unreachable; playing offline signals");
+    } else if (static_cast<int32_t>(millis() - nextOfflineSignalAt) >= 0) {
+      playOfflineSignal();
+      nextOfflineSignalAt = millis() + random(25000, 90000);
+    }
+  }
+  const bool joinTimedOut = WiFi.status() != WL_CONNECTED && millis() - wifiJoinStartedAt >= WIFI_JOIN_TIMEOUT_MS;
+  const bool noRoute = WiFi.status() == WL_CONNECTED && sinceHealthy >= SWITCH_NETWORK_AFTER_MS &&
+                       millis() - wifiJoinStartedAt >= SWITCH_NETWORK_AFTER_MS;
+  if (joinTimedOut || noRoute) {
+    if (noRoute) Serial.printf("No API reply over %s; trying another network\n", NETWORKS[currentNetwork].ssid);
+    failedNetwork = currentNetwork;
+    joinWifi();
+  } else if (WiFi.status() == WL_CONNECTED && millis() - lastPollAt >= POLL_MS) {
     lastPollAt = millis();
     pollForMessage();
   }

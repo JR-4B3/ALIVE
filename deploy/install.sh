@@ -4,7 +4,7 @@ set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
 
 install -d -m 755 /opt/alive
-install -m 644 "$repo/emitter.py" "$repo/reply_engine.py" "$repo/simple_qr.py" /opt/alive/
+install -m 644 "$repo/emitter.py" "$repo/reply_engine.py" "$repo/signals.py" "$repo/simple_qr.py" /opt/alive/
 install -d -m 700 /etc/alive
 if [ ! -e /etc/alive/api.env ]; then
   install -m 600 "$repo/deploy/api.env.example" /etc/alive/api.env

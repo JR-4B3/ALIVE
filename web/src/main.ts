@@ -1,33 +1,35 @@
+import '@fontsource/space-mono/latin-400.css';
+import '@fontsource/space-mono/latin-700.css';
 import './styles.css';
 import { SignalLevelTracker } from './sensing/signalLevelTracker';
 import { BeaconDecoder } from './sensing/beaconDecoder';
 import { mountSignalStrip } from './signalStrip';
 import { encodeRecording } from './audio/recording';
 import { uploadRecording } from './audio/recordingUpload';
-import type { ReceiverStatus } from './types';
+import type { Reception, ReceiverStatus } from './types';
 
 // Set at build time: `bun run build` publishes the clean visitor page to docs/,
 // `bun run build:debug` keeps every diagnostic control for local testing.
 declare const __DEBUG_UI__: boolean;
 declare const __PUBLISHED_API__: string;
 const DEBUG_UI = __DEBUG_UI__;
+const LOG_LIMIT = 80;
 
 if (DEBUG_UI) { document.title = 'ALIVE Receiver · debug'; document.body.classList.add('debug-ui'); }
 
 const app = requiredElement<HTMLDivElement>('#app');
 app.innerHTML = `
-  <main class="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-4 px-4 py-4">
-    <section class="flex flex-1 flex-col border border-white">
-      <div class="flex items-center justify-between border-b border-white px-3 py-2">
-        <div>
-          <div class="whitespace-nowrap text-[13px] uppercase tracking-[0.06em] text-neutral-400">translation${DEBUG_UI ? ' · debug' : ''}</div>
-          <div id="translationState" class="mt-1 text-sm uppercase tracking-[0.1em]">Listening</div>
+  <main>
+    <section class="receiver">
+      <header class="receiver-head">
+        <div class="receiver-ident">
+          <span class="wordmark">ALIVE${DEBUG_UI ? ' debug' : ''}</span>
+          <span id="translationState" class="receiver-state">Listening · <b>DEAD</b></span>
         </div>
-        <button id="clear" class="px-3 py-2 text-sm uppercase tracking-[0.1em]">clear</button>
-      </div>
-      <div class="flex min-h-48 flex-1 items-center justify-center px-4 py-8">
-        <div id="message" class="w-full break-words text-center font-mono text-4xl leading-tight sm:text-6xl">---</div>
-      </div>
+        <button id="clear" type="button" class="quiet-button">Clear</button>
+      </header>
+      <ol id="log" class="log" aria-live="polite" aria-label="Received signals"></ol>
+      <p id="logEmpty" class="log-empty">Tap the microphone, then hold your phone toward the units.</p>
       <button id="mic" type="button" class="mic-toggle" aria-label="Enable microphone" aria-pressed="false" title="Enable microphone">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
           <rect x="9" y="3" width="6" height="12" rx="3" />
@@ -37,41 +39,41 @@ app.innerHTML = `
       </button>
     </section>
 
-    <section class="grid min-w-0 grid-cols-1 gap-3">
-      <form id="contactForm" class="grid min-w-0 grid-cols-1 gap-3 border border-white px-3 py-3">
-        <div class="flex min-w-0 items-center gap-2">
-          <div class="shrink-0 text-sm uppercase tracking-[0.12em] text-neutral-400">contact</div>
-          ${DEBUG_UI ? `<div id="micDiagnostics" class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap border-l border-neutral-600 pl-2 font-mono text-[clamp(10px,3vw,12px)] text-neutral-400">MIC OFF</div>` : ''}
-        </div>
-        <input id="prompt" class="min-h-11 px-3 text-lg" maxlength="120" placeholder="message">
-        <div class="grid grid-cols-2 gap-3">
-          <button id="send" class="min-h-11 px-2 text-sm uppercase tracking-normal">send</button>
-          <button id="playSignal" type="button" class="min-h-11 whitespace-nowrap px-2 text-sm uppercase tracking-normal">play signal</button>
+    <section class="contact">
+      <form id="contactForm" class="contact-form">
+        ${DEBUG_UI ? `<div id="micDiagnostics" class="debug-line">MIC OFF</div>` : ''}
+        <div class="compose">
+          <input id="prompt" maxlength="120" placeholder="Message" autocomplete="off" enterkeyhint="send" aria-label="Message">
+          <button id="send" type="submit" aria-label="Send message" title="Send message">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+              <path d="M12 20V5M5.5 11.5L12 5l6.5 6.5" />
+            </svg>
+          </button>
         </div>
         ${DEBUG_UI ? `
-        <div id="contactStatus" class="min-h-6 font-mono text-sm uppercase tracking-[0.08em] text-neutral-400">---</div>
-        <label class="flex cursor-pointer items-center gap-2 text-base text-neutral-400">
+        <div id="contactStatus" class="debug-line">---</div>
+        <button id="playSignal" type="button" class="debug-button">send a beacon now</button>
+        <label class="debug-check">
           <input id="recordDiagnostic" class="sr-only" type="checkbox">
           <span class="record-checkbox-mark" aria-hidden="true">
             <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
               <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" />
             </svg>
           </span>
-          <span>Record next playback (25s max)</span>
+          <span>Record the next 25 s with the beacon</span>
         </label>
-        <div id="recordStatus" class="text-base text-neutral-400"></div>
-        <details class="min-w-0 border-t border-neutral-700 pt-2 text-sm text-neutral-400">
-          <summary class="cursor-pointer uppercase tracking-[0.1em]">connection settings</summary>
-          <label class="mt-3 grid min-w-0 grid-cols-1 gap-1 uppercase tracking-[0.1em]" for="apiBase">
-            API URL
-            <input id="apiBase" class="min-h-11 min-w-0 w-full px-3 text-lg normal-case tracking-normal" type="url" placeholder="https://api.example.com">
+        <div id="recordStatus" class="debug-line"></div>
+        <details class="debug-settings">
+          <summary>connection settings</summary>
+          <label for="apiBase">API URL
+            <input id="apiBase" type="url" placeholder="https://api.example.com">
           </label>
-          <label class="mt-3 grid min-w-0 grid-cols-1 gap-1 uppercase tracking-[0.1em]" for="apiToken">
-            Private operator token (required for reset)
-            <input id="apiToken" class="min-h-11 min-w-0 w-full px-3 text-lg normal-case tracking-normal" type="password" autocomplete="off" placeholder="paste operator token">
+          <label for="apiToken">Private operator token (required for the beacon, status, and reset)
+            <input id="apiToken" type="password" autocomplete="off" placeholder="paste operator token">
           </label>
-          <button id="resetMessage" type="button" class="mt-3 min-h-11 w-full px-3 text-sm uppercase tracking-[0.08em]">reset message</button>
-          <div id="resetStatus" class="mt-2 font-mono text-xs empty:hidden" role="status"></div>
+          <button id="showStatus" type="button" class="debug-button">show board roles</button>
+          <button id="resetMessage" type="button" class="debug-button">reset conversations and roles</button>
+          <pre id="resetStatus" class="debug-line" role="status"></pre>
         </details>` : ''}
       </form>
     </section>
@@ -83,24 +85,26 @@ app.innerHTML = `
 const signalStrip = DEBUG_UI ? null : mountSignalStrip();
 
 const refs = {
-  translationState: requiredElement<HTMLDivElement>('#translationState'),
-  message: requiredElement<HTMLDivElement>('#message'),
+  translationState: requiredElement<HTMLSpanElement>('#translationState'),
+  log: requiredElement<HTMLOListElement>('#log'),
+  logEmpty: requiredElement<HTMLParagraphElement>('#logEmpty'),
   mic: requiredElement<HTMLButtonElement>('#mic'),
   clear: requiredElement<HTMLButtonElement>('#clear'),
   contactForm: requiredElement<HTMLFormElement>('#contactForm'),
   prompt: requiredElement<HTMLInputElement>('#prompt'),
-  send: requiredElement<HTMLButtonElement>('#send'),
-  playSignal: requiredElement<HTMLButtonElement>('#playSignal')
+  send: requiredElement<HTMLButtonElement>('#send')
 };
 
 // Debug-only controls. In the visitor build DEBUG_UI is false, so this object
 // (and every diagnostic string in it) is removed from the bundle entirely.
 const debugRefs = DEBUG_UI ? {
   micDiagnostics: requiredElement<HTMLDivElement>('#micDiagnostics'),
+  playSignal: requiredElement<HTMLButtonElement>('#playSignal'),
   apiBase: requiredElement<HTMLInputElement>('#apiBase'),
   apiToken: requiredElement<HTMLInputElement>('#apiToken'),
+  showStatus: requiredElement<HTMLButtonElement>('#showStatus'),
   resetMessage: requiredElement<HTMLButtonElement>('#resetMessage'),
-  resetStatus: requiredElement<HTMLDivElement>('#resetStatus'),
+  resetStatus: requiredElement<HTMLPreElement>('#resetStatus'),
   contactStatus: requiredElement<HTMLDivElement>('#contactStatus'),
   recordDiagnostic: requiredElement<HTMLInputElement>('#recordDiagnostic'),
   recordStatus: requiredElement<HTMLDivElement>('#recordStatus')
@@ -117,6 +121,8 @@ if (debugRefs) {
   debugRefs.apiBase.value = initialApiBase;
   debugRefs.apiToken.value = initialApiToken;
 }
+// The API keeps each visitor's conversation under this id for this tab.
+const session = sessionStorage.getItem('aliveSession') ?? newSession();
 
 const levels = new SignalLevelTracker();
 const decoder = new BeaconDecoder();
@@ -128,10 +134,12 @@ let sourceNode: MediaStreamAudioSourceNode | null = null;
 let processor: ScriptProcessorNode | null = null;
 let silentNode: GainNode | null = null;
 let micActive = false;
-let replayReadyAt = 0;
-let replayTimer: number | null = null;
-let playPending = false;
-let recording: { chunks: Float32Array[]; samples: number; rate: number; api: string; message: string; timer: number } | null = null;
+let micError = '';
+// The last intelligent message this phone decoded. The API answers only
+// visitors who can repeat what they heard.
+let heard = '';
+let liveEntry: HTMLLIElement | null = null;
+let recording: { chunks: Float32Array[]; samples: number; rate: number; api: string; timer: number } | null = null;
 let recordingDownloadUrl: string | null = null;
 
 refs.mic.addEventListener('click', () => {
@@ -139,17 +147,22 @@ refs.mic.addEventListener('click', () => {
 });
 refs.clear.addEventListener('click', () => {
   translationSnapshot = decoder.reset();
+  refs.log.replaceChildren();
+  liveEntry = null;
   render();
 });
 refs.contactForm.addEventListener('submit', (event) => {
   event.preventDefault();
   void sendContactMessage();
 });
-refs.playSignal.addEventListener('click', () => {
-  void playCurrentSignal();
+debugRefs?.playSignal.addEventListener('click', () => {
+  void requestBeacon();
+});
+debugRefs?.showStatus.addEventListener('click', () => {
+  void operatorRequest('GET', '/api/status');
 });
 debugRefs?.resetMessage.addEventListener('click', () => {
-  void resetPreparedMessage();
+  void operatorRequest('POST', '/api/emitter/main/reset');
 });
 
 render();
@@ -181,9 +194,12 @@ async function startMicrophone(): Promise<void> {
         recording.chunks.push(chunk);
         recording.samples += chunk.length;
       }
-      const nowMs = performance.now();
-      levelSnapshot = levels.process(input, nowMs);
+      levelSnapshot = levels.process(input, performance.now());
       translationSnapshot = decoder.process(input, audioCtx.sampleRate);
+      for (const reception of decoder.takeCompleted()) {
+        if (reception.kind === 'intelligent') heard = reception.text;
+        appendEntry(reception.kind, reception.text);
+      }
       render();
     };
     signalStrip?.connect(sourceNode);
@@ -191,14 +207,17 @@ async function startMicrophone(): Promise<void> {
     processor.connect(silentNode).connect(audioCtx.destination);
     await audioCtx.resume();
     micActive = true;
+    micError = '';
     levels.startCalibration(performance.now());
     levelSnapshot = levels.snapshot();
-    translationSnapshot = decoder.reset('decoded message will appear here');
+    translationSnapshot = decoder.reset('listening for signal');
     renderStatus('calibrating');
     render();
   } catch (error) {
     renderStatus('mic-blocked');
-    refs.translationState.textContent = error instanceof Error ? error.message : String(error);
+    micError = `The microphone is blocked${error instanceof Error ? ` (${error.message})` : ''}. ` +
+      'Allow it in the browser settings, then tap the microphone again.';
+    render();
   }
 }
 
@@ -218,21 +237,22 @@ async function stopMicrophone(): Promise<void> {
   micActive = false;
   levels.stop();
   levelSnapshot = levels.snapshot();
+  translationSnapshot = decoder.reset();
   render();
 }
 
 async function sendContactMessage(): Promise<void> {
   const message = refs.prompt.value.trim();
-  if (!message) return;
-  reportStatus('sending', refs.send, 'send');
-  refs.prompt.disabled = true;
-  if (debugRefs) debugRefs.resetMessage.disabled = true;
+  if (!message || refs.send.disabled) return;
+  const entry = appendEntry('sent', message);
+  refs.prompt.value = '';
+  refs.send.disabled = true;
+  setContactStatus('sending');
   try {
-    const apiBase = requestApiBase();
-    const response = await fetch(`${apiBase}/api/message`, {
+    const response = await fetch(`${requestApiBase()}/api/message`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...apiAuthHeaders() },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, heard, session }),
       // The API gives the reply model 12 seconds before answering with an error.
       signal: AbortSignal.timeout(20000)
     });
@@ -240,116 +260,57 @@ async function sendContactMessage(): Promise<void> {
       const failure = (await response.json().catch(() => null)) as { error?: string } | null;
       throw new Error(failure?.error ?? `HTTP ${response.status}`);
     }
-    const payload = (await response.json()) as { reply?: string; message?: string; duration?: number };
-    reportStatus(DEBUG_UI ? (payload.reply ?? payload.message ?? 'sent') : 'sent', refs.send, 'send');
-    refs.prompt.value = '';
+    // Without contact the message goes nowhere, and the page shows nothing more.
+    const payload = (await response.json()) as { contact?: boolean; queued?: number; reply?: string };
+    setContactStatus(!payload.contact ? 'no contact: nothing will answer'
+      : `queued #${payload.queued ?? '?'}${payload.reply ? `: ${payload.reply}` : ''}`);
   } catch (error) {
-    reportStatus(error instanceof Error ? error.message : 'send failed', refs.send, 'send');
+    const reason = error instanceof Error ? error.message : 'Sending failed.';
+    entry.dataset.failed = 'true';
+    const note = document.createElement('p');
+    note.className = 'entry-note';
+    note.textContent = `Not sent. ${reason}`;
+    entry.append(note);
+    if (!refs.prompt.value) refs.prompt.value = message;
+    setContactStatus(reason);
   } finally {
-    refs.prompt.disabled = false;
-    if (debugRefs) debugRefs.resetMessage.disabled = false;
+    refs.send.disabled = false;
     refs.prompt.focus();
   }
 }
 
-async function resetPreparedMessage(): Promise<void> {
-  if (!debugRefs || refs.prompt.disabled) return;
-  debugRefs.resetMessage.disabled = true;
-  refs.prompt.disabled = true;
-  refs.send.disabled = true;
-  debugRefs.resetStatus.textContent = 'Resetting…';
-  try {
-    const response = await fetch(`${requestApiBase()}/api/emitter/main/reset`, {
-      method: 'POST', headers: apiAuthHeaders()
-    });
-    if (!response.ok) {
-      if (response.status === 401) {
-        debugRefs.apiToken.focus();
-        throw new Error('Enter the correct operator token above');
-      }
-      const failure = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(failure?.error ?? `HTTP ${response.status}`);
+async function requestBeacon(): Promise<void> {
+  if (!debugRefs) return;
+  const recordToggle = debugRefs.recordDiagnostic;
+  if (recordToggle.checked) {
+    if (!micActive || !audioCtx) {
+      setRecordStatus('Enable the microphone before recording a diagnostic.');
+      return;
     }
-    const payload = (await response.json()) as { message: string };
-    refs.prompt.value = '';
-    translationSnapshot = decoder.reset();
-    render();
-    setContactStatus('---');
-    debugRefs.resetStatus.textContent = `Ready: ${payload.message}`;
-  } catch (error) {
-    debugRefs.resetStatus.textContent = error instanceof Error ? error.message : 'Reset failed';
-  } finally {
-    refs.prompt.disabled = false;
-    refs.send.disabled = false;
-    debugRefs.resetMessage.disabled = false;
+    cancelRecording();
+    recording = { chunks: [], samples: 0, rate: audioCtx.sampleRate, api: requestApiBase(),
+      timer: window.setTimeout(() => void saveRecording(), 25000) };
+    recordToggle.checked = false;
+    setRecordStatus('Recording microphone for diagnosis…');
   }
+  await operatorRequest('POST', '/api/emitter/main/play');
 }
 
-async function playCurrentSignal(): Promise<void> {
-  if (playPending || Date.now() < replayReadyAt) return;
-  playPending = true;
+async function operatorRequest(method: 'GET' | 'POST', path: string): Promise<void> {
+  if (!debugRefs) return;
+  debugRefs.resetStatus.textContent = '…';
   try {
-    const apiBase = requestApiBase();
-    if (DEBUG_UI) {
-      const recordToggle = debugRefs?.recordDiagnostic;
-      if (recordToggle?.checked) {
-        if (!micActive || !audioCtx) throw new Error('Enable microphone before recording a diagnostic.');
-        cancelRecording();
-        recording = { chunks: [], samples: 0, rate: audioCtx.sampleRate, api: apiBase, message: '',
-          timer: window.setTimeout(() => void saveRecording(), 25000) };
-        recordToggle.checked = false;
-        setRecordStatus('Recording microphone for diagnosis…');
-      }
+    const response = await fetch(`${requestApiBase()}${path}`, { method, headers: apiAuthHeaders() });
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    if (!response.ok) {
+      if (response.status === 401) debugRefs.apiToken.focus();
+      throw new Error(response.status === 401 ? 'Enter the correct operator token above'
+        : payload?.error ?? `HTTP ${response.status}`);
     }
-    if (micActive) {
-      translationSnapshot = decoder.beginCapture(performance.now());
-      render();
-    }
-    setContactStatus('playing');
-    lockReplay(1);
-    const response = await requestPlayWhenReady(apiBase);
-    const payload = (await response.json()) as { duration?: number; message?: string; replayAfterSeconds?: number };
-    if (DEBUG_UI) {
-      if (recording) {
-        recording.message = payload.message ?? '';
-        window.clearTimeout(recording.timer);
-        recording.timer = window.setTimeout(() => void saveRecording(), Math.min(23, (payload.duration ?? 20) + 1.5) * 1000);
-      }
-    }
-    setContactStatus('ESP32 signal queued');
-    // Match the API's replay deadline; older API builds only report the duration.
-    lockReplay(Math.max(payload.duration ?? 0, payload.replayAfterSeconds ?? ((payload.duration ?? 0) + 1)));
+    debugRefs.resetStatus.textContent = JSON.stringify(payload, null, 1);
   } catch (error) {
     cancelRecording();
-    unlockReplay();
-    reportStatus(error instanceof Error ? error.message : 'play failed', refs.playSignal, 'play signal');
-  } finally {
-    playPending = false;
-  }
-}
-
-async function requestPlayWhenReady(apiBase: string): Promise<Response> {
-  const retryUntil = Date.now() + 5000;
-  while (true) {
-    const response = await fetch(`${apiBase}/api/emitter/main/play`, {
-      method: 'POST', headers: apiAuthHeaders(), signal: AbortSignal.timeout(8000)
-    });
-    if (response.ok) return response;
-    if (response.status === 405) throw new Error(DEBUG_UI ? 'HTTP 405: enter the API URL above' : 'HTTP 405: no signal API');
-    const failure = (await response.json().catch(() => null)) as { error?: string } | null;
-    const error = failure?.error ?? `HTTP ${response.status}`;
-    const replayWait = response.status === 429 ? /^Wait (\d+)s before replaying$/.exec(error) : null;
-    if (replayWait && Date.now() + Number(replayWait[1]) * 1000 <= retryUntil) {
-      const waitSeconds = Number(replayWait[1]);
-      lockReplay(waitSeconds);
-      await new Promise<void>((resolve) => window.setTimeout(resolve, waitSeconds * 1000));
-      continue;
-    }
-    if (response.status !== 503 || !error.startsWith('ESP32 is offline') || Date.now() >= retryUntil) {
-      throw new Error(error);
-    }
-    showPlayLoading();
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+    debugRefs.resetStatus.textContent = error instanceof Error ? error.message : 'Request failed';
   }
 }
 
@@ -374,60 +335,73 @@ async function saveRecording(): Promise<void> {
     const link = document.createElement('a');
     recordingDownloadUrl = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
     link.href = recordingDownloadUrl;
-    link.download = `alive-diagnostic-${Date.now()}-${captured.message.replace(/[^A-Z ]/g, '').trim().replaceAll(' ', '-') || 'signal'}.wav`;
+    link.download = `alive-diagnostic-${Date.now()}.wav`;
     link.textContent = 'Download WAV';
     link.className = 'underline';
     const status = document.createTextNode('Ready · ');
     debugRefs!.recordStatus.replaceChildren(status, link);
     const headers = apiAuthHeaders();
     if (!headers.authorization) link.click();
-    status.textContent = `${await uploadRecording(wav, captured.api, captured.message, headers)} `;
+    status.textContent = `${await uploadRecording(wav, captured.api, heard, headers)} `;
   } catch (error) {
     setRecordStatus(error instanceof Error ? error.message : 'Could not save recording.');
   }
 }
 
-function lockReplay(durationSeconds = 0): void {
-  const durationMs = Math.max(1000, Math.ceil(durationSeconds * 1000) + 250);
-  replayReadyAt = Date.now() + durationMs;
-  if (replayTimer !== null) window.clearInterval(replayTimer);
-  refs.playSignal.disabled = true;
-  refs.playSignal.removeAttribute('aria-label');
-  updateReplayButton();
-  replayTimer = window.setInterval(updateReplayButton, 200);
+const KIND_LABELS = { noise: 'noise', clock: 'clock', intelligent: 'message', sent: 'you' } as const;
+
+function buildEntry(kind: keyof typeof KIND_LABELS, text: string): HTMLLIElement {
+  const entry = document.createElement('li');
+  entry.className = 'entry';
+  entry.dataset.kind = kind;
+  entry.innerHTML = '<div class="entry-meta"><time></time><span class="entry-kind"></span></div><p class="entry-text"></p>';
+  const now = new Date();
+  const time = requiredChild<HTMLTimeElement>(entry, 'time');
+  time.dateTime = now.toISOString();
+  time.textContent = now.toTimeString().slice(0, 8);
+  requiredChild(entry, '.entry-kind').textContent = KIND_LABELS[kind];
+  requiredChild(entry, '.entry-text').textContent = text;
+  return entry;
 }
 
-function updateReplayButton(): void {
-  const remainingMs = replayReadyAt - Date.now();
-  if (remainingMs <= 0) {
-    if (!playPending) unlockReplay();
+function appendEntry(kind: keyof typeof KIND_LABELS, text: string): HTMLLIElement {
+  const stick = isScrolledToEnd();
+  const entry = buildEntry(kind, text);
+  // A reception still arriving stays last, below messages sent meanwhile.
+  refs.log.insertBefore(entry, liveEntry);
+  if (kind !== 'sent' && liveEntry) { liveEntry.remove(); liveEntry = null; }
+  while (refs.log.children.length > LOG_LIMIT) refs.log.firstElementChild?.remove();
+  refs.logEmpty.hidden = true;
+  if (stick || kind === 'sent') scrollToEnd();
+  return entry;
+}
+
+function renderLive(live: Reception | null): void {
+  if (!live) {
+    liveEntry?.remove();
+    liveEntry = null;
     return;
   }
-  refs.playSignal.textContent = `wait ${Math.ceil(remainingMs / 1000)}s`;
+  const stick = isScrolledToEnd();
+  if (!liveEntry) {
+    liveEntry = buildEntry(live.kind, '');
+    liveEntry.dataset.live = 'true';
+    requiredChild(liveEntry, '.entry-kind').textContent = 'receiving';
+    refs.log.append(liveEntry);
+    refs.logEmpty.hidden = true;
+  }
+  if (liveEntry.dataset.kind !== live.kind) liveEntry.dataset.kind = live.kind;
+  const text = requiredChild(liveEntry, '.entry-text');
+  if (text.textContent !== live.text) text.textContent = live.text;
+  if (stick) scrollToEnd();
 }
 
-function showPlayLoading(): void {
-  replayReadyAt = 0;
-  if (replayTimer !== null) {
-    window.clearInterval(replayTimer);
-    replayTimer = null;
-  }
-  refs.playSignal.disabled = true;
-  refs.playSignal.setAttribute('aria-label', 'Waiting for signal');
-  if (!refs.playSignal.querySelector('.play-loading')) {
-    refs.playSignal.innerHTML = '<span class="play-loading" aria-hidden="true"><span></span><span></span><span></span></span>';
-  }
+function isScrolledToEnd(): boolean {
+  return refs.log.scrollHeight - refs.log.scrollTop - refs.log.clientHeight < 40;
 }
 
-function unlockReplay(): void {
-  replayReadyAt = 0;
-  if (replayTimer !== null) {
-    window.clearInterval(replayTimer);
-    replayTimer = null;
-  }
-  refs.playSignal.disabled = false;
-  refs.playSignal.removeAttribute('aria-label');
-  refs.playSignal.textContent = 'play signal';
+function scrollToEnd(): void {
+  refs.log.scrollTop = refs.log.scrollHeight;
 }
 
 function render(): void {
@@ -435,8 +409,19 @@ function render(): void {
   refs.mic.setAttribute('aria-pressed', String(micActive));
   refs.mic.setAttribute('aria-label', micActive ? 'Disable microphone' : 'Enable microphone');
   refs.mic.title = micActive ? 'Disable microphone' : 'Enable microphone';
-  refs.translationState.textContent = `${translationSnapshot.title} · ${translationSnapshot.verdict}`;
-  refs.message.textContent = translationSnapshot.message;
+  renderLive(translationSnapshot.live);
+  const state = micActive ? translationSnapshot.title : 'Microphone off';
+  const verdict = translationSnapshot.verdict;
+  if (refs.translationState.dataset.state !== `${state}/${verdict}`) {
+    refs.translationState.dataset.state = `${state}/${verdict}`;
+    refs.translationState.dataset.verdict = verdict;
+    refs.translationState.innerHTML = `${state} · <b>${verdict}</b>`;
+  }
+  const empty = refs.log.children.length === 0;
+  if (refs.logEmpty.hidden !== !empty) refs.logEmpty.hidden = !empty;
+  const hint = micActive ? 'Listening. Signals appear here as they arrive.'
+    : micError || 'Tap the microphone, then hold your phone toward the units.';
+  if (empty && refs.logEmpty.textContent !== hint) refs.logEmpty.textContent = hint;
   if (DEBUG_UI) {
     const diagnostics = debugRefs?.micDiagnostics;
     if (diagnostics) {
@@ -449,32 +434,11 @@ function render(): void {
 }
 
 function setContactStatus(text: string): void {
-  if (DEBUG_UI) debugRefs?.contactStatus && (debugRefs.contactStatus.textContent = text);
+  if (DEBUG_UI && debugRefs) debugRefs.contactStatus.textContent = text;
 }
 
 function setRecordStatus(text: string): void {
-  if (DEBUG_UI) debugRefs?.recordStatus && (debugRefs.recordStatus.textContent = text);
-}
-
-const flashTimers = new Map<HTMLButtonElement, number>();
-
-// The clean visitor page has no status line, so send/play results flash on the
-// button that caused them and return to its normal label.
-function reportStatus(text: string, button: HTMLButtonElement, restoreLabel: string): void {
-  const statusLine = debugRefs?.contactStatus;
-  if (statusLine) {
-    statusLine.textContent = text;
-    return;
-  }
-  const previous = flashTimers.get(button);
-  if (previous !== undefined) window.clearTimeout(previous);
-  const flashed = text.length > 24 ? `${text.slice(0, 23)}…` : text;
-  button.textContent = flashed;
-  flashTimers.set(button, window.setTimeout(() => {
-    flashTimers.delete(button);
-    // A replay lock may have started meanwhile; it owns the label now.
-    if (button.textContent === flashed) button.textContent = restoreLabel;
-  }, 3000));
+  if (DEBUG_UI && debugRefs) debugRefs.recordStatus.textContent = text;
 }
 
 function normalizedApiBase(): string {
@@ -499,6 +463,13 @@ function apiAuthHeaders(): Record<string, string> {
   return { authorization: `Bearer ${token}` };
 }
 
+function newSession(): string {
+  const id = crypto.randomUUID?.() ?? Array.from(crypto.getRandomValues(new Uint8Array(16)),
+    (byte) => byte.toString(16).padStart(2, '0')).join('');
+  sessionStorage.setItem('aliveSession', id);
+  return id;
+}
+
 function renderStatus(status: ReceiverStatus): void {
   document.documentElement.dataset.status = statusLabel(status);
 }
@@ -521,6 +492,12 @@ function statusLabel(status: ReceiverStatus): string {
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
+  if (!element) throw new Error(`missing element ${selector}`);
+  return element;
+}
+
+function requiredChild<T extends Element = HTMLElement>(parent: Element, selector: string): T {
+  const element = parent.querySelector<T>(selector);
   if (!element) throw new Error(`missing element ${selector}`);
   return element;
 }

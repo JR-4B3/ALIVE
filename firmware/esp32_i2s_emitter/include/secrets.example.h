@@ -1,8 +1,13 @@
 #pragma once
 
-// Copy this file to secrets.h and fill in the values for your demo network.
-#define ALIVE_WIFI_SSID "YOUR_WIFI_NAME"
-#define ALIVE_WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+// Copy this file to secrets.h and fill in the values for your networks.
+// The board joins the first network in this list that it can see, and moves
+// on to the next one when a network gives no route to the API for a minute.
+// Every network must be 2.4 GHz with a password and no browser login.
+#define ALIVE_WIFI_NETWORKS \
+  {"YOUR_REPEATER", "YOUR_REPEATER_PASSWORD"}, \
+  {"YOUR_LAPTOP_HOTSPOT", "YOUR_LAPTOP_HOTSPOT_PASSWORD"}, \
+  {"YOUR_PHONE_HOTSPOT", "YOUR_PHONE_HOTSPOT_PASSWORD"}
 #define ALIVE_SERVER_URL "https://api.example.com"
 #define ALIVE_DEVICE_TOKEN "YOUR_SEPARATE_DEVICE_TOKEN"
 

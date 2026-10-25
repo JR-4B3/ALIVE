@@ -39,17 +39,26 @@ export function beaconDuration(message: string): number {
   return 2.45 + message.length * .54;
 }
 
-// Reference rendering of what the ESP32 plays, used by the tests.
-export function renderBeacon(message: string): Float32Array<ArrayBuffer> {
+// [symbol, silence after it in ms], as in signals.py on the API.
+export type Chirp = [symbol: number, gapMs: number];
+
+// Two sync chirps, one chirp per character, and a closing sync chirp.
+export function messageChirps(message: string): Chirp[] {
   const text = message.toUpperCase().replace(/[^A-Z ]/g, '').trim();
+  return [[-1, 180], [-1, 280], ...[...text].map((char): Chirp => [BEACON_ALPHABET.indexOf(char), 180]), [-1, 760]];
+}
+
+// Reference rendering of what the ESP32 plays, used by the tests.
+export function renderChirps(chirps: Chirp[], leadMs = 0): Float32Array<ArrayBuffer> {
   const parts: Float32Array[] = [];
-  const silence = (seconds: number) => parts.push(new Float32Array(Math.round(seconds * BEACON_RATE)));
-  silence(.15);
-  parts.push(beaconPulse(-1)); silence(.18);
-  parts.push(beaconPulse(-1)); silence(.28);
-  for (const char of text) { parts.push(beaconPulse(BEACON_ALPHABET.indexOf(char))); silence(.18); }
-  parts.push(beaconPulse(-1)); silence(.76);
+  const silence = (ms: number) => parts.push(new Float32Array(Math.round(ms * BEACON_RATE / 1000)));
+  silence(leadMs);
+  for (const [symbol, gapMs] of chirps) { parts.push(beaconPulse(symbol)); silence(gapMs); }
   const output = new Float32Array(parts.reduce((n, part) => n + part.length, 0));
   let offset = 0; for (const part of parts) { output.set(part, offset); offset += part.length; }
   return output;
+}
+
+export function renderBeacon(message: string): Float32Array<ArrayBuffer> {
+  return renderChirps(messageChirps(message), 150);
 }

@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Receiver tokens. Noise and clocks stay grey; only an intelligent message is
+   green. The red dot marks a live microphone. */
+:root {
+  --void: #000000;
+  --ink: #ecebe4;
+  --dim: #8f8e87;
+  --faint: #66655f;
+  --rule: #3a3935;
+  --alive: #62f59a;
+  --on-air: #ff5a36;
+  color-scheme: dark;
+}
+
 @layer base {
   html,
   body,
@@ -10,20 +23,156 @@
   }
 
   body {
-    @apply m-0 bg-black text-white antialiased;
+    margin: 0;
+    background: var(--void);
+    color: var(--ink);
+    font-family: 'Space Mono', ui-monospace, monospace;
+    -webkit-font-smoothing: antialiased;
   }
 
   button,
   input {
-    @apply rounded-none border border-white bg-black text-white outline-none;
+    border-radius: 0;
+    border: 1px solid var(--rule);
+    background: var(--void);
+    color: var(--ink);
+    font: inherit;
+    outline: none;
   }
+
+  button { cursor: pointer; }
+  button:disabled { cursor: default; opacity: .45; }
 
   button:focus-visible,
   input:focus-visible,
   summary:focus-visible {
-    @apply outline outline-2 outline-offset-2 outline-white;
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
   }
 }
+
+#app > main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  max-width: 430px;
+  margin: 0 auto;
+  padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+}
+
+/* Reception log */
+.receiver {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--rule);
+}
+.receiver-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.receiver-ident { display: flex; align-items: baseline; gap: 12px; min-width: 0; white-space: nowrap; }
+.wordmark { font-weight: 700; font-size: 14px; letter-spacing: .28em; }
+.receiver-state { overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--dim); }
+.receiver-state b { font-weight: 400; color: var(--ink); letter-spacing: .06em; }
+.receiver-state[data-verdict='ALIVE'] b { color: var(--alive); }
+.quiet-button { min-height: 32px; padding: 2px 10px; font-size: 12px; color: var(--dim); }
+
+.log {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 12px 12px 64px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* New entries settle at the bottom, as in a printout. */
+.log > :first-child { margin-top: auto; }
+.log-empty {
+  position: absolute;
+  inset: 45px 64px 64px 12px;
+  display: flex;
+  align-items: flex-end;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+.log-empty[hidden] { display: none; }
+
+.entry { min-width: 0; }
+.entry-meta { display: flex; gap: 10px; font-size: 10px; letter-spacing: .04em; color: var(--faint); }
+.entry-text {
+  margin: 2px 0 0;
+  font-size: 19px;
+  line-height: 1.25;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--dim);
+}
+.entry[data-kind='intelligent'] .entry-text {
+  font-size: 23px;
+  font-weight: 700;
+  color: var(--alive);
+  text-shadow: 0 0 14px rgb(98 245 154 / .35);
+}
+.entry[data-kind='intelligent'] .entry-kind { color: var(--alive); }
+.entry[data-kind='sent'] { align-self: flex-end; max-width: 85%; text-align: right; }
+.entry[data-kind='sent'] .entry-meta { justify-content: flex-end; }
+.entry[data-kind='sent'] .entry-text { font-size: 16px; color: var(--ink); }
+.entry[data-failed] .entry-text { color: var(--faint); text-decoration: line-through; }
+.entry-note { margin: 4px 0 0; font-size: 11px; line-height: 1.4; color: var(--on-air); }
+.entry[data-live] .entry-text::after { content: '\258C'; animation: cursor 1s steps(1, end) infinite; }
+
+@keyframes cursor {
+  50% { opacity: 0; }
+}
+
+.mic-toggle {
+  position: absolute; right: 10px; bottom: 10px; width: 44px; height: 44px;
+  padding: 0; display: grid; place-items: center; color: var(--dim);
+}
+.mic-toggle[data-active=true] { color: var(--ink); border-color: var(--ink); }
+.mic-toggle[data-active=true] .mic-off-cross { display: none; }
+.mic-toggle[data-active=true]::after {
+  content: ''; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--on-air);
+}
+
+/* Contact */
+.contact { min-width: 0; }
+.contact-form { display: grid; gap: 8px; min-width: 0; }
+.compose { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 8px; }
+#prompt { min-width: 0; height: 48px; padding: 8px 12px; font-size: 17px; }
+#prompt::placeholder { color: var(--faint); }
+#send { height: 48px; padding: 0; display: grid; place-items: center; border-color: var(--ink); }
+
+@media (prefers-reduced-motion: reduce) {
+  .entry[data-live] .entry-text::after { animation: none; }
+}
+
+/* Debug page controls */
+.debug-line { min-height: 1.5em; font-size: 12px; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; }
+.debug-button { min-height: 44px; padding: 4px 12px; font-size: 13px; }
+.debug-check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--dim); }
+.debug-settings { display: grid; gap: 10px; border-top: 1px solid var(--rule); padding-top: 8px; font-size: 13px; color: var(--dim); }
+.debug-settings summary { cursor: pointer; }
+.debug-settings label { display: grid; gap: 4px; margin-top: 10px; }
+.debug-settings input { min-height: 44px; padding: 0 10px; font-size: 15px; }
+.debug-settings .debug-button { width: 100%; margin-top: 10px; }
 
 .record-checkbox-mark {
   display: inline-flex;
@@ -32,92 +181,11 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  border: 1px solid white;
-  background: black;
-  color: white;
+  border: 1px solid var(--ink);
+  color: var(--ink);
 }
+.record-checkbox-mark svg { visibility: hidden; }
+#recordDiagnostic:checked + .record-checkbox-mark svg { visibility: visible; }
+#recordDiagnostic:focus-visible + .record-checkbox-mark { outline: 2px solid var(--ink); outline-offset: 2px; }
 
-.record-checkbox-mark svg {
-  visibility: hidden;
-}
-
-#recordDiagnostic:checked + .record-checkbox-mark svg {
-  visibility: visible;
-}
-
-#recordDiagnostic:focus-visible + .record-checkbox-mark {
-  outline: 2px solid white;
-  outline-offset: 2px;
-}
-
-.play-loading {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 1em;
-}
-
-.play-loading span {
-  width: 7px;
-  height: 7px;
-  background: currentColor;
-  opacity: 0;
-  animation: play-loading-first 2.4s steps(1, end) infinite;
-}
-
-.play-loading span:nth-child(2) { animation-name: play-loading-second; }
-.play-loading span:nth-child(3) { animation-name: play-loading-third; }
-
-@keyframes play-loading-first {
-  0%, 74.99% { opacity: 1; }
-  75%, 100% { opacity: 0; }
-}
-
-@keyframes play-loading-second {
-  0%, 24.99% { opacity: 0; }
-  25%, 74.99% { opacity: 1; }
-  75%, 100% { opacity: 0; }
-}
-
-@keyframes play-loading-third {
-  0%, 49.99% { opacity: 0; }
-  50%, 74.99% { opacity: 1; }
-  75%, 100% { opacity: 0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .play-loading span { animation: none; opacity: 1; }
-}
-
-/* The exhibition receiver fits the phone viewport, including its safe areas. */
-html, body, #app { height: 100dvh; min-height: 0; overflow: hidden; }
-#app > main {
-  height: 100dvh;
-  min-height: 0;
-  max-width: 430px;
-  padding-top: max(12px, env(safe-area-inset-top));
-  padding-bottom: max(12px, env(safe-area-inset-bottom));
-}
-#app > main > section:first-child { min-height: 0; }
-#app > main > section:first-child > div:nth-child(2) { min-height: 0; padding-top: 12px; padding-bottom: 12px; }
-#message { font-size: clamp(24px, 9vw, 44px); }
-@media (max-height: 620px) {
-  #app > main { gap: 8px; padding: 8px 12px; }
-  #app > main > section:last-child { gap: 8px; }
-  #mic { min-height: 42px; font-size: 14px; }
-  #contactForm { gap: 8px; padding: 8px; }
-  #prompt, #send, #playSignal { min-height: 36px; }
-}
-
-#app > main > section:first-child { position: relative; }
-.mic-toggle {
-  position: absolute; right: 10px; bottom: 10px; width: 42px; height: 42px;
-  min-height: 42px; padding: 0; display: grid; place-items: center;
-}
-.mic-toggle[data-active=true] .mic-off-cross { display: none; }
-#app > main > section:first-child > div:nth-child(2) { padding-bottom: 58px; }
-
-/* Diagnostics retain scrolling for connection settings and recording controls. */
-html:has(body.debug-ui), body.debug-ui, body.debug-ui #app { height: auto; min-height: 100%; overflow: auto; }
-body.debug-ui #app > main { height: auto; min-height: 100dvh; max-width: 36rem; }
+body.debug-ui .receiver { height: 55vh; }

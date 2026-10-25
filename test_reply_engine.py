@@ -33,10 +33,11 @@ def test_reply_duration_matches_ultrasound_firmware():
 
 
 def test_reply_is_short_and_transport_safe():
-    assert normalize_reply("yes... but the air is running thin") == "YES BUT THE"
-    assert len(normalize_reply("abcdefghijklmnopqrstuvwxyz")) <= MAX_REPLY_CHARS
-    assert normalize_reply("STAY CLOSE NOW") == "STAY CLOSE"
-    assert signal_duration_seconds(normalize_reply("Z" * 20)) <= MAX_SIGNAL_SECONDS
+    assert normalize_reply("yes... but the air is running thin") == "YES BUT THE AIR IS RUNNING THIN"
+    assert normalize_reply("we are the last light of aurora and we are listening") == \
+        "WE ARE THE LAST LIGHT OF AURORA AND WE"
+    assert len(normalize_reply("abcdefghijklmnopqrstuvwxyz" * 2)) <= MAX_REPLY_CHARS
+    assert signal_duration_seconds(normalize_reply("Z" * 60)) <= MAX_SIGNAL_SECONDS
 
 
 def test_local_env_loads_key_without_overriding_shell():
@@ -70,4 +71,22 @@ def test_reply_calls_model_and_normalizes_output():
             assert generate_reply("Can you hear me?") == "STAY CLOSE"
     assert captured["payload"]["model"] == DEFAULT_MODEL == "gpt-6-luna"
     assert captured["payload"]["reasoning"] == {"effort": "none"}
+    assert captured["payload"]["input"] == [{"role": "user", "content": "Can you hear me?"}]
     assert "emergency beacon" in captured["payload"]["instructions"]
+
+
+def test_reply_sends_the_conversation_so_far():
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data)
+        return io.BytesIO(json.dumps({"output_text": "WE ARE LANTERN"}).encode())
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=True):
+        with patch("urllib.request.urlopen", fake_urlopen):
+            assert generate_reply("Who are you?", [("Hello", "WE ARE HERE")]) == "WE ARE LANTERN"
+    assert captured["payload"]["input"] == [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "WE ARE HERE"},
+        {"role": "user", "content": "Who are you?"},
+    ]
