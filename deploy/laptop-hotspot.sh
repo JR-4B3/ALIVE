@@ -61,10 +61,10 @@ prepare() {
   [[ -e /sys/class/net/$AP ]] && stop
   # Without an uplink the boards still join, and they start polling once
   # the laptop is back online.
-  uplink=$(ip route show default | awk '{print $5; exit}')
+  uplink=$(ip route show default | awk 'NR == 1 {print $5}')
   [[ -n $uplink ]] || { uplink="nothing yet"; echo "Note: this laptop has no internet route yet." >&2; }
   # Share the channel the card already uses, when that is 2.4 GHz.
-  frequency=$(iw dev "$WIFI" link 2>/dev/null | awk '/freq:/ {print int($2); exit}')
+  frequency=$(iw dev "$WIFI" link 2>/dev/null | awk '/freq:/ && !seen {print int($2); seen = 1}')
   if [[ -n $frequency && $frequency -lt 2500 ]]; then
     CHANNEL=$(( frequency == 2484 ? 14 : (frequency - 2407) / 5 ))
   elif [[ -n $frequency ]]; then
