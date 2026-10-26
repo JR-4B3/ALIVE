@@ -2,7 +2,7 @@
 """Start an ALIVE test from this computer, such as the MacBook at the venue.
 
     python3 debug_host.py         # your real units, through the API on the T480
-    python3 debug_host.py --sim   # no unit: this computer plays the signals
+    python3 debug_host.py -sim   # no unit: this computer plays the signals
     python3 debug_host.py -kill   # stop every running debug host
 
 Both modes serve the debug page over HTTPS for a phone on the same network and
@@ -405,16 +405,16 @@ def watch_units(api: str, token: str, stop: threading.Event) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Start an ALIVE test: the debug page for a phone, plus either a unit played by "
-                    "this computer (--sim) or, by default, the real units through the API on the T480.")
-    parser.add_argument("--sim", action="store_true",
+                    "this computer (-sim) or, by default, the real units through the API on the T480.")
+    parser.add_argument("-sim", "--sim", action="store_true",
                         help="no unit needed: run the API here and play the signals through this computer")
     parser.add_argument("--manual", action="store_true",
                         help="no random signals; units play only what you send from the Debug panel")
     parser.add_argument("--volume", type=int, default=60, metavar="0-100",
-                        help="--sim: loudness of the signals from this computer (default: %(default)s)")
+                        help="-sim: loudness of the signals from this computer (default: %(default)s)")
     parser.add_argument("--no-speaker", action="store_true",
-                        help="--sim: do not play through this computer; use 'Simulate a unit on this page' instead")
-    parser.add_argument("--api", default=SERVER_API, help="without --sim: API the units poll (default: %(default)s)")
+                        help="-sim: do not play through this computer; use 'Simulate a unit on this page' instead")
+    parser.add_argument("--api", default=SERVER_API, help="without -sim: API the units poll (default: %(default)s)")
     parser.add_argument("--port", type=int, default=8443)
     parser.add_argument("--http", action="store_true",
                         help="serve plain HTTP; phone microphones usually need HTTPS")
@@ -436,7 +436,7 @@ def main() -> int:
         token = ""
         player = [] if args.no_speaker else speaker_player()
         lines += [
-            "Mode:     --sim, no unit needed",
+            "Mode:     -sim, no unit needed",
             f"API:      local, inside this script. Replies: {replies}",
         ]
         if player:
@@ -450,7 +450,7 @@ def main() -> int:
     else:
         api = args.api
         token, source = load_secret("ALIVE_WEB_TOKEN", "operator-token", "cat ~/.config/alive/operator-token")
-        lines += ["Mode:     the real units (add --sim to test without one)",
+        lines += ["Mode:     the real units (add -sim to test without one)",
                   f"API:      {api}"]
         try:
             api_request(api, "/healthz", timeout=8)
@@ -505,7 +505,7 @@ def main() -> int:
     if https_active:
         print("          The phone shows a certificate warning once; accept it.")
     print("          Tap Debug for signal buttons, board roles, and 'reset to the first state'.")
-    print("Other:    python3 debug_host.py [--sim]   ·   --help for all options   ·   -kill to stop")
+    print("Other:    python3 debug_host.py [-sim]   ·   --help for all options   ·   -kill to stop")
     try:
         print(terminal_qr(url))
     except Exception:

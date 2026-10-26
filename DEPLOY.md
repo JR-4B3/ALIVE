@@ -79,9 +79,9 @@ Each letter is a 360 ms chirp that falls by 48 Hz around its own center frequenc
 
 Run these from a checkout on the MacBook (or any computer with Python 3.9 or newer). The first run fetches the operator token and OpenAI key from the T480 over `ssh t480` and keeps them in `~/.config/alive/`; `sudo deploy/install.sh` on the T480 puts them where that fetch looks. Each command prints the page URL, a QR code, the API, the units and their networks, and the other options.
 
-- `python3 debug_host.py --sim` needs no unit. The API runs inside the script, and the computer plays every signal through its speakers, so a phone held near it receives noise, clocks, and messages, and can answer. Turn the volume up. `--volume` sets the level; `--no-speaker` leaves the sound to **Simulate a unit on this page** in the Debug panel.
+- `python3 debug_host.py -sim` needs no unit. The API runs inside the script, and the computer plays every signal through its speakers, so a phone held near it receives noise, clocks, and messages, and can answer. Turn the volume up. `--volume` sets the level; `--no-speaker` leaves the sound to **Simulate a unit on this page** in the Debug panel.
 - `python3 debug_host.py` uses the real units through the API on the T480 and lists each unit's role and network as they change.
-- Add `--manual` to either one to stop random signals; units then play only what you send from the Debug panel. Without `--sim` it turns random signals back on when it stops.
+- Add `--manual` to either one to stop random signals; units then play only what you send from the Debug panel. Without `-sim` it turns random signals back on when it stops.
 - `python3 debug_host.py -kill` stops every running copy.
 
 ## How the units behave
