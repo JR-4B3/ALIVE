@@ -17,7 +17,9 @@
 # boards need 2.4 GHz. So limit the eduroam connection to 2.4 GHz, or use a
 # USB Wi-Fi adapter for the hotspot (set ALIVE_HOTSPOT_WIFI to its interface
 # name).
-set -euo pipefail
+set -Eeuo pipefail
+# Say where the script stopped instead of exiting silently.
+trap 'echo "laptop-hotspot.sh stopped at line $LINENO (exit $?): $BASH_COMMAND" >&2' ERR
 
 SSID=${ALIVE_HOTSPOT_SSID:-ALIVE-T480}
 WIFI=${ALIVE_HOTSPOT_WIFI:-wlp3s0}
