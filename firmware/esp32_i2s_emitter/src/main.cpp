@@ -273,6 +273,8 @@ void pollForMessage() {
   http.addHeader("X-Alive-Board", WiFi.macAddress());
   http.addHeader("X-Alive-Uptime-Ms", String(millis()));
   http.addHeader("X-Alive-Reset", String(static_cast<int>(esp_reset_reason())));
+  // Lets the debug tools show which network each unit reached the API through.
+  http.addHeader("X-Alive-Network", WiFi.SSID());
   const uint32_t requestedAt = millis();
   const int status = http.GET();
   if (status == HTTP_CODE_OK) {

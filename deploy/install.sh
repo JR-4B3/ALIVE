@@ -11,6 +11,16 @@ if [ ! -e /etc/alive/api.env ]; then
   echo "Created /etc/alive/api.env from the example. Fill it in, then run this script again."
   exit 1
 fi
+# Keep the operator token and OpenAI key readable by the user who ran sudo, so
+# `python3 debug_host.py` on another computer can fetch them over SSH.
+if [ -n "${SUDO_USER:-}" ]; then
+  user_config=$(getent passwd "$SUDO_USER" | cut -d: -f6)/.config/alive
+  install -d -m 700 -o "$SUDO_USER" "$user_config"
+  for pair in ALIVE_WEB_TOKEN:operator-token OPENAI_API_KEY:openai-key; do
+    sed -n "s/^${pair%%:*}=//p" /etc/alive/api.env |
+      install -m 600 -o "$SUDO_USER" /dev/stdin "$user_config/${pair#*:}"
+  done
+fi
 install -m 644 "$repo/deploy/alive-api.service" /etc/systemd/system/alive-api.service
 systemctl daemon-reload
 systemctl enable alive-api.service

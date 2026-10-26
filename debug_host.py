@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""Serve the ALIVE debugging page on the local network and print its QR code.
+"""Start an ALIVE test from this computer, such as the MacBook at the venue.
 
-GitHub Pages stays the clean visitor page. For testing, this script hosts the
-debugging build of the same page (docs/debug) from this computer: microphone
-and room levels, chirp/stream diagnostics, connection settings, and the
-diagnostic recording upload. Run it, then scan the printed QR code or type the
-printed URL/IP with the phone.
+    python3 debug_host.py sim     # no unit: this computer plays the signals
+    python3 debug_host.py units   # the real units, through the API at home
+    python3 debug_host.py -kill   # stop every running debug host
 
-    python debug_host.py --api https://api.example.com          # remote API
-    python debug_host.py --api https://127.0.0.1:8765           # local emitter API
-    python debug_host.py --manual                               # signals only on request
-    python debug_host.py -kill                                  # stop all debug hosts
-
-Requests the page sends to /api/* are proxied to that upstream, so the phone
-talks to this one origin only: no CORS setup and no certificate problems
-between the phone and the API.
+Both modes serve the debug page over HTTPS for a phone on the same network and
+print a QR code. The page's /api/* requests go through this script, which adds
+the operator token, so nothing needs pasting. Run with --help for options.
 """
 from __future__ import annotations
 
@@ -23,12 +16,15 @@ import errno
 import json
 import mimetypes
 import os
-import signal
+import re
 import shutil
+import signal
 import socket
 import ssl
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -42,29 +38,31 @@ from simple_qr import terminal_qr
 ROOT = Path(__file__).resolve().parent
 DEBUG_APP_DIR = ROOT / "docs" / "debug"
 DEBUG_APP = DEBUG_APP_DIR / "index.html"
-DEFAULT_API = os.environ.get("ALIVE_API_URL", "https://127.0.0.1:8765")
+HOME_API = os.environ.get("ALIVE_API_URL", "https://t480.tail688a7b.ts.net")
+VISITOR_PAGE = "https://jr-4b3.github.io/ALIVE/"
+# The T480 at home runs the API. Secrets missing here are fetched from it once
+# over SSH and kept in CONFIG_DIR, readable only by this user.
+SERVER_SSH = os.environ.get("ALIVE_SERVER_SSH", "t480")
+CONFIG_DIR = Path.home() / ".config" / "alive"
+SECRETS_H = ROOT / "firmware" / "esp32_i2s_emitter" / "include" / "secrets.h"
 MAX_REQUEST_BYTES = 12_000_000
-
-
-def is_debug_host(pid: int) -> bool:
-    """Match a running debug_host.py owned by this user, from any location."""
-    if pid == os.getpid():
-        return False
-    try:
-        process_dir = Path(f"/proc/{pid}")
-        if process_dir.stat().st_uid != os.getuid():
-            return False
-        arguments = (process_dir / "cmdline").read_bytes().split(b"\0")
-        return (b"-kill" not in arguments and b"--kill" not in arguments
-                and any(Path(os.fsdecode(arg)).name == "debug_host.py" for arg in arguments[1:]))
-    except OSError:
-        pass
-    return False
+# A locally administered MAC address, so it never matches a real board.
+SPEAKER_BOARD = "02:A1:1E:00:00:02"
 
 
 def running_debug_hosts() -> set[int]:
-    return {int(entry.name) for entry in Path("/proc").iterdir()
-            if entry.name.isdecimal() and is_debug_host(int(entry.name))}
+    """debug_host.py processes of this user, from any location."""
+    listing = subprocess.run(["ps", "-U", str(os.getuid()), "-o", "pid=,command="],
+                             capture_output=True, text=True, check=True).stdout
+    hosts = set()
+    for line in listing.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        arguments = command.split()
+        if (pid.isdecimal() and int(pid) != os.getpid() and "-kill" not in arguments
+                and "--kill" not in arguments
+                and any(Path(argument).name == "debug_host.py" for argument in arguments[1:])):
+            hosts.add(int(pid))
+    return hosts
 
 
 def kill_debug_hosts() -> int:
@@ -73,33 +71,21 @@ def kill_debug_hosts() -> int:
         if not hosts:
             print("No debug hosts are running.")
             return 0
-        for pid in hosts:
-            if is_debug_host(pid):
+        for sig, wait in ((signal.SIGTERM, 3), (signal.SIGKILL, 2)):
+            for pid in hosts & running_debug_hosts():
                 try:
-                    os.kill(pid, signal.SIGTERM)
+                    os.kill(pid, sig)
                 except ProcessLookupError:
                     pass
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            if not any(is_debug_host(pid) for pid in hosts):
-                print(f"Stopped {len(hosts)} debug host(s).")
-                return 0
-            time.sleep(0.1)
-        for pid in hosts:
-            if is_debug_host(pid):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            if not any(is_debug_host(pid) for pid in hosts):
-                print(f"Stopped {len(hosts)} debug host(s).")
-                return 0
-            time.sleep(0.1)
+            deadline = time.monotonic() + wait
+            while time.monotonic() < deadline:
+                if not hosts & running_debug_hosts():
+                    print(f"Stopped {len(hosts)} debug host(s).")
+                    return 0
+                time.sleep(0.1)
         print("Some debug hosts could not be stopped.", file=sys.stderr)
         return 1
-    except OSError as exc:
+    except (OSError, subprocess.CalledProcessError) as exc:
         print(f"Could not stop debug hosts: {exc}", file=sys.stderr)
         return 1
 
@@ -125,50 +111,22 @@ def local_ip() -> str:
 
 
 def ensure_self_signed_cert(ip_address: str) -> tuple[Path, Path] | None:
-    cert = Path(".alive-demo-cert.pem")
-    key = Path(".alive-demo-key.pem")
+    # One certificate per address, since the computer moves between networks.
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    cert = CONFIG_DIR / f"debug-cert-{ip_address}.pem"
+    key = CONFIG_DIR / f"debug-key-{ip_address}.pem"
     if cert.exists() and key.exists():
         return cert, key
-
-    config = Path(".alive-demo-openssl.cnf")
-    config.write_text(
-        "\n".join(
-            [
-                "[req]",
-                "distinguished_name=req_distinguished_name",
-                "x509_extensions=v3_req",
-                "prompt=no",
-                "[req_distinguished_name]",
-                "CN=ALIVE local demo",
-                "[v3_req]",
-                f"subjectAltName=IP:{ip_address},DNS:localhost,IP:127.0.0.1",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    config = CONFIG_DIR / "debug-openssl.cnf"
+    config.write_text("\n".join([
+        "[req]", "distinguished_name=req_distinguished_name", "x509_extensions=v3_req", "prompt=no",
+        "[req_distinguished_name]", "CN=ALIVE local demo",
+        "[v3_req]", f"subjectAltName=IP:{ip_address},DNS:localhost,IP:127.0.0.1", "",
+    ]), encoding="utf-8")
     try:
-        subprocess.run(
-            [
-                "openssl",
-                "req",
-                "-x509",
-                "-newkey",
-                "rsa:2048",
-                "-keyout",
-                str(key),
-                "-out",
-                str(cert),
-                "-days",
-                "7",
-                "-nodes",
-                "-config",
-                str(config),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", str(key),
+                        "-out", str(cert), "-days", "30", "-nodes", "-config", str(config)],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (OSError, subprocess.CalledProcessError) as exc:
         print(f"[HTTPS] Could not generate local HTTPS certificate: {exc}")
         return None
@@ -186,6 +144,43 @@ def apply_https(server: ThreadingHTTPServer, ip_address: str) -> bool:
     return True
 
 
+def load_secret(env_name: str, file_name: str, remote_command: str) -> tuple[str, str]:
+    """The secret and where it came from, or two empty strings. Never printed."""
+    value = os.environ.get(env_name, "").strip()
+    if value:
+        return value, f"${env_name}"
+    path = CONFIG_DIR / file_name
+    if path.is_file() and path.read_text(encoding="utf-8").strip():
+        return path.read_text(encoding="utf-8").strip(), f"~/.config/alive/{file_name}"
+    # On the server itself the command runs here instead.
+    command = (["sh", "-c", remote_command] if socket.gethostname().split(".")[0] == SERVER_SSH else
+               ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", SERVER_SSH, remote_command])
+    try:
+        fetched = subprocess.run(command, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return "", ""
+    value = fetched.stdout.strip() if fetched.returncode == 0 else ""
+    if not value or "\n" in value:
+        return "", ""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.touch(mode=0o600)
+    path.write_text(value + "\n", encoding="utf-8")
+    return value, f"fetched from {SERVER_SSH}, saved in ~/.config/alive/{file_name}"
+
+
+def firmware_networks() -> list[str]:
+    """Wi-Fi names in this checkout's secrets.h, in the order units try them."""
+    try:
+        text = SECRETS_H.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    block = re.search(r"#define\s+ALIVE_WIFI_NETWORKS((?:.*\\\n)*.*)", text)
+    if block:
+        return re.findall(r'\{\s*"([^"]*)"\s*,', block.group(1))
+    single = re.search(r'#define\s+ALIVE_WIFI_SSID\s+"([^"]*)"', text)
+    return [single.group(1)] if single else []
+
+
 def open_upstream(request: urllib.request.Request, timeout: float):
     """Open the upstream request, retrying without verification for self-signed
     local HTTPS APIs."""
@@ -195,23 +190,24 @@ def open_upstream(request: urllib.request.Request, timeout: float):
         reason = getattr(error, "reason", error)
         if not isinstance(reason, ssl.SSLCertVerificationError):
             raise
-        print("[proxy] upstream certificate is not trusted; retrying without verification")
-        return urllib.request.urlopen(
-            request, timeout=timeout, context=ssl._create_unverified_context()
-        )
+        return urllib.request.urlopen(request, timeout=timeout, context=ssl._create_unverified_context())
 
 
-def set_random_signals(upstream: str, enabled: bool) -> bool:
-    """Turn the API's random signals on or off with the operator token."""
-    token = os.environ.get("ALIVE_WEB_TOKEN", "")
+def api_request(api: str, path: str, token: str = "", body: object = None, headers: dict | None = None,
+                timeout: float = 10) -> dict:
     request = urllib.request.Request(
-        f"{upstream.rstrip('/')}/api/emitter/main/signals", method="POST",
-        data=json.dumps({"random": enabled}).encode(),
-        headers={"content-type": "application/json",
-                 **({"authorization": f"Bearer {token}"} if token else {})})
+        f"{api.rstrip('/')}{path}", method="POST" if body is not None else "GET",
+        data=None if body is None else json.dumps(body).encode(),
+        headers={**({"content-type": "application/json"} if body is not None else {}),
+                 **({"authorization": f"Bearer {token}"} if token else {}), **(headers or {})})
+    with open_upstream(request, timeout) as response:
+        return json.loads(response.read() or b"{}")
+
+
+def set_random_signals(api: str, token: str, enabled: bool) -> bool:
     try:
-        open_upstream(request, timeout=10).close()
-    except (OSError, urllib.error.HTTPError) as exc:
+        api_request(api, "/api/emitter/main/signals", token, {"random": enabled})
+    except (OSError, ValueError) as exc:
         print(f"[signals] could not turn random signals {'on' if enabled else 'off'}: {exc}")
         return False
     print(f"[signals] random signals {'on' if enabled else 'off'}")
@@ -222,9 +218,9 @@ def stop_on_sigterm(*_: object) -> None:
     raise KeyboardInterrupt
 
 
-def make_handler(upstream: str):
+def make_handler(upstream: str, token: str):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "ALIVEDebugHost/0.1"
+        server_version = "ALIVEDebugHost/0.2"
 
         def do_GET(self) -> None:
             path = urlparse(self.path).path
@@ -238,13 +234,6 @@ def make_handler(upstream: str):
                 self._proxy("POST")
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
-
-        def do_OPTIONS(self) -> None:
-            self.send_response(HTTPStatus.NO_CONTENT)
-            self._send_cors_headers()
-            self.send_header("access-control-allow-methods", "GET, POST, OPTIONS")
-            self.send_header("access-control-allow-headers", "content-type, authorization")
-            self.end_headers()
 
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -262,9 +251,12 @@ def make_handler(upstream: str):
             headers = {
                 name: value
                 # The board headers let the page's simulated unit poll as a board.
-                for name in ("content-type", "authorization", "x-alive-board", "x-alive-uptime-ms", "x-alive-reset")
+                for name in ("content-type", "authorization", "x-alive-board", "x-alive-uptime-ms",
+                             "x-alive-reset", "x-alive-network")
                 if (value := self.headers.get(name))
             }
+            if token and "authorization" not in headers:
+                headers["authorization"] = f"Bearer {token}"
             request = urllib.request.Request(
                 f"{upstream.rstrip('/')}{self.path}", data=body, headers=headers, method=method
             )
@@ -299,17 +291,12 @@ def make_handler(upstream: str):
             content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
             self._send_bytes(target.read_bytes(), content_type)
 
-        def _send_cors_headers(self) -> None:
-            self.send_header("access-control-allow-origin", "*")
-            self.send_header("access-control-allow-private-network", "true")
-
         def _send_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
             self._send_bytes(json.dumps(payload).encode("utf-8"), "application/json", status)
 
         def _send_bytes(self, data: bytes, content_type: str,
                         status: HTTPStatus = HTTPStatus.OK) -> None:
             self.send_response(status)
-            self._send_cors_headers()
             self.send_header("content-type", content_type)
             self.send_header("content-length", str(len(data)))
             self.end_headers()
@@ -326,81 +313,217 @@ class QuietThreadingHTTPServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def speaker_player() -> list[str]:
+    for command in (["afplay"], ["pw-play"], ["paplay"], ["aplay", "-q"]):
+        if shutil.which(command[0]):
+            return command
+    return []
+
+
+def run_speaker_unit(api: str, player: list[str], amplitude: int, stop: threading.Event) -> None:
+    """Poll the API like a board and play each signal through the speakers."""
+    from signals import score_seconds, score_wav
+
+    started = time.monotonic()
+    reset = "1"
+    while not stop.is_set():
+        try:
+            reply = api_request(api, "/api/emitter/main/current", headers={
+                "x-alive-board": SPEAKER_BOARD, "x-alive-uptime-ms": str(int((time.monotonic() - started) * 1000)),
+                "x-alive-reset": reset, "x-alive-network": "this computer"})
+        except (OSError, ValueError) as exc:
+            print(f"[unit] poll failed: {exc}")
+            stop.wait(2)
+            continue
+        reset = "3"
+        play = reply.get("play")
+        if play:
+            text = f": {play['text']}" if play.get("text") else ""
+            print(f"[unit] playing {play['kind']}{text} ({score_seconds(play):.1f} s)")
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as file:
+                file.write(score_wav(play, amplitude))
+            try:
+                subprocess.run(player + [file.name], check=False)
+            finally:
+                os.unlink(file.name)
+        stop.wait(2)
+
+
+def start_local_api(manual: bool) -> tuple[str, str]:
+    """Run the API in this process on a free local port. Returns its URL and
+    a note on replies."""
+    # The local API takes no tokens; this script is its only caller.
+    for name in ("ALIVE_WEB_TOKEN", "ALIVE_DEVICE_TOKEN", "ALIVE_WEB_ORIGIN", "ALIVE_NOTIFY_URL"):
+        os.environ.pop(name, None)
+    os.environ["ALIVE_PUBLIC_DEMO"] = "1"
+    key, source = load_secret(
+        "OPENAI_API_KEY", "openai-key",
+        "cat ~/.config/alive/openai-key 2>/dev/null || "
+        "sed -n 's/^OPENAI_API_KEY=//p' ~/workspace/github.com/JR-4B3/ALIVE/.env")
+    if key:
+        os.environ["OPENAI_API_KEY"] = key
+    import emitter
+
+    state = emitter.ApiState(startup_silence=0)
+    if manual:
+        state.set_random_signals(False)
+    server = emitter.QuietThreadingHTTPServer(("127.0.0.1", 0), emitter.make_handler(state))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    replies = (f"on (OpenAI key from {source})" if key else
+               f"off: no OpenAI key in $OPENAI_API_KEY, ~/.config/alive/openai-key, or on {SERVER_SSH}")
+    return f"http://127.0.0.1:{server.server_address[1]}", replies
+
+
+def board_lines(status: dict) -> list[str]:
+    boards = [board for board in status.get("boards", []) if board.get("lastPollSeconds", 999) < 60]
+    if not boards:
+        return ["  no unit is polling right now"]
+    return [f"  {board['board']}  {board['role']:<11} via {board.get('network') or '?':<20} "
+            f"last poll {board['lastPollSeconds']:.0f} s ago" for board in boards]
+
+
+def watch_units(api: str, token: str, stop: threading.Event) -> None:
+    """Print a line whenever a unit appears, disappears, or changes role or network."""
+    known: dict[str, tuple[str, str]] = {}
+    first = True
+    while not stop.wait(0 if first else 5):
+        try:
+            status = api_request(api, "/api/status", token)
+        except (OSError, ValueError):
+            continue
+        now = {board["board"]: (board["role"], board.get("network") or "?")
+               for board in status.get("boards", []) if board.get("lastPollSeconds", 999) < 60}
+        if not first:
+            for board in sorted(now.keys() | known.keys()):
+                if board not in now:
+                    print(f"[units] {board} stopped polling")
+                elif now[board] != known.get(board):
+                    print(f"[units] {board} is {now[board][0]} via {now[board][1]}")
+        known, first = now, False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Host the ALIVE debugging page on the local network and print its QR code"
-    )
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8443)
-    parser.add_argument("--api", default=DEFAULT_API,
-                        help="upstream API for /api/* (default: %(default)s)")
-    parser.add_argument("--http", action="store_true",
-                        help="serve plain HTTP; phone microphone access usually needs HTTPS")
-    parser.add_argument("--rebuild", action="store_true",
-                        help="rebuild docs/debug before serving")
+        description="Start an ALIVE test: the debug page for a phone, plus either a unit played by "
+                    "this computer (sim) or the real units through the API at home (units).")
+    parser.add_argument("mode", nargs="?", choices=["sim", "units"],
+                        help="sim: no unit needed, this computer plays the signals; "
+                             "units: the real units, through the API at home")
     parser.add_argument("--manual", action="store_true",
-                        help="turn the API's random signals off while this runs; boards then play "
-                             "only what the debug page sends (needs ALIVE_WEB_TOKEN)")
-    parser.add_argument("-kill", "--kill", action="store_true",
-                        help="stop all running debug_host.py servers and exit")
+                        help="no random signals; units play only what you send from the Debug panel")
+    parser.add_argument("--volume", type=int, default=60, metavar="0-100",
+                        help="sim: loudness of the signals from this computer (default: %(default)s)")
+    parser.add_argument("--no-speaker", action="store_true",
+                        help="sim: do not play through this computer; use 'Simulate a unit on this page' instead")
+    parser.add_argument("--api", default=HOME_API, help="units: API the units poll (default: %(default)s)")
+    parser.add_argument("--port", type=int, default=8443)
+    parser.add_argument("--http", action="store_true",
+                        help="serve plain HTTP; phone microphones usually need HTTPS")
+    parser.add_argument("--rebuild", action="store_true", help="rebuild docs/debug before serving")
+    parser.add_argument("-kill", "--kill", action="store_true", help="stop all running debug hosts and exit")
     args = parser.parse_args()
 
     if args.kill:
         return kill_debug_hosts()
-
+    if not args.mode:
+        parser.print_help()
+        return 2
     if args.rebuild or not DEBUG_APP.exists():
         if not build_debug_app():
             return 1
 
+    stop = threading.Event()
+    lines: list[str] = []
+    restore_random = False
+    if args.mode == "sim":
+        api, replies = start_local_api(args.manual)
+        token = ""
+        player = [] if args.no_speaker else speaker_player()
+        lines += [
+            "Mode:     sim, no unit needed",
+            f"API:      local, inside this script. Replies: {replies}",
+        ]
+        if player:
+            amplitude = round(32767 * max(0, min(args.volume, 100)) / 100)
+            threading.Thread(target=run_speaker_unit, args=(api, player, amplitude, stop), daemon=True).start()
+            lines += [f"Sound:    this computer plays the signals with {player[0]}, volume {args.volume}. "
+                      "Turn the system volume up and hold the phone 0.5 to 1 m from the speakers."]
+        else:
+            lines += ["Sound:    nothing plays here" + ("" if args.no_speaker else " (no afplay, pw-play, paplay, or aplay)")
+                      + ". On the page, tap Debug and tick 'Simulate a unit on this page'."]
+    else:
+        api = args.api
+        token, source = load_secret("ALIVE_WEB_TOKEN", "operator-token", "cat ~/.config/alive/operator-token")
+        lines += ["Mode:     units, the real units",
+                  f"API:      {api}"]
+        try:
+            api_request(api, "/healthz", timeout=8)
+        except (OSError, ValueError) as exc:
+            lines += [f"          not reachable ({exc}). Is the T480 at home on and online?"]
+        if token:
+            lines += [f"Token:    operator token from {source}; the page needs nothing pasted"]
+            try:
+                status = api_request(api, "/api/status", token)
+                lines += ["Units:"] + board_lines(status)
+                if args.manual:
+                    restore_random = set_random_signals(api, token, False)
+                threading.Thread(target=watch_units, args=(api, token, stop), daemon=True).start()
+            except (OSError, ValueError) as exc:
+                lines += [f"Units:    status unavailable ({exc}); the API may still run older code"]
+        else:
+            lines += ["Token:    not found. Signal buttons, status, and reset will fail.",
+                      f"          On the T480 run 'sudo deploy/install.sh' once; it saves the token where this "
+                      f"script fetches it over 'ssh {SERVER_SSH}'. Or put it in ~/.config/alive/operator-token."]
+        networks = firmware_networks()
+        lines += [
+            "Networks: units need internet over Wi-Fi, nothing else. They join the first network of",
+            "          their firmware list that is in range"
+            + (f": {' > '.join(networks)}." if networks else " (secrets.h, not in this checkout)."),
+            "          No HfK network yet? Turn on your phone hotspot with Maximize Compatibility;",
+            "          units switch to it within about a minute. 'Units' above lists each unit's network.",
+            f"Visitors: {VISITOR_PAGE} works on any phone with mobile data.",
+        ]
+
     ip = local_ip()
     try:
-        server = QuietThreadingHTTPServer((args.host, args.port), make_handler(args.api))
+        server = QuietThreadingHTTPServer(("0.0.0.0", args.port), make_handler(api, token))
     except OSError as error:
         if error.errno != errno.EADDRINUSE:
             raise
-        print(f"Port {args.port} is already in use. The debug server may already be running; open its URL or stop it before starting another copy.", file=sys.stderr)
+        print(f"Port {args.port} is in use. A debug host may already run; stop it with "
+              "'python3 debug_host.py -kill'.", file=sys.stderr)
         return 1
-    https_active = False
-    if not args.http:
-        https_active = apply_https(server, ip)
+    https_active = not args.http and apply_https(server, ip)
     scheme = "https" if https_active else "http"
     url = f"{scheme}://{ip}:{args.port}/"
-    local_url = f"{scheme}://localhost:{args.port}/"
 
-    print("=" * 56)
-    print("ALIVE debugging page")
-    print("=" * 56)
-    print(f"Phone URL: {url}")
-    print(f"Also try:  {local_url}")
-    print(f"API proxy: {args.api}  (page requests to /api/* go there)")
-    operator_token = os.environ.get("ALIVE_WEB_TOKEN", "")
-    if operator_token and sys.stdout.isatty():
-        print(f"Operator token: {operator_token}  (paste into Connection Settings)")
-    elif operator_token:
-        print("Operator token: configured in ALIVE_WEB_TOKEN (hidden in logs)")
-    else:
-        print("Operator token: use ALIVE_WEB_TOKEN from the API server's .env")
+    print("=" * 72)
+    print("ALIVE debug")
+    print("=" * 72)
+    for line in lines:
+        print(line)
+    print(f"Signals:  {'only what you send (--manual)' if args.manual else 'random; add --manual to send only from the Debug panel'}")
+    print(f"Page:     {url}  (phone on the same network as this computer)")
+    print(f"          {scheme}://localhost:{args.port}/ on this computer")
     if https_active:
-        print("[HTTPS] The phone may show a certificate warning; accept it for the local demo.")
-    else:
-        print("[HTTPS] HTTP mode is active. Phone microphone access may be blocked.")
+        print("          The phone shows a certificate warning once; accept it.")
+    print("          Tap Debug for signal buttons, board roles, and 'reset to the first state'.")
+    print("Other:    python3 debug_host.py sim | units   ·   --help for all options   ·   -kill to stop")
     try:
         print(terminal_qr(url))
     except Exception:
         print(f"[QR] {url}")
 
-    manual = args.manual and set_random_signals(args.api, False)
-    if manual:
-        # `-kill` sends SIGTERM; turn random signals back on then too.
-        signal.signal(signal.SIGTERM, stop_on_sigterm)
+    signal.signal(signal.SIGTERM, stop_on_sigterm)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n[stopped]")
     finally:
+        stop.set()
         server.server_close()
-        if manual:
-            set_random_signals(args.api, True)
+        if restore_random:
+            set_random_signals(api, token, True)
     return 0
 
 

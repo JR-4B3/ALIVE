@@ -75,6 +75,15 @@ A `401` can mean public demo mode is off or an operator action lacks its token. 
 
 Each letter is a 360 ms chirp that falls by 48 Hz around its own center frequency. Centers start at 18,450 Hz for A and are 64 Hz apart, with space at 20,114 Hz. Two 18,200 Hz sync chirps open a message and one closes it, with 180 ms of silence after each chirp. A 40-character reply lasts 24 seconds. The codec has framing but no checksum. Noise and clocks never use sync chirps, which is how the phone tells them from a message. The Wi-Fi sender polls every 2 seconds with Wi-Fi modem sleep on, reuses its HTTPS connection, and runs the amplifier clock only while it plays. A 30-second watchdog resets it if a network call or audio write hangs. Keep the firmware, API, and static page builds on matching revisions.
 
+## Test from the MacBook
+
+Run these from a checkout on the MacBook (or any computer with Python 3.9 or newer). The first run fetches the operator token and OpenAI key from the T480 over `ssh t480` and keeps them in `~/.config/alive/`; `sudo deploy/install.sh` on the T480 puts them where that fetch looks. Each command prints the page URL, a QR code, the API, the units and their networks, and the other options.
+
+- `python3 debug_host.py sim` needs no unit. The API runs inside the script, and the computer plays every signal through its speakers, so a phone held near it receives noise, clocks, and messages, and can answer. Turn the volume up. `--volume` sets the level; `--no-speaker` leaves the sound to **Simulate a unit on this page** in the Debug panel.
+- `python3 debug_host.py units` uses the real units through the API at home and lists each unit's role and network as they change.
+- Add `--manual` to either one to stop random signals; units then play only what you send from the Debug panel. `units` turns random signals back on when it stops.
+- `python3 debug_host.py -kill` stops every running copy.
+
 ## How the units behave
 
 The API deals new roles every 10 minutes and whenever a board joins, but never while a visitor's reply is waiting or within 3 minutes of their last message. With five boards there is always one intelligent board, one clock, one noise, and two more chosen from clock, noise, and at most one dead board. A board that stops polling for 60 seconds loses its role; if it was intelligent, another board takes over. After each signal the air stays silent for 3 seconds plus a random 6 to 20 seconds. The API also keeps 4 seconds free for the signal to reach the board; a board drops a signal that took longer. After a restart, the API waits 26 seconds, the length of the longest signal, before granting the first one. The next unprompted signal is noise 45 % of the time, a clock 30 %, and a beacon 25 %. A visitor's reply skips the pause. These numbers are constants at the top of `emitter.py`.
@@ -83,20 +92,18 @@ If a board gets no valid reply from the API for 60 seconds, it plays signals on 
 
 ## Networks at the venue
 
-The boards need a 2.4 GHz network with a password, no browser login, and a route to the public API. They do not need to share a network with the phones or the laptop. List every network you may use in `ALIVE_WIFI_NETWORKS` in `secrets.h`, most preferred first:
+The API stays on the T480 at home, behind Tailscale Funnel; keep it on and online during the show. At the venue the boards only need a 2.4 GHz network with a password, no browser login, and a route to the internet. They do not need to share a network with the phones or the MacBook. List every network you may use in `ALIVE_WIFI_NETWORKS` in `secrets.h`, most preferred first:
 
 ```c
 #define ALIVE_WIFI_NETWORKS \
   {"ALIVE/ALIFE", "..."}, \
-  {"ALIVE-T480", "..."}, \
   {"My iPhone", "..."}
 ```
 
-A board joins the first listed network it can see. When a network gives no route to the API for a minute, the board tries the next visible network it has not tried yet. After every visible network has failed, it starts over from the top. Reflash every board after changing the list.
+A board joins the first listed network it can see. Each poll reports the network's name, and `python3 debug_host.py units` shows it per board. When a network gives no route to the API for a minute, the board tries the next visible network it has not tried yet. After every visible network has failed, it starts over from the top. Reflash every board after changing the list.
 
 - **Repeater on the university LAN.** The preferred setup. Connect the repeater to the LAN and check from a phone on its Wi-Fi that `https://<machine>.<tailnet>.ts.net/healthz` answers.
-- **Laptop hotspot.** If the laptop that runs the API can reach the internet (venue Wi-Fi, LAN, or a USB tether), `sudo ALIVE_HOTSPOT_PASSWORD='...' deploy/laptop-hotspot.sh start` adds a 2.4 GHz network named `ALIVE-T480` on its Wi-Fi card and shares the connection. `status` lists connected boards, and `stop` removes it. The hotspot does not survive a reboot. Many cards can only send on the channel of the Wi-Fi they are joined to. If the laptop is on 5 GHz venue Wi-Fi and hostapd fails, use the LAN or a USB tether as the uplink, or a USB Wi-Fi adapter for the hotspot with `ALIVE_HOTSPOT_WIFI=<interface>`.
-- **Phone hotspot.** Good for demos. On an iPhone, turn on **Maximize Compatibility** in Personal Hotspot so it uses 2.4 GHz, and keep the Personal Hotspot screen open while the boards first join. An iPhone hotspot may not accept more than about five Wi-Fi devices, so leave other devices off it.
+- **Phone hotspot.** The backup until HfK approves the repeater, and for demos. On an iPhone, turn on **Maximize Compatibility** in Personal Hotspot so it uses 2.4 GHz, and keep the Personal Hotspot screen open while the boards first join. An iPhone hotspot may not accept more than about five Wi-Fi devices, so leave other devices off it.
 
 Visitors' phones use mobile data and never join these networks.
 

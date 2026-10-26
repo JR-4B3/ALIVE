@@ -10,7 +10,7 @@ import pytest
 import emitter
 from emitter import ApiState, QuietThreadingHTTPServer, make_handler
 from reply_engine import signal_duration_seconds
-from signals import message_score, noise_score, score_seconds
+from signals import chirp_samples, message_score, noise_score, score_seconds, score_wav
 
 BOARDS = ["70:AF:09:0D:D7:BC", "AC:27:6E:45:B9:4C", "AC:27:6E:45:E5:90", "70:AF:09:0D:AB:24", "AC:27:6E:45:00:01"]
 
@@ -371,6 +371,21 @@ def test_reset_returns_to_the_first_state(clock):
     assert not state.has_contact("visitor-1", str(beacon["text"]))
     played = run(state, clock, 2 + emitter.DELIVERY_SECONDS + 30)
     assert played[0][2]["kind"] == "intelligent"
+
+
+def test_computer_chirps_match_the_browser_and_firmware_samples():
+    # Values from beaconPulse() in web/src/audio/beacon.ts, which bun test
+    # checks against the firmware.
+    expected = [-1, -2408, 5164, -2, 0, -3063, 5164, -4, -1, -312, -5507, -13]
+    assert [chirp_samples(symbol)[i] for symbol in (-1, 0, 26) for i in (100, 5000, 8640, 17000)] == expected
+    assert len(score_wav(message_score("HI"))) == 44 + 2 * 48 * int(score_seconds(message_score("HI")) * 1000)
+
+
+def test_status_shows_the_network_each_board_uses(clock):
+    state = ApiState()
+    state.device_command(BOARDS[0], "5000", "1", "ALIVE/ALIFE")
+    state.device_command(BOARDS[1], "5000", "1", "iPhone\x00")
+    assert [board["network"] for board in state.status()["boards"]] == ["ALIVE/ALIFE", "iPhone"]
 
 
 def test_health_endpoint_needs_no_token():

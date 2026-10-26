@@ -96,7 +96,8 @@ class ApiState:
     at a time, so signals never overlap.
     """
 
-    def __init__(self, state_file: Path | None = None, rng: random.Random | None = None) -> None:
+    def __init__(self, state_file: Path | None = None, rng: random.Random | None = None,
+                 startup_silence: float = STARTUP_SILENCE_SECONDS) -> None:
         self.state_file = state_file
         self._rng = rng or random.Random()
         self._lock = threading.Lock()
@@ -104,12 +105,13 @@ class ApiState:
         # Per-board monotonic poll times and battery start times for alerts.
         self._board_seen: dict[str, float] = {}
         self._board_power_on: dict[str, float] = {}
+        self._board_network: dict[str, str] = {}
         self._quiet_alerted: set[str] = set()
         self._all_quiet_alerted = False
         self._roles: dict[str, str] = {}
         self._clocks: dict[str, tuple[int, int, int]] = {}
         self._roles_at = -math.inf
-        self._air_free_at = time.monotonic() + STARTUP_SILENCE_SECONDS
+        self._air_free_at = time.monotonic() + startup_silence
         self._starting = True
         self._next_signal_at = 0.0
         # With random signals off, boards play only what an operator asks for.
@@ -129,7 +131,8 @@ class ApiState:
         self._public_message_window_at = time.monotonic()
         self._public_message_count = 0
 
-    def device_command(self, board: str = "", uptime_ms: str = "", reset: str = "") -> dict[str, object]:
+    def device_command(self, board: str = "", uptime_ms: str = "", reset: str = "",
+                       network: str = "") -> dict[str, object]:
         with self._lock:
             now = time.monotonic()
             self._device_last_seen_at = now
@@ -137,6 +140,7 @@ class ApiState:
                 return {"role": "dead", "play": None}
             self._log_poll(f"{board},{uptime_ms},{reset}")
             self._board_seen[board] = now
+            self._board_network[board] = "".join(char for char in network[:32] if char.isprintable())
             if reset == "1":  # Power-on, e.g. a fresh battery
                 self._board_power_on[board] = now - int(uptime_ms) / 1000
             self._assign_roles(now)
@@ -327,6 +331,7 @@ class ApiState:
         return {
             "deviceOnline": now - self._device_last_seen_at < DEVICE_LEASE_SECONDS,
             "boards": [{"board": board, "role": self._roles.get(board, "offline"),
+                        "network": self._board_network.get(board, ""),
                         "lastPollSeconds": round(now - seen, 1)}
                        for board, seen in sorted(self._board_seen.items())],
             "randomSignals": self._random_signals,
@@ -410,7 +415,7 @@ def make_handler(state: ApiState):
                 if self._authorized("ALIVE_DEVICE_TOKEN"):
                     self._send_json(state.device_command(
                         self.headers.get("x-alive-board", ""), self.headers.get("x-alive-uptime-ms", ""),
-                        self.headers.get("x-alive-reset", "")))
+                        self.headers.get("x-alive-reset", ""), self.headers.get("x-alive-network", "")))
                 return
             if parsed.path == "/healthz":
                 # Taking the state lock proves request handling is not wedged.
@@ -436,7 +441,8 @@ def make_handler(state: ApiState):
             self.send_header("access-control-allow-methods", "GET, POST, OPTIONS")
             # The debug page's simulated unit polls with the board headers.
             self.send_header("access-control-allow-headers",
-                             "content-type, authorization, x-alive-board, x-alive-uptime-ms, x-alive-reset")
+                             "content-type, authorization, x-alive-board, x-alive-uptime-ms, x-alive-reset, "
+                             "x-alive-network")
             self.end_headers()
 
         def do_POST(self) -> None:
