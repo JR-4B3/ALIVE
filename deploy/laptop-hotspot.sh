@@ -103,6 +103,12 @@ rsn_pairwise=CCMP
 wpa_passphrase=$ALIVE_HOTSPOT_PASSWORD
 EOF
   chmod 600 "$RUN/hostapd.conf"
+  # Ubuntu's firewall would drop the boards' DHCP requests and their traffic
+  # to the internet. ufw skips rules it already has.
+  if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+    ufw allow in on "$AP" to any port 67 proto udp comment "ALIVE hotspot DHCP" >/dev/null
+    ufw route allow in on "$AP" comment "ALIVE hotspot to the internet" >/dev/null
+  fi
   networkctl reload
   echo "Hotspot $SSID on channel $CHANNEL shares $uplink."
 }
