@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs a 2.4 GHz Wi-Fi network for the ALIVE boards on this laptop and shares
-# the laptop's internet connection (eduroam, LAN, or a USB phone tether) with
+# the laptop's internet connection (eduroam or a USB phone tether) with
 # it. The boards still reach the public API address, so nothing else changes.
 # Needs systemd-networkd, which Ubuntu Server uses.
 #
@@ -14,9 +14,9 @@
 #
 # The hotspot is a second interface on the laptop's Wi-Fi card. If the laptop
 # itself is on Wi-Fi, many cards can only send on that same channel, and the
-# boards need 2.4 GHz. When the uplink is on 5 GHz and hostapd fails, use the
-# LAN or a USB tether as the uplink, or a USB Wi-Fi adapter for the hotspot
-# (set ALIVE_HOTSPOT_WIFI to its interface name).
+# boards need 2.4 GHz. So limit the eduroam connection to 2.4 GHz, or use a
+# USB Wi-Fi adapter for the hotspot (set ALIVE_HOTSPOT_WIFI to its interface
+# name).
 set -euo pipefail
 
 SSID=${ALIVE_HOTSPOT_SSID:-ALIVE-T480}
