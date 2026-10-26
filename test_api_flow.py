@@ -337,6 +337,31 @@ def test_the_air_stays_reserved_for_a_late_delivery(clock):
     assert state.status()["airFreeInSeconds"] >= round(late_end - clock.now + emitter.AIR_GAP_SECONDS, 1) - .1
 
 
+def test_manual_mode_plays_only_requested_signals_right_away(clock):
+    state = ApiState(rng=random.Random(9))
+    state.set_random_signals(False)
+    assert run(state, clock, 120) == []
+    for kind in ["noise", "clock", "intelligent"]:
+        # Requests skip the startup silence and the random pause.
+        state.play_now(kind)
+        played = run(state, clock, 2)
+        assert [play["kind"] for _, _, play in played] == [kind]
+        clock.now += emitter.DELIVERY_SECONDS + score_seconds(played[0][2]) + emitter.AIR_GAP_SECONDS
+    assert run(state, clock, 120) == []
+
+
+def test_a_requested_signal_restarts_the_random_pause(clock):
+    state = started(ApiState(rng=random.Random(9)), clock)
+    first = run(state, clock, 2)[0][2]
+    clock.now += emitter.DELIVERY_SECONDS + score_seconds(first) + emitter.AIR_GAP_SECONDS
+    state.play_now("noise")
+    granted_at = clock.now
+    played = run(state, clock, 2)
+    assert played[0][2]["kind"] == "noise"
+    pause_starts = granted_at + emitter.DELIVERY_SECONDS + score_seconds(played[0][2]) + emitter.AIR_GAP_SECONDS
+    assert state.status()["nextSignalInSeconds"] >= pause_starts + emitter.SIGNAL_PAUSE_SECONDS[0] - clock.now - .1
+
+
 def test_health_endpoint_needs_no_token():
     state = ApiState()
     with patch.dict("os.environ", {"ALIVE_WEB_TOKEN": "web-secret"}):

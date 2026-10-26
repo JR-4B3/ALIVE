@@ -110,7 +110,11 @@ class ApiState:
         self._clocks: dict[str, tuple[int, int, int]] = {}
         self._roles_at = -math.inf
         self._air_free_at = time.monotonic() + STARTUP_SILENCE_SECONDS
+        self._starting = True
         self._next_signal_at = 0.0
+        # With random signals off, boards play only what an operator asks for.
+        self._random_signals = True
+        self._signal_requested = False
         # The first unprompted signal after a start is a beacon, so a test
         # visit hears an intelligent message quickly.
         self._next_kind = "intelligent"
@@ -175,7 +179,7 @@ class ApiState:
             if role != "intelligent":
                 return None
             score = message_score(self._replies.popleft()[1])
-        elif now >= self._next_signal_at:
+        elif now >= self._next_signal_at and (self._random_signals or self._signal_requested):
             # A kind without a board of that role (e.g. a single board) falls
             # to any board that is not dead.
             kind = self._next_kind
@@ -187,6 +191,7 @@ class ApiState:
                 score = clock_score(*self._clocks.setdefault(board, clock_settings(self._rng)))
             else:
                 score = noise_score(self._rng)
+            self._signal_requested = False
             self._next_kind = self._rng.choices(list(SIGNAL_WEIGHTS), list(SIGNAL_WEIGHTS.values()))[0]
         else:
             return None
@@ -194,7 +199,9 @@ class ApiState:
             self._transmitted.append((now, str(score["text"])))
             while now - self._transmitted[0][0] > CONTACT_SECONDS:
                 self._transmitted.popleft()
+        self._starting = False
         self._air_free_at = now + DELIVERY_SECONDS + score_seconds(score) + AIR_GAP_SECONDS
+        # Every transmission, random or requested, restarts the random pause.
         self._next_signal_at = self._air_free_at + self._rng.uniform(*SIGNAL_PAUSE_SECONDS)
         return score
 
@@ -273,15 +280,28 @@ class ApiState:
                 del history[:-CONVERSATION_TURNS]
             return len(self._replies)
 
-    def play_now(self, message: str = "") -> dict[str, object]:
-        """Operator test: queue a given message, or make the next signal a beacon."""
+    def play_now(self, kind: str = "intelligent", message: str = "") -> dict[str, object]:
+        """Operator test: queue a given message, or send a signal of this kind
+        as soon as the air is free, without the random pause."""
         with self._lock:
             now = time.monotonic()
+            if self._starting:
+                # The operator knows whether a board is still playing.
+                self._air_free_at = now
             if message:
                 self._replies.append((now, message))
             else:
-                self._next_kind = "intelligent"
+                self._next_kind = kind
                 self._next_signal_at = now
+                self._signal_requested = True
+            return self._status(now)
+
+    def set_random_signals(self, enabled: bool) -> dict[str, object]:
+        with self._lock:
+            now = time.monotonic()
+            self._random_signals = enabled
+            if enabled:
+                self._next_signal_at = max(self._air_free_at, now) + self._rng.uniform(*SIGNAL_PAUSE_SECONDS)
             return self._status(now)
 
     def reset(self) -> dict[str, object]:
@@ -305,10 +325,12 @@ class ApiState:
             "boards": [{"board": board, "role": self._roles.get(board, "offline"),
                         "lastPollSeconds": round(now - seen, 1)}
                        for board, seen in sorted(self._board_seen.items())],
+            "randomSignals": self._random_signals,
             "queuedReplies": len(self._replies),
             "airFreeInSeconds": max(0.0, round(self._air_free_at - now, 1)),
             "nextSignal": self._next_kind,
-            "nextSignalInSeconds": max(0.0, round(self._next_signal_at - now, 1)),
+            "nextSignalInSeconds": (max(0.0, round(self._next_signal_at - now, 1))
+                                    if self._random_signals or self._signal_requested else None),
         }
 
     def quiet_board_alerts(self) -> list[str]:
@@ -408,7 +430,9 @@ def make_handler(state: ApiState):
             self.send_response(HTTPStatus.NO_CONTENT)
             self._send_cors_headers()
             self.send_header("access-control-allow-methods", "GET, POST, OPTIONS")
-            self.send_header("access-control-allow-headers", "content-type, authorization")
+            # The debug page's simulated unit polls with the board headers.
+            self.send_header("access-control-allow-headers",
+                             "content-type, authorization, x-alive-board, x-alive-uptime-ms, x-alive-reset")
             self.end_headers()
 
         def do_POST(self) -> None:
@@ -447,7 +471,22 @@ def make_handler(state: ApiState):
                     self._send_json({"error": "No unit is polling; check its Wi-Fi connection"},
                                     HTTPStatus.SERVICE_UNAVAILABLE)
                     return
-                self._send_json(state.play_now(normalize_reply(str(payload.get("message") or ""))))
+                kind = str(payload.get("kind") or "intelligent")
+                if kind not in SIGNAL_WEIGHTS:
+                    self._send_json({"error": "kind must be noise, clock, or intelligent"}, HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(state.play_now(kind, normalize_reply(str(payload.get("message") or ""))))
+                return
+            if parsed.path == "/api/emitter/main/signals":
+                try:
+                    payload = self._read_json()
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                    return
+                if not isinstance(payload.get("random"), bool):
+                    self._send_json({"error": 'Send {"random": true} or {"random": false}'}, HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(state.set_random_signals(payload["random"]))
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -708,10 +747,14 @@ def main() -> int:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--http", action="store_true", help="Use HTTP behind a trusted HTTPS proxy")
+    parser.add_argument("--manual-signals", action="store_true",
+                        help="Start with random signals off; boards play only operator requests")
     args = parser.parse_args()
 
     state_path = os.environ.get("ALIVE_STATE_FILE")
     state = ApiState(state_file=Path(state_path) if state_path else None)
+    if args.manual_signals:
+        state.set_random_signals(False)
     ip = local_ip()
     server = QuietThreadingHTTPServer((args.host, args.port), make_handler(state))
     https_active = not args.http and apply_https(server, ip)

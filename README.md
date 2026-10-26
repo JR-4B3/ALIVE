@@ -27,7 +27,15 @@ The builds write to `docs/` and `docs/debug/`. Publish `docs/` with any static h
 
 The published pages call the API named by `PUBLISHED_API` in `web/vite.config.ts`, so the plain GitHub Pages link works on any phone. A link can name another API with `?api=https%3A%2F%2Fapi.example.com`. The debug page also has an API URL field, which it remembers. Under `vite dev`, requests go to the page's own origin. The API must allow the static site's exact origin with `ALIVE_WEB_ORIGIN`.
 
-For local development, `python emitter.py` serves the app and Wi-Fi API. `python debug_host.py` can serve the debug page and proxy API requests. Use `python emitter.py --help` and `python debug_host.py --help` for options. Set `OPENAI_API_KEY` in the environment or an ignored `.env` file to generate replies. The default model can be overridden with `ALIVE_OPENAI_MODEL`.
+For local development, `python emitter.py` serves the app and Wi-Fi API. `python debug_host.py` can serve the debug page and proxy API requests. `python emitter.py --manual-signals` starts with random signals off.
+
+To test without hardware, run a local API with no device token, open the debug page with `?api=` pointing at it, and tick **Simulate a unit on this page**. The page then polls the API as a board and feeds each signal it gets straight into its decoder, so noise, clocks, messages, and replies show up as they would on a phone next to a unit:
+
+```sh
+ALIVE_PUBLIC_DEMO=1 ALIVE_WEB_ORIGIN=http://localhost:5181 python emitter.py --host 127.0.0.1 --port 8766 --http --manual-signals
+cd web && bunx vite --mode debug --port 5181
+# open http://localhost:5181/?api=http%3A%2F%2Flocalhost%3A8766
+``` Use `python emitter.py --help` and `python debug_host.py --help` for options. Set `OPENAI_API_KEY` in the environment or an ignored `.env` file to generate replies. The default model can be overridden with `ALIVE_OPENAI_MODEL`.
 
 The API uses only the Python standard library. Python tests require `pytest`.
 

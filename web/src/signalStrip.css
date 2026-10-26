@@ -19,6 +19,5 @@ html:has(body.signal-strip), body.signal-strip, .signal-strip #app { height: 100
 }
 @media (max-height: 560px) {
   .signal-strip #app > main { gap: 6px; padding: 6px 10px; grid-template-rows: minmax(110px, 1.4fr) minmax(56px, .6fr) auto; }
-  .signal-strip #prompt, .signal-strip #send { height: 44px; }
-  .signal-strip .compose { grid-template-columns: minmax(0, 1fr) 44px; }
+  .signal-strip #prompt { height: 56px; }
 }

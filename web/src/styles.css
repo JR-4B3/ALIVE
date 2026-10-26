@@ -155,10 +155,18 @@
 /* Contact */
 .contact { min-width: 0; }
 .contact-form { display: grid; gap: 8px; min-width: 0; }
-.compose { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 8px; }
-#prompt { min-width: 0; height: 48px; padding: 8px 12px; font-size: 17px; }
+/* The send button sits inside the message box, in the same spot and size as
+   the microphone button inside the log above. */
+.compose { position: relative; min-width: 0; border: 1px solid var(--rule); }
+.compose:focus-within { border-color: var(--ink); }
+#prompt { display: block; width: 100%; height: 62px; padding: 0 64px 0 12px; border: 0; font-size: 17px; }
+#prompt:focus-visible { outline: none; }
 #prompt::placeholder { color: var(--faint); }
-#send { height: 48px; padding: 0; display: grid; place-items: center; border-color: var(--ink); }
+#send {
+  position: absolute; right: 10px; top: 50%; width: 44px; height: 44px; margin-top: -22px;
+  padding: 0; display: grid; place-items: center; border-color: var(--ink);
+}
+.debug-signals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 
 @media (prefers-reduced-motion: reduce) {
   .entry[data-live] .entry-text::after { animation: none; }

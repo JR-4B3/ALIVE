@@ -9,6 +9,7 @@ printed URL/IP with the phone.
 
     python debug_host.py --api https://api.example.com          # remote API
     python debug_host.py --api https://127.0.0.1:8765           # local emitter API
+    python debug_host.py --manual                               # signals only on request
     python debug_host.py -kill                                  # stop all debug hosts
 
 Requests the page sends to /api/* are proxied to that upstream, so the phone
@@ -200,6 +201,27 @@ def open_upstream(request: urllib.request.Request, timeout: float):
         )
 
 
+def set_random_signals(upstream: str, enabled: bool) -> bool:
+    """Turn the API's random signals on or off with the operator token."""
+    token = os.environ.get("ALIVE_WEB_TOKEN", "")
+    request = urllib.request.Request(
+        f"{upstream.rstrip('/')}/api/emitter/main/signals", method="POST",
+        data=json.dumps({"random": enabled}).encode(),
+        headers={"content-type": "application/json",
+                 **({"authorization": f"Bearer {token}"} if token else {})})
+    try:
+        open_upstream(request, timeout=10).close()
+    except (OSError, urllib.error.HTTPError) as exc:
+        print(f"[signals] could not turn random signals {'on' if enabled else 'off'}: {exc}")
+        return False
+    print(f"[signals] random signals {'on' if enabled else 'off'}")
+    return True
+
+
+def stop_on_sigterm(*_: object) -> None:
+    raise KeyboardInterrupt
+
+
 def make_handler(upstream: str):
     class Handler(BaseHTTPRequestHandler):
         server_version = "ALIVEDebugHost/0.1"
@@ -315,6 +337,9 @@ def main() -> int:
                         help="serve plain HTTP; phone microphone access usually needs HTTPS")
     parser.add_argument("--rebuild", action="store_true",
                         help="rebuild docs/debug before serving")
+    parser.add_argument("--manual", action="store_true",
+                        help="turn the API's random signals off while this runs; boards then play "
+                             "only what the debug page sends (needs ALIVE_WEB_TOKEN)")
     parser.add_argument("-kill", "--kill", action="store_true",
                         help="stop all running debug_host.py servers and exit")
     args = parser.parse_args()
@@ -363,12 +388,18 @@ def main() -> int:
     except Exception:
         print(f"[QR] {url}")
 
+    manual = args.manual and set_random_signals(args.api, False)
+    if manual:
+        # `-kill` sends SIGTERM; turn random signals back on then too.
+        signal.signal(signal.SIGTERM, stop_on_sigterm)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n[stopped]")
     finally:
         server.server_close()
+        if manual:
+            set_random_signals(args.api, True)
     return 0
 
 

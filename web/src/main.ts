@@ -6,6 +6,7 @@ import { BeaconDecoder } from './sensing/beaconDecoder';
 import { mountSignalStrip } from './signalStrip';
 import { encodeRecording } from './audio/recording';
 import { uploadRecording } from './audio/recordingUpload';
+import { startSimulatedUnit } from './debug/simulatedUnit';
 import type { Reception, ReceiverStatus } from './types';
 
 // Set at build time: `bun run build` publishes the clean visitor page to docs/,
@@ -52,7 +53,20 @@ app.innerHTML = `
         </div>
         ${DEBUG_UI ? `
         <div id="contactStatus" class="debug-line">---</div>
-        <button id="playSignal" type="button" class="debug-button">send a beacon now</button>
+        <div class="debug-signals" role="group" aria-label="Send a signal now">
+          <button type="button" class="debug-button" data-kind="noise">noise now</button>
+          <button type="button" class="debug-button" data-kind="clock">clock now</button>
+          <button type="button" class="debug-button" data-kind="intelligent">message now</button>
+        </div>
+        <label class="debug-check">
+          <input id="simulateUnit" type="checkbox">
+          <span>Simulate a unit on this page (local test API only; turns the microphone off)</span>
+        </label>
+        <div id="simulateStatus" class="debug-line"></div>
+        <label class="debug-check">
+          <input id="randomSignals" type="checkbox" checked>
+          <span>Random signals between requests (needs the operator token)</span>
+        </label>
         <label class="debug-check">
           <input id="recordDiagnostic" class="sr-only" type="checkbox">
           <span class="record-checkbox-mark" aria-hidden="true">
@@ -60,7 +74,7 @@ app.innerHTML = `
               <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" />
             </svg>
           </span>
-          <span>Record the next 25 s with the beacon</span>
+          <span>Record 25 s with the next signal I send</span>
         </label>
         <div id="recordStatus" class="debug-line"></div>
         <details class="debug-settings">
@@ -68,7 +82,7 @@ app.innerHTML = `
           <label for="apiBase">API URL
             <input id="apiBase" type="url" placeholder="https://api.example.com">
           </label>
-          <label for="apiToken">Private operator token (required for the beacon, status, and reset)
+          <label for="apiToken">Private operator token (required for signals, status, and reset)
             <input id="apiToken" type="password" autocomplete="off" placeholder="paste operator token">
           </label>
           <button id="showStatus" type="button" class="debug-button">show board roles</button>
@@ -99,7 +113,10 @@ const refs = {
 // (and every diagnostic string in it) is removed from the bundle entirely.
 const debugRefs = DEBUG_UI ? {
   micDiagnostics: requiredElement<HTMLDivElement>('#micDiagnostics'),
-  playSignal: requiredElement<HTMLButtonElement>('#playSignal'),
+  signalButtons: [...document.querySelectorAll<HTMLButtonElement>('.debug-signals button')],
+  randomSignals: requiredElement<HTMLInputElement>('#randomSignals'),
+  simulateUnit: requiredElement<HTMLInputElement>('#simulateUnit'),
+  simulateStatus: requiredElement<HTMLDivElement>('#simulateStatus'),
   apiBase: requiredElement<HTMLInputElement>('#apiBase'),
   apiToken: requiredElement<HTMLInputElement>('#apiToken'),
   showStatus: requiredElement<HTMLButtonElement>('#showStatus'),
@@ -139,6 +156,7 @@ let micError = '';
 // visitors who can repeat what they heard.
 let heard = '';
 let liveEntry: HTMLLIElement | null = null;
+let stopSimulation: (() => void) | null = null;
 let recording: { chunks: Float32Array[]; samples: number; rate: number; api: string; timer: number } | null = null;
 let recordingDownloadUrl: string | null = null;
 
@@ -155,12 +173,19 @@ refs.contactForm.addEventListener('submit', (event) => {
   event.preventDefault();
   void sendContactMessage();
 });
-debugRefs?.playSignal.addEventListener('click', () => {
-  void requestBeacon();
+for (const button of debugRefs?.signalButtons ?? []) {
+  button.addEventListener('click', () => void requestSignal(button.dataset.kind ?? 'intelligent'));
+}
+debugRefs?.simulateUnit.addEventListener('change', () => {
+  void toggleSimulation(debugRefs.simulateUnit.checked);
+});
+debugRefs?.randomSignals.addEventListener('change', () => {
+  void operatorRequest('POST', '/api/emitter/main/signals', { random: debugRefs.randomSignals.checked });
 });
 debugRefs?.showStatus.addEventListener('click', () => {
   void operatorRequest('GET', '/api/status');
 });
+if (debugRefs && initialApiToken) void operatorRequest('GET', '/api/status');
 debugRefs?.resetMessage.addEventListener('click', () => {
   void operatorRequest('POST', '/api/emitter/main/reset');
 });
@@ -175,7 +200,37 @@ async function toggleMicrophone(): Promise<void> {
   await startMicrophone();
 }
 
+async function toggleSimulation(on: boolean): Promise<void> {
+  if (!debugRefs) return;
+  stopSimulation?.();
+  stopSimulation = null;
+  if (on) {
+    // The decoder needs one unbroken stream, so the microphone stops first.
+    if (micActive) await stopMicrophone();
+    translationSnapshot = decoder.reset('listening for signal');
+    stopSimulation = startSimulatedUnit({
+      apiBase: requestApiBase,
+      feed: receive,
+      status: (text) => { debugRefs.simulateStatus.textContent = text; }
+    });
+  } else {
+    translationSnapshot = decoder.reset();
+  }
+  debugRefs.simulateUnit.checked = on;
+  render();
+}
+
+function receive(input: Float32Array, sampleRate: number): void {
+  translationSnapshot = decoder.process(input, sampleRate);
+  for (const reception of decoder.takeCompleted()) {
+    if (reception.kind === 'intelligent') heard = reception.text;
+    appendEntry(reception.kind, reception.text);
+  }
+  render();
+}
+
 async function startMicrophone(): Promise<void> {
+  if (DEBUG_UI && stopSimulation) await toggleSimulation(false);
   try {
     renderStatus('requesting');
     micStream = await navigator.mediaDevices.getUserMedia({
@@ -195,12 +250,7 @@ async function startMicrophone(): Promise<void> {
         recording.samples += chunk.length;
       }
       levelSnapshot = levels.process(input, performance.now());
-      translationSnapshot = decoder.process(input, audioCtx.sampleRate);
-      for (const reception of decoder.takeCompleted()) {
-        if (reception.kind === 'intelligent') heard = reception.text;
-        appendEntry(reception.kind, reception.text);
-      }
-      render();
+      receive(input, audioCtx.sampleRate);
     };
     signalStrip?.connect(sourceNode);
     sourceNode.connect(processor);
@@ -279,7 +329,7 @@ async function sendContactMessage(): Promise<void> {
   }
 }
 
-async function requestBeacon(): Promise<void> {
+async function requestSignal(kind: string): Promise<void> {
   if (!debugRefs) return;
   const recordToggle = debugRefs.recordDiagnostic;
   if (recordToggle.checked) {
@@ -293,20 +343,25 @@ async function requestBeacon(): Promise<void> {
     recordToggle.checked = false;
     setRecordStatus('Recording microphone for diagnosis…');
   }
-  await operatorRequest('POST', '/api/emitter/main/play');
+  await operatorRequest('POST', '/api/emitter/main/play', { kind });
 }
 
-async function operatorRequest(method: 'GET' | 'POST', path: string): Promise<void> {
+async function operatorRequest(method: 'GET' | 'POST', path: string, body?: object): Promise<void> {
   if (!debugRefs) return;
   debugRefs.resetStatus.textContent = '…';
   try {
-    const response = await fetch(`${requestApiBase()}${path}`, { method, headers: apiAuthHeaders() });
-    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    const response = await fetch(`${requestApiBase()}${path}`, {
+      method,
+      headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...apiAuthHeaders() },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const payload = (await response.json().catch(() => null)) as { error?: string; randomSignals?: boolean } | null;
     if (!response.ok) {
       if (response.status === 401) debugRefs.apiToken.focus();
       throw new Error(response.status === 401 ? 'Enter the correct operator token above'
         : payload?.error ?? `HTTP ${response.status}`);
     }
+    if (typeof payload?.randomSignals === 'boolean') debugRefs.randomSignals.checked = payload.randomSignals;
     debugRefs.resetStatus.textContent = JSON.stringify(payload, null, 1);
   } catch (error) {
     cancelRecording();
@@ -367,6 +422,12 @@ function buildEntry(kind: keyof typeof KIND_LABELS, text: string): HTMLLIElement
 function appendEntry(kind: keyof typeof KIND_LABELS, text: string): HTMLLIElement {
   const stick = isScrolledToEnd();
   const entry = buildEntry(kind, text);
+  // Noise and clocks pass by: only the latest one stays on screen. Messages
+  // and the conversation are kept.
+  if (kind === 'noise' || kind === 'clock') {
+    refs.log.querySelectorAll(':is([data-kind=noise], [data-kind=clock]):not([data-live])')
+      .forEach((old) => old.remove());
+  }
   // A reception still arriving stays last, below messages sent meanwhile.
   refs.log.insertBefore(entry, liveEntry);
   if (kind !== 'sent' && liveEntry) { liveEntry.remove(); liveEntry = null; }
@@ -410,7 +471,7 @@ function render(): void {
   refs.mic.setAttribute('aria-label', micActive ? 'Disable microphone' : 'Enable microphone');
   refs.mic.title = micActive ? 'Disable microphone' : 'Enable microphone';
   renderLive(translationSnapshot.live);
-  const state = micActive ? translationSnapshot.title : 'Microphone off';
+  const state = micActive || stopSimulation ? translationSnapshot.title : 'Microphone off';
   const verdict = translationSnapshot.verdict;
   if (refs.translationState.dataset.state !== `${state}/${verdict}`) {
     refs.translationState.dataset.state = `${state}/${verdict}`;
