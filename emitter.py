@@ -408,6 +408,15 @@ class QuietThreadingHTTPServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+class FreeBindHTTPServer(QuietThreadingHTTPServer):
+    """Binds to an address this computer may not have yet, such as the
+    laptop hotspot's, and starts answering once the hotspot is up."""
+
+    def server_bind(self) -> None:
+        self.socket.setsockopt(socket.IPPROTO_IP, getattr(socket, "IP_FREEBIND", 15), 1)
+        super().server_bind()
+
+
 def make_handler(state: ApiState):
     class Handler(BaseHTTPRequestHandler):
         server_version = "ALIVEEmitter/0.4"
@@ -809,6 +818,9 @@ def main() -> int:
     parser.add_argument("--http", action="store_true", help="Use HTTP behind a trusted HTTPS proxy")
     parser.add_argument("--manual-signals", action="store_true",
                         help="Start with random signals off; boards play only operator requests")
+    parser.add_argument("--also-host", action="append", default=[], metavar="ADDRESS",
+                        help="Also serve plain HTTP on this address and the same port, for boards "
+                             "on the laptop hotspot (10.42.7.1). It may be bound before it exists.")
     args = parser.parse_args()
 
     state_path = os.environ.get("ALIVE_STATE_FILE")
@@ -828,6 +840,14 @@ def main() -> int:
     elif not args.http:
         print("[HTTPS] Local certificate unavailable; serving HTTP")
     print_qr_hint(url)
+    # Boards on the laptop hotspot cannot reach the API through its public
+    # Funnel address, which refuses connections from the laptop's own
+    # internet address. They poll it here directly, even while the venue
+    # network is down.
+    for host in args.also_host:
+        extra = FreeBindHTTPServer((host, args.port), make_handler(state))
+        threading.Thread(target=extra.serve_forever, daemon=True).start()
+        print(f"Also serving boards at http://{host}:{args.port}/")
     notify_systemd("READY=1")
     watchdog_usec = int(os.environ.get("WATCHDOG_USEC", "0"))
     if watchdog_usec and not https_active:

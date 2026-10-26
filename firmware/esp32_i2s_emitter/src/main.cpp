@@ -35,9 +35,14 @@ constexpr uint32_t DELIVERY_MS = 4000;
 constexpr uint32_t WATCHDOG_S = 30;
 static_assert(SAMPLE_RATE == beacon::rate, "The chirp tables assume 48 kHz");
 
+// A network may name its own API URL, such as the laptop hotspot's
+// "http://10.42.7.1:8765". Boards there poll the laptop directly over plain
+// HTTP, so they need neither the internet nor the right time. Without one,
+// boards use ALIVE_SERVER_URL.
 struct WifiNetwork {
   const char *ssid;
   const char *password;
+  const char *server;  // Unset in the list means nullptr.
 };
 #ifdef ALIVE_WIFI_NETWORKS
 const WifiNetwork NETWORKS[] = {ALIVE_WIFI_NETWORKS};
@@ -75,6 +80,7 @@ int clockSymbol = 0;
 uint32_t clockPeriodMs = 1000, clockTicks = 8;
 // Retain the TLS session between polls instead of negotiating on every request.
 WiFiClientSecure pollClient;
+WiFiClient localPollClient;
 HTTPClient pollHttp;
 
 // Returns false when the amplifier stream fails, so playback stops instead of
@@ -253,18 +259,19 @@ void setupWifi() {
 
 void pollForMessage() {
   static bool serverReachable = false;
-  auto &client = pollClient;
-  client.setHandshakeTimeout(8);
+  const char *localServer = currentNetwork >= 0 ? NETWORKS[currentNetwork].server : nullptr;
+  WiFiClient &client = localServer ? localPollClient : static_cast<WiFiClient &>(pollClient);
+  pollClient.setHandshakeTimeout(8);
 #ifdef ALIVE_SERVER_CA_CERT
-  client.setCACert(ALIVE_SERVER_CA_CERT);
+  pollClient.setCACert(ALIVE_SERVER_CA_CERT);
 #else
-  client.setInsecure();  // Local test only; configure a trusted CA for the API.
+  pollClient.setInsecure();  // Local test only; configure a trusted CA for the API.
 #endif
   auto &http = pollHttp;
   http.setConnectTimeout(5000);
   http.setTimeout(5000);
   http.setReuse(true);
-  const String url = String(ALIVE_SERVER_URL) + "/api/emitter/main/current";
+  const String url = String(localServer ? localServer : ALIVE_SERVER_URL) + "/api/emitter/main/current";
   if (!http.begin(client, url)) return;
 #ifdef ALIVE_DEVICE_TOKEN
   http.addHeader("Authorization", String("Bearer ") + ALIVE_DEVICE_TOKEN);
@@ -283,8 +290,9 @@ void pollForMessage() {
     const DeserializationError error = deserializeJson(json, http.getString());
     if (!error && json["role"].is<const char *>()) {
       if (!serverReachable)
-        Serial.printf("API poll ready on %s: HTTPS verified, device token accepted, role %s\n",
-                      NETWORKS[currentNetwork].ssid, json["role"].as<const char *>());
+        Serial.printf("API poll ready on %s: %s, device token accepted, role %s\n",
+                      NETWORKS[currentNetwork].ssid, localServer ? localServer : "HTTPS verified",
+                      json["role"].as<const char *>());
       serverReachable = true;
       offline = false;
       failedNetworks = 0;
@@ -313,7 +321,7 @@ void pollForMessage() {
   } else {
     serverReachable = false;
     char tlsError[128] = {};
-    const int tlsCode = client.lastError(tlsError, sizeof(tlsError));
+    const int tlsCode = localServer ? 0 : pollClient.lastError(tlsError, sizeof(tlsError));
     Serial.printf("Poll failed: HTTP %d (%s), TLS %d (%s)\n", status,
                   http.errorToString(status).c_str(), tlsCode, tlsError);
     client.stop(); // Reconnect promptly if the server closed an idle session.

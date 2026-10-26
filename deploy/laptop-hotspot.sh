@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs a 2.4 GHz Wi-Fi network for the ALIVE boards on this laptop and shares
 # the laptop's internet connection (eduroam or a USB phone tether) with
-# it. The boards still reach the public API address, so nothing else changes.
+# it. Boards on it poll the API on this laptop at 10.42.7.1:8765 directly.
 # Needs systemd-networkd, which Ubuntu Server uses.
 #
 #   sudo ALIVE_HOTSPOT_PASSWORD='at least 8 characters' deploy/laptop-hotspot.sh enable
@@ -110,6 +110,7 @@ EOF
   if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
     ufw allow in on "$AP" to any port 67 proto udp comment "ALIVE hotspot DHCP" >/dev/null
     ufw route allow in on "$AP" comment "ALIVE hotspot to the internet" >/dev/null
+    ufw allow in on "$AP" to any port 8765 proto tcp comment "ALIVE hotspot boards to the API" >/dev/null
   fi
   networkctl reload
   echo "Hotspot $SSID on channel $CHANNEL shares $uplink."
