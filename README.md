@@ -32,9 +32,9 @@ For local development, `python emitter.py` serves the app and Wi-Fi API. `python
 To test without hardware, run a local API with no device token, open the debug page with `?api=` pointing at it, and tick **Simulate a unit on this page**. The page then polls the API as a board and feeds each signal it gets straight into its decoder and spectrogram, so noise, clocks, messages, and replies show up as they would on a phone next to a unit:
 
 ```sh
-ALIVE_PUBLIC_DEMO=1 ALIVE_WEB_ORIGIN=http://localhost:5181 python emitter.py --host 127.0.0.1 --port 8766 --http --manual-signals
-cd web && bunx vite --mode debug --port 5181
-# open http://localhost:5181/?api=http%3A%2F%2Flocalhost%3A8766
+ALIVE_PUBLIC_DEMO=1 python emitter.py --host 127.0.0.1 --port 8766 --http --manual-signals
+python debug_host.py --api http://127.0.0.1:8766 --rebuild   # in a second terminal
+# open the printed URL, tap Debug, tick "Simulate a unit on this page"
 ``` Use `python emitter.py --help` and `python debug_host.py --help` for options. Set `OPENAI_API_KEY` in the environment or an ignored `.env` file to generate replies. The default model can be overridden with `ALIVE_OPENAI_MODEL`.
 
 The API uses only the Python standard library. Python tests require `pytest`.

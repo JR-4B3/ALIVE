@@ -261,7 +261,8 @@ def make_handler(upstream: str):
             body = self.rfile.read(length) if length else None
             headers = {
                 name: value
-                for name in ("content-type", "authorization")
+                # The board headers let the page's simulated unit poll as a board.
+                for name in ("content-type", "authorization", "x-alive-board", "x-alive-uptime-ms", "x-alive-reset")
                 if (value := self.headers.get(name))
             }
             request = urllib.request.Request(
