@@ -16,6 +16,8 @@ declare const __PUBLISHED_API__: string;
 const DEBUG_UI = __DEBUG_UI__;
 const SAVED_LIMIT = 50;
 const NOTICE_MS = 5000;
+const ONLINE_CHECK_MS = 30000;
+const OUT_OF_ORDER = 'Currently out of order :(';
 
 if (DEBUG_UI) { document.title = 'ALIVE Receiver · debug'; document.body.classList.add('debug-ui'); }
 
@@ -172,6 +174,10 @@ let lastReception: (Reception & { at: Date }) | null = null;
 let saved = loadSaved();
 let notice: { text: string; until: number } | null = null;
 let noticeTimer = 0;
+// Out of order while the API is unreachable or no unit polls it. Units may
+// still play signals on their own then, but nothing can answer.
+let outOfOrder = false;
+let sending = false;
 let stopSimulation: (() => void) | null = null;
 // The simulated unit's samples also play into the spectrogram, silently.
 let simulationAudio: { ctx: AudioContext; input: GainNode; at: number } | null = null;
@@ -218,6 +224,32 @@ if (debugRefs) {
 
 renderSaved();
 render();
+void checkOnline();
+window.setInterval(() => { if (!document.hidden) void checkOnline(); }, ONLINE_CHECK_MS);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void checkOnline(); });
+
+async function checkOnline(): Promise<void> {
+  let online = true;
+  try {
+    const response = await fetch(`${requestApiBase()}/api/online`, { signal: AbortSignal.timeout(10000) });
+    if (response.ok) online = ((await response.json()) as { online?: boolean }).online !== false;
+    // An API without this endpoint answers 401 or 404; only a gateway error
+    // means it is down.
+    else online = response.status < 500;
+  } catch {
+    online = false;
+  }
+  if (outOfOrder === !online) return;
+  outOfOrder = !online;
+  renderCompose();
+}
+
+function renderCompose(): void {
+  refs.prompt.disabled = outOfOrder;
+  refs.prompt.placeholder = outOfOrder ? OUT_OF_ORDER : 'Message';
+  refs.send.disabled = outOfOrder || sending;
+  refs.contactForm.toggleAttribute('data-out-of-order', outOfOrder);
+}
 
 function listening(): boolean {
   return micActive || stopSimulation !== null;
@@ -350,9 +382,10 @@ async function stopMicrophone(): Promise<void> {
 
 async function sendContactMessage(): Promise<void> {
   const message = refs.prompt.value.trim();
-  if (!message || refs.send.disabled) return;
+  if (!message || sending || outOfOrder) return;
   refs.prompt.value = '';
-  refs.send.disabled = true;
+  sending = true;
+  renderCompose();
   setContactStatus('sending');
   try {
     const response = await fetch(`${requestApiBase()}/api/message`, {
@@ -376,9 +409,11 @@ async function sendContactMessage(): Promise<void> {
     if (!refs.prompt.value) refs.prompt.value = message;
     showNotice(`Not sent: ${reason}`);
     setContactStatus(reason);
+    void checkOnline();
   } finally {
-    refs.send.disabled = false;
-    refs.prompt.focus();
+    sending = false;
+    renderCompose();
+    if (!outOfOrder) refs.prompt.focus();
   }
 }
 

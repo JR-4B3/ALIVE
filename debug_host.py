@@ -2,7 +2,7 @@
 """Start an ALIVE test from this computer, such as the MacBook at the venue.
 
     python3 debug_host.py sim     # no unit: this computer plays the signals
-    python3 debug_host.py units   # the real units, through the API at home
+    python3 debug_host.py units   # the real units, through the API on the T480
     python3 debug_host.py -kill   # stop every running debug host
 
 Both modes serve the debug page over HTTPS for a phone on the same network and
@@ -38,9 +38,9 @@ from simple_qr import terminal_qr
 ROOT = Path(__file__).resolve().parent
 DEBUG_APP_DIR = ROOT / "docs" / "debug"
 DEBUG_APP = DEBUG_APP_DIR / "index.html"
-HOME_API = os.environ.get("ALIVE_API_URL", "https://t480.tail688a7b.ts.net")
+SERVER_API = os.environ.get("ALIVE_API_URL", "https://t480.tail688a7b.ts.net")
 VISITOR_PAGE = "https://jr-4b3.github.io/ALIVE/"
-# The T480 at home runs the API. Secrets missing here are fetched from it once
+# The T480 runs the API, at the venue during the show. Secrets missing here are fetched from it once
 # over SSH and kept in CONFIG_DIR, readable only by this user.
 SERVER_SSH = os.environ.get("ALIVE_SERVER_SSH", "t480")
 CONFIG_DIR = Path.home() / ".config" / "alive"
@@ -405,17 +405,17 @@ def watch_units(api: str, token: str, stop: threading.Event) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Start an ALIVE test: the debug page for a phone, plus either a unit played by "
-                    "this computer (sim) or the real units through the API at home (units).")
+                    "this computer (sim) or the real units through the API on the T480 (units).")
     parser.add_argument("mode", nargs="?", choices=["sim", "units"],
                         help="sim: no unit needed, this computer plays the signals; "
-                             "units: the real units, through the API at home")
+                             "units: the real units, through the API on the T480")
     parser.add_argument("--manual", action="store_true",
                         help="no random signals; units play only what you send from the Debug panel")
     parser.add_argument("--volume", type=int, default=60, metavar="0-100",
                         help="sim: loudness of the signals from this computer (default: %(default)s)")
     parser.add_argument("--no-speaker", action="store_true",
                         help="sim: do not play through this computer; use 'Simulate a unit on this page' instead")
-    parser.add_argument("--api", default=HOME_API, help="units: API the units poll (default: %(default)s)")
+    parser.add_argument("--api", default=SERVER_API, help="units: API the units poll (default: %(default)s)")
     parser.add_argument("--port", type=int, default=8443)
     parser.add_argument("--http", action="store_true",
                         help="serve plain HTTP; phone microphones usually need HTTPS")
@@ -459,7 +459,7 @@ def main() -> int:
         try:
             api_request(api, "/healthz", timeout=8)
         except (OSError, ValueError) as exc:
-            lines += [f"          not reachable ({exc}). Is the T480 at home on and online?"]
+            lines += [f"          not reachable ({exc}). Is the T480 on and online (eduroam)?"]
         if token:
             lines += [f"Token:    operator token from {source}; the page needs nothing pasted"]
             try:
@@ -479,8 +479,9 @@ def main() -> int:
             "Networks: units need internet over Wi-Fi, nothing else. They join the first network of",
             "          their firmware list that is in range"
             + (f": {' > '.join(networks)}." if networks else " (secrets.h, not in this checkout)."),
-            "          No HfK network yet? Turn on your phone hotspot with Maximize Compatibility;",
-            "          units switch to it within about a minute. 'Units' above lists each unit's network.",
+            "          At HfK that is the T480's hotspot (sudo deploy/laptop-hotspot.sh status on the T480).",
+            "          If it fails, turn on your phone hotspot with Maximize Compatibility; units switch",
+            "          to it within about a minute. 'Units' above lists each unit's network.",
             f"Visitors: {VISITOR_PAGE} works on any phone with mobile data.",
         ]
 

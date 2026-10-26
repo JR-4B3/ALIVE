@@ -80,7 +80,7 @@ Each letter is a 360 ms chirp that falls by 48 Hz around its own center frequenc
 Run these from a checkout on the MacBook (or any computer with Python 3.9 or newer). The first run fetches the operator token and OpenAI key from the T480 over `ssh t480` and keeps them in `~/.config/alive/`; `sudo deploy/install.sh` on the T480 puts them where that fetch looks. Each command prints the page URL, a QR code, the API, the units and their networks, and the other options.
 
 - `python3 debug_host.py sim` needs no unit. The API runs inside the script, and the computer plays every signal through its speakers, so a phone held near it receives noise, clocks, and messages, and can answer. Turn the volume up. `--volume` sets the level; `--no-speaker` leaves the sound to **Simulate a unit on this page** in the Debug panel.
-- `python3 debug_host.py units` uses the real units through the API at home and lists each unit's role and network as they change.
+- `python3 debug_host.py units` uses the real units through the API on the T480 and lists each unit's role and network as they change.
 - Add `--manual` to either one to stop random signals; units then play only what you send from the Debug panel. `units` turns random signals back on when it stops.
 - `python3 debug_host.py -kill` stops every running copy.
 
@@ -92,20 +92,22 @@ If a board gets no valid reply from the API for 60 seconds, it plays signals on 
 
 ## Networks at the venue
 
-The API stays on the T480 at home, behind Tailscale Funnel; keep it on and online during the show. At the venue the boards only need a 2.4 GHz network with a password, no browser login, and a route to the internet. They do not need to share a network with the phones or the MacBook. List every network you may use in `ALIVE_WIFI_NETWORKS` in `secrets.h`, most preferred first:
+HfK does not allow a repeater on the university network. The T480 stays at the venue instead. It joins eduroam, runs the API behind Tailscale Funnel as at home, and shares eduroam with the boards through its own 2.4 GHz network, `ALIVE-T480`. The Funnel address does not change, so the boards and the visitor page need no new settings. The boards only need a 2.4 GHz network with a password, no browser login, and a route to the internet. They do not need to share a network with the phones. List every network you may use in `ALIVE_WIFI_NETWORKS` in `secrets.h`, most preferred first:
 
 ```c
 #define ALIVE_WIFI_NETWORKS \
-  {"ALIVE/ALIFE", "..."}, \
+  {"ALIVE-T480", "..."}, \
   {"My iPhone", "..."}
 ```
 
 A board joins the first listed network it can see. Each poll reports the network's name, and `python3 debug_host.py units` shows it per board. When a network gives no route to the API for a minute, the board tries the next visible network it has not tried yet. After every visible network has failed, it starts over from the top. Reflash every board after changing the list.
 
-- **Repeater on the university LAN.** The preferred setup. Connect the repeater to the LAN and check from a phone on its Wi-Fi that `https://<machine>.<tailnet>.ts.net/healthz` answers.
-- **Phone hotspot.** The backup until HfK approves the repeater, and for demos. On an iPhone, turn on **Maximize Compatibility** in Personal Hotspot so it uses 2.4 GHz, and keep the Personal Hotspot screen open while the boards first join. An iPhone hotspot may not accept more than about five Wi-Fi devices, so leave other devices off it.
+- **T480 hotspot.** The main setup. Once the T480 is on eduroam, run `sudo ALIVE_HOTSPOT_PASSWORD='<password from secrets.h>' deploy/laptop-hotspot.sh enable` from a checkout. It starts the hotspot now and after every boot, and systemd restarts it 10 seconds after it fails. `sudo deploy/laptop-hotspot.sh status` shows the channel and the connected boards. The T480's Wi-Fi card can only run the hotspot on the channel it uses for eduroam, and only when that is 2.4 GHz. If hostapd fails because eduroam is on 5 GHz, plug in a USB Wi-Fi stick for the hotspot (`ALIVE_HOTSPOT_WIFI=<its interface>`) or connect the T480 to eduroam over a LAN cable.
+- **Phone hotspot.** The backup when the T480 hotspot fails, and for demos. On an iPhone, turn on **Maximize Compatibility** in Personal Hotspot so it uses 2.4 GHz, and keep the Personal Hotspot screen open while the boards first join. An iPhone hotspot may not accept more than about five Wi-Fi devices, so leave other devices off it.
 
 Visitors' phones use mobile data and never join these networks.
+
+When eduroam drops, the boards lose the API after a minute and play signals on their own (see [How the units behave](#how-the-units-behave)). The visitor page checks every 30 seconds whether the API answers and at least one board polls it. While either fails, the message box reads "Currently out of order :(" and cannot send. The page also checks again right after a message fails to send. It switches back by itself.
 
 ## Measure battery runtime
 
@@ -119,6 +121,8 @@ Each poll sends the board's MAC address, its uptime, and its last reset reason. 
 
 Rows that simply stop mean the battery cut off. Uptime that keeps falling back near zero with reset reason `9` (brownout) means the voltage sagged and the board reboot-looped; the end of the last steady stretch is the useful runtime. Reason `1` is power-on, `3` a software restart, and `6` the task watchdog.
 
-To get a phone alert when a board goes quiet, set `ALIVE_NOTIFY_URL` in `/etc/alive/api.env` to an [ntfy](https://ntfy.sh) topic URL with a long random name, or to a Discord webhook URL, then restart the service. The API sends one message when a board has not polled for 5 minutes while others still poll, with its runtime since power-on, and another when it polls again. If every board goes quiet, it sends a single message that points to Wi-Fi or the API instead, then judges each board again once the others return.
+To get a phone alert when a board goes quiet, set `ALIVE_NOTIFY_URL` in `/etc/alive/api.env` to an [ntfy](https://ntfy.sh) topic URL with a long random name, or to a Discord webhook URL, then restart the service. The API sends one message when a board has not polled for 5 minutes while others still poll, with its runtime since power-on, and another when it polls again. If every board goes quiet, it sends a single message that points to Wi-Fi or the API instead, then judges each board again once the others return. When the T480 has no internet, as during an eduroam outage, the API keeps each alert and sends it once the network is back, marked with the time it happened.
+
+The T480 cannot report its own outage while it is offline. For that, create a free check at [Healthchecks.io](https://healthchecks.io) with a period of 1 minute and a grace time of 3 minutes, add your ntfy topic or Discord webhook under its integrations, and set `ALIVE_HEARTBEAT_URL` in `/etc/alive/api.env` to the check's ping URL. The API pings it every minute. When the pings stop because eduroam, the T480, or the API is down, Healthchecks.io sends the alert, and another when they resume.
 
 After an update, run `sudo deploy/install.sh` again when the API changes, and republish `docs/` when the phone page changes. Back up `/etc/alive/api.env` and `/var/lib/alive`.

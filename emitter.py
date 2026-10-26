@@ -327,6 +327,11 @@ class ApiState:
         with self._lock:
             return self._status(time.monotonic())
 
+    def online(self) -> bool:
+        """Whether any board polls, which the visitor page shows to everyone."""
+        with self._lock:
+            return bool(self._online(time.monotonic()))
+
     def _status(self, now: float) -> dict[str, object]:
         return {
             "deviceOnline": now - self._device_last_seen_at < DEVICE_LEASE_SECONDS,
@@ -421,6 +426,10 @@ def make_handler(state: ApiState):
                 # Taking the state lock proves request handling is not wedged.
                 state.status()
                 self._send_json({"status": "ok"})
+                return
+            if parsed.path == "/api/online":
+                # Public, so the visitor page can say when it is out of order.
+                self._send_json({"online": state.online()})
                 return
             if parsed.path.startswith("/api/") and not self._authorized("ALIVE_WEB_TOKEN"):
                 return
@@ -730,7 +739,7 @@ def feed_systemd_watchdog(port: int, interval: float) -> None:
         time.sleep(interval)
 
 
-def send_notification(url: str, text: str) -> None:
+def send_notification(url: str, text: str) -> bool:
     """Post to a Discord webhook as JSON, or to any other URL (e.g. ntfy) as plain text."""
     if "discord.com/api/webhooks/" in url:
         body, content_type = json.dumps({"content": text}).encode(), "application/json"
@@ -741,15 +750,56 @@ def send_notification(url: str, text: str) -> None:
         urllib.request.urlopen(request, timeout=10).close()
     except OSError as exc:
         print(f"Could not send notification ({exc}): {text}", flush=True)
-    else:
-        print(f"Notification: {text}", flush=True)
+        return False
+    print(f"Notification: {text}", flush=True)
+    return True
 
 
-def watch_boards(state: ApiState, url: str) -> None:
+class Outbox:
+    """Alerts that wait for the internet. During a venue network outage the
+    API cannot reach the notification service, so it keeps each alert and
+    sends it, with the time it happened, once the network is back."""
+
+    LIMIT = 50
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self._waiting: deque[tuple[float, str]] = deque(maxlen=self.LIMIT)
+
+    def add(self, text: str) -> None:
+        self._waiting.append((time.time(), text))
+
+    def flush(self) -> None:
+        while self._waiting:
+            happened, text = self._waiting[0]
+            if time.time() - happened >= 60:
+                text = f"(at {time.strftime('%H:%M', time.localtime(happened))}) {text}"
+            if not send_notification(self.url, text):
+                return
+            self._waiting.popleft()
+
+
+def send_heartbeat(url: str) -> None:
+    """Ping a dead man's switch such as Healthchecks.io. It raises the alarm
+    when the pings stop, which this computer cannot do itself while offline."""
+    try:
+        urllib.request.urlopen(url, timeout=10).close()
+    except OSError as exc:
+        print(f"Could not send heartbeat ({exc})", flush=True)
+
+
+def watch_boards(state: ApiState, notify_url: str, heartbeat_url: str) -> None:
+    outbox = Outbox(notify_url) if notify_url else None
+    last_heartbeat = -math.inf
     while True:
         time.sleep(30)
-        for text in state.quiet_board_alerts():
-            send_notification(url, text)
+        if outbox:
+            for text in state.quiet_board_alerts():
+                outbox.add(text)
+            outbox.flush()
+        if heartbeat_url and time.monotonic() - last_heartbeat >= 60:
+            last_heartbeat = time.monotonic()
+            send_heartbeat(heartbeat_url)
 
 
 def main() -> int:
@@ -785,8 +835,9 @@ def main() -> int:
                          daemon=True).start()
 
     notify_url = os.environ.get("ALIVE_NOTIFY_URL", "")
-    if notify_url:
-        threading.Thread(target=watch_boards, args=(state, notify_url), daemon=True).start()
+    heartbeat_url = os.environ.get("ALIVE_HEARTBEAT_URL", "")
+    if notify_url or heartbeat_url:
+        threading.Thread(target=watch_boards, args=(state, notify_url, heartbeat_url), daemon=True).start()
 
     try:
         server.serve_forever()

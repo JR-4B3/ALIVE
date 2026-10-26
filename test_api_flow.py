@@ -474,3 +474,42 @@ def test_a_board_that_died_during_a_wifi_outage_still_gets_its_alert():
             "ALIVE boards are polling again.",
             "ALIVE board AC:27:6E:45:E5:90 stopped polling; its battery is probably empty. "
             "It ran 0 h 00 min since power-on."]
+
+
+def test_visitors_can_see_whether_the_installation_works_without_a_token(clock):
+    state = ApiState()
+    with patch.dict("os.environ", {"ALIVE_WEB_TOKEN": "operator-secret"}):
+        server = QuietThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/api/online"
+            assert json.load(urllib.request.urlopen(url, timeout=2)) == {"online": False}
+            state.device_command("AC:27:6E:45:B9:4C", "1000", "1")
+            assert json.load(urllib.request.urlopen(url, timeout=2)) == {"online": True}
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
+def test_alerts_wait_for_the_network_and_say_when_they_happened():
+    sent, online = [], [False]
+
+    def deliver(url, text):
+        if online[0]:
+            sent.append(text)
+        return online[0]
+
+    outbox = emitter.Outbox("https://ntfy.example/topic")
+    with patch("emitter.send_notification", side_effect=deliver), \
+            patch("emitter.time.time", return_value=1_000_000.0), \
+            patch("emitter.time.localtime", return_value=emitter.time.gmtime(1_000_000.0)):
+        outbox.add("ALIVE: no board has polled for 5 minutes.")
+        outbox.flush()
+        assert sent == []
+    with patch("emitter.send_notification", side_effect=deliver), \
+            patch("emitter.time.time", return_value=1_000_600.0), \
+            patch("emitter.time.localtime", return_value=emitter.time.gmtime(1_000_000.0)):
+        outbox.add("ALIVE boards are polling again.")
+        online[0] = True
+        outbox.flush()
+    assert sent == ["(at 13:46) ALIVE: no board has polled for 5 minutes.", "ALIVE boards are polling again."]
