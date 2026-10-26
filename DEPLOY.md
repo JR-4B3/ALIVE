@@ -79,9 +79,9 @@ Each letter is a 360 ms chirp that falls by 48 Hz around its own center frequenc
 
 Run these from a checkout on the MacBook (or any computer with Python 3.9 or newer). The first run fetches the operator token and OpenAI key from the T480 over `ssh t480` and keeps them in `~/.config/alive/`; `sudo deploy/install.sh` on the T480 puts them where that fetch looks. Each command prints the page URL, a QR code, the API, the units and their networks, and the other options.
 
-- `python3 debug_host.py sim` needs no unit. The API runs inside the script, and the computer plays every signal through its speakers, so a phone held near it receives noise, clocks, and messages, and can answer. Turn the volume up. `--volume` sets the level; `--no-speaker` leaves the sound to **Simulate a unit on this page** in the Debug panel.
-- `python3 debug_host.py units` uses the real units through the API on the T480 and lists each unit's role and network as they change.
-- Add `--manual` to either one to stop random signals; units then play only what you send from the Debug panel. `units` turns random signals back on when it stops.
+- `python3 debug_host.py --sim` needs no unit. The API runs inside the script, and the computer plays every signal through its speakers, so a phone held near it receives noise, clocks, and messages, and can answer. Turn the volume up. `--volume` sets the level; `--no-speaker` leaves the sound to **Simulate a unit on this page** in the Debug panel.
+- `python3 debug_host.py` uses the real units through the API on the T480 and lists each unit's role and network as they change.
+- Add `--manual` to either one to stop random signals; units then play only what you send from the Debug panel. Without `--sim` it turns random signals back on when it stops.
 - `python3 debug_host.py -kill` stops every running copy.
 
 ## How the units behave
@@ -100,7 +100,7 @@ HfK does not allow a repeater on the university network. The T480 stays at the v
   {"My iPhone", "..."}
 ```
 
-A board joins the first listed network it can see. Each poll reports the network's name, and `python3 debug_host.py units` shows it per board. When a network gives no route to the API for a minute, the board tries the next visible network it has not tried yet. After every visible network has failed, it starts over from the top. Reflash every board after changing the list.
+A board joins the first listed network it can see. Each poll reports the network's name, and `python3 debug_host.py` shows it per board. When a network gives no route to the API for a minute, the board tries the next visible network it has not tried yet. After every visible network has failed, it starts over from the top. Reflash every board after changing the list.
 
 - **T480 hotspot.** The main setup. Once the T480 is on eduroam, run `sudo ALIVE_HOTSPOT_PASSWORD='<password from secrets.h>' deploy/laptop-hotspot.sh enable` from a checkout. It starts the hotspot now and after every boot, and systemd restarts it 10 seconds after it fails. `sudo deploy/laptop-hotspot.sh status` shows the channel and the connected boards. The T480's Wi-Fi card can only run the hotspot on the channel it uses for eduroam, and only when that is 2.4 GHz. HfK has no LAN access for this, so keep the T480's eduroam connection on 2.4 GHz: most eduroam access points send on both bands, and the T480's network settings can limit it to 2.4 GHz. If that fails, plug in a USB Wi-Fi stick for the hotspot (`ALIVE_HOTSPOT_WIFI=<its interface>`).
 - **Phone hotspot.** The backup when the T480 hotspot fails, and for demos. On an iPhone, turn on **Maximize Compatibility** in Personal Hotspot so it uses 2.4 GHz, and keep the Personal Hotspot screen open while the boards first join. An iPhone hotspot may not accept more than about five Wi-Fi devices, so leave other devices off it.

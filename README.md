@@ -27,7 +27,7 @@ The builds write to `docs/` and `docs/debug/`. Publish `docs/` with any static h
 
 The published pages call the API named by `PUBLISHED_API` in `web/vite.config.ts`, so the plain GitHub Pages link works on any phone. A link can name another API with `?api=https%3A%2F%2Fapi.example.com`. The debug page also has an API URL field, which it remembers. Under `vite dev`, requests go to the page's own origin. The API must allow the static site's exact origin with `ALIVE_WEB_ORIGIN`.
 
-To test, run `python3 debug_host.py sim` (no unit; the computer plays the signals) or `python3 debug_host.py units` (the real units). See [Test from the MacBook](DEPLOY.md#test-from-the-macbook). For API development, `python emitter.py` serves the API on its own; `--manual-signals` starts it with random signals off. Use `python emitter.py --help` and `python debug_host.py --help` for options. Set `OPENAI_API_KEY` in the environment or an ignored `.env` file to generate replies. The default model can be overridden with `ALIVE_OPENAI_MODEL`.
+To test, run `python3 debug_host.py` (the real units) or `python3 debug_host.py --sim` (no unit; the computer plays the signals). See [Test from the MacBook](DEPLOY.md#test-from-the-macbook). For API development, `python emitter.py` serves the API on its own; `--manual-signals` starts it with random signals off. Use `python emitter.py --help` and `python debug_host.py --help` for options. Set `OPENAI_API_KEY` in the environment or an ignored `.env` file to generate replies. The default model can be overridden with `ALIVE_OPENAI_MODEL`.
 
 The API uses only the Python standard library. Python tests require `pytest`.
 
