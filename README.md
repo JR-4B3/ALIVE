@@ -1,6 +1,6 @@
-# ALIVE
+# Anybody Listening?
 
-ALIVE sends short text as near-ultrasound chirps between 18.2 and 20.1 kHz, which most adults cannot hear. A phone page shows them on a spectrogram and decodes them. An optional server prepares replies, and an ESP32-C3 with a MAX98357 amplifier plays them through a passive speaker.
+An installation for the HfK course ALIVE/ALIFE. Five small speakers send short text as near-ultrasound chirps between 18.2 and 20.1 kHz, which most adults cannot hear. Visitors find the signals with a phone page that shows them on a spectrogram and decodes them, and can answer the one that sounds intelligent. A server deals the roles and prepares replies, and each unit, an ESP32-C3 with a MAX98357 amplifier, plays them through a passive speaker. The code and tools still use the working name ALIVE.
 
 ```text
 phone page -> HTTPS API -> ESP32 over Wi-Fi -> amplifier -> speaker

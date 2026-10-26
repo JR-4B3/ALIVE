@@ -17,8 +17,6 @@ from functools import lru_cache
 CHIRP_MS = 360
 SYNC = -1
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ "
-# The firmware's chirp buffer. A 40-character message needs 43 chirps.
-MAX_CHIRPS = 128
 # The phone needs 65 ms of silence between chirps, measured with its 85 ms
 # analysis window, so a gap shorter than 150 ms merges two chirps into one.
 MIN_GAP_MS = 180

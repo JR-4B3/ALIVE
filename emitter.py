@@ -6,13 +6,10 @@ import hmac
 import http.client
 import json
 import math
-import mimetypes
 import os
 import random
 import re
 import socket
-import ssl
-import subprocess
 import sys
 import threading
 import time
@@ -29,7 +26,6 @@ from reply_engine import ReplyUnavailableError, generate_reply, normalize_reply,
 from signals import clock_score, clock_settings, message_score, noise_score, score_seconds
 
 
-STATIC_PHONE_APP = Path(__file__).parent / "docs" / "index.html"
 RECEIVER_CAPTURES = Path.home() / ".local" / "state" / "alive" / "receiver-captures"
 # Boards stop polling while they play, and a reply lasts up to 25 seconds.
 DEVICE_LEASE_SECONDS = 60
@@ -403,7 +399,7 @@ class ApiState:
 class QuietThreadingHTTPServer(ThreadingHTTPServer):
     def handle_error(self, request, client_address) -> None:
         exc = sys.exc_info()[1]
-        if isinstance(exc, (BrokenPipeError, ConnectionResetError, ssl.SSLError)):
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
             return
         super().handle_error(request, client_address)
 
@@ -444,12 +440,6 @@ def make_handler(state: ApiState):
                 return
             if parsed.path == "/api/status":
                 self._send_json(state.status())
-                return
-            if parsed.path in {"/", "/index.html"}:
-                self._send_text(make_static_phone_html(), "text/html; charset=utf-8")
-                return
-            if parsed.path.startswith("/assets/"):
-                self._send_static_asset(parsed.path)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -600,9 +590,6 @@ def make_handler(state: ApiState):
                 self.send_header("vary", "Origin")
             self.send_header("access-control-allow-private-network", "true")
 
-        def _send_text(self, text: str, content_type: str) -> None:
-            self._send_bytes(text.encode("utf-8"), content_type)
-
         def _send_bytes(self, data: bytes, content_type: str) -> None:
             self.send_response(HTTPStatus.OK)
             self._send_cors_headers()
@@ -620,107 +607,7 @@ def make_handler(state: ApiState):
             self.end_headers()
             self.wfile.write(data)
 
-        def _send_static_asset(self, request_path: str) -> None:
-            root = STATIC_PHONE_APP.parent.resolve()
-            target = (root / request_path.lstrip("/")).resolve()
-            try:
-                target.relative_to(root)
-            except ValueError:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            if not target.is_file():
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-            self._send_bytes(target.read_bytes(), content_type)
-
     return Handler
-
-
-def make_static_phone_html() -> str:
-    if STATIC_PHONE_APP.exists():
-        return STATIC_PHONE_APP.read_text(encoding="utf-8")
-    return "<!doctype html><title>ALIVE</title><p>Build the phone app with: cd web && bun run build</p>"
-
-
-def local_ip() -> str:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        try:
-            sock.connect(("8.8.8.8", 80))
-            return sock.getsockname()[0]
-        except OSError:
-            return "127.0.0.1"
-
-
-def ensure_self_signed_cert(ip_address: str) -> tuple[Path, Path] | None:
-    cert = Path(".alive-demo-cert.pem")
-    key = Path(".alive-demo-key.pem")
-    if cert.exists() and key.exists():
-        return cert, key
-
-    config = Path(".alive-demo-openssl.cnf")
-    config.write_text(
-        "\n".join(
-            [
-                "[req]",
-                "distinguished_name=req_distinguished_name",
-                "x509_extensions=v3_req",
-                "prompt=no",
-                "[req_distinguished_name]",
-                "CN=ALIVE local demo",
-                "[v3_req]",
-                f"subjectAltName=IP:{ip_address},DNS:localhost,IP:127.0.0.1",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    try:
-        subprocess.run(
-            [
-                "openssl",
-                "req",
-                "-x509",
-                "-newkey",
-                "rsa:2048",
-                "-keyout",
-                str(key),
-                "-out",
-                str(cert),
-                "-days",
-                "7",
-                "-nodes",
-                "-config",
-                str(config),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        print(f"[HTTPS] Could not generate local HTTPS certificate: {exc}")
-        return None
-    return cert, key
-
-
-def apply_https(server: ThreadingHTTPServer, ip_address: str) -> bool:
-    cert_pair = ensure_self_signed_cert(ip_address)
-    if cert_pair is None:
-        return False
-    cert, key = cert_pair
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(certfile=cert, keyfile=key)
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    return True
-
-
-def print_qr_hint(url: str) -> None:
-    try:
-        from simple_qr import terminal_qr
-    except Exception:
-        print(f"[QR] {url}")
-        return
-    print(terminal_qr(url))
 
 
 def notify_systemd(message: str) -> None:
@@ -815,7 +702,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="ALIVE Wi-Fi emitter API")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--http", action="store_true", help="Use HTTP behind a trusted HTTPS proxy")
     parser.add_argument("--manual-signals", action="store_true",
                         help="Start with random signals off; boards play only operator requests")
     parser.add_argument("--also-host", action="append", default=[], metavar="ADDRESS",
@@ -827,19 +713,11 @@ def main() -> int:
     state = ApiState(state_file=Path(state_path) if state_path else None)
     if args.manual_signals:
         state.set_random_signals(False)
-    ip = local_ip()
+    # Plain HTTP; Tailscale Funnel in front of it provides HTTPS.
     server = QuietThreadingHTTPServer((args.host, args.port), make_handler(state))
-    https_active = not args.http and apply_https(server, ip)
-    scheme = "https" if https_active else "http"
-    url = f"{scheme}://{ip}:{args.port}/"
-    print(f"ALIVE Wi-Fi emitter API: {url}")
+    print(f"ALIVE API: http://{args.host}:{args.port}/")
     print("Operator token: configured" if os.environ.get("ALIVE_WEB_TOKEN") else
           "Operator token: not configured")
-    if https_active:
-        print("[HTTPS] A phone may need to trust the local test certificate")
-    elif not args.http:
-        print("[HTTPS] Local certificate unavailable; serving HTTP")
-    print_qr_hint(url)
     # Boards on the laptop hotspot cannot reach the API through its public
     # Funnel address, which refuses connections from the laptop's own
     # internet address. They poll it here directly, even while the venue
@@ -850,7 +728,7 @@ def main() -> int:
         print(f"Also serving boards at http://{host}:{args.port}/")
     notify_systemd("READY=1")
     watchdog_usec = int(os.environ.get("WATCHDOG_USEC", "0"))
-    if watchdog_usec and not https_active:
+    if watchdog_usec:
         threading.Thread(target=feed_systemd_watchdog, args=(args.port, watchdog_usec / 3e6),
                          daemon=True).start()
 

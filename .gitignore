@@ -5,16 +5,9 @@ __pycache__/
 *.pyo
 *.wav
 *.png
-*.gif
-transmission*
-.alive-demo-*.pem
-.alive-demo-openssl.cnf
 .tmp/
-.mpl/
 .DS_Store
 node_modules/
 web/node_modules/
-web/dist/
-web/dist-debug/
 firmware/**/.pio/
 firmware/**/include/secrets.h

@@ -19,7 +19,7 @@ const NOTICE_MS = 5000;
 const ONLINE_CHECK_MS = 30000;
 const OUT_OF_ORDER = 'Currently out of order :(';
 
-if (DEBUG_UI) { document.title = 'ALIVE Receiver · debug'; document.body.classList.add('debug-ui'); }
+if (DEBUG_UI) { document.title = 'Anybody Listening? · debug'; document.body.classList.add('debug-ui'); }
 
 const app = requiredElement<HTMLDivElement>('#app');
 app.innerHTML = `
@@ -27,7 +27,6 @@ app.innerHTML = `
     <section class="receiver">
       <header class="receiver-head">
         <div class="receiver-ident">
-          <span class="wordmark">ALIVE</span>
           <span id="translationState" class="receiver-state">Microphone off · <b>DEAD</b></span>
         </div>
         ${DEBUG_UI ? `<button id="debugToggle" type="button" class="quiet-button" aria-expanded="false" aria-controls="debugPanel">Debug</button>` : ''}

@@ -8,7 +8,6 @@
     <section class="receiver">
       <header class="receiver-head">
         <div class="receiver-ident">
-          <span class="wordmark">ALIVE</span>
           <span id="translationState" class="receiver-state">Microphone off · <b>DEAD</b></span>
         </div>
         

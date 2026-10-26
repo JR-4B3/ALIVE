@@ -80,8 +80,7 @@
   border-bottom: 1px solid var(--rule);
 }
 .receiver-ident { flex: 1; display: flex; align-items: baseline; gap: 12px; min-width: 0; white-space: nowrap; }
-.wordmark { font-weight: 700; font-size: 14px; letter-spacing: .28em; }
-.receiver-state { overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--dim); }
+.receiver-state { overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--dim); }
 .receiver-state b { font-weight: 400; color: var(--ink); letter-spacing: .06em; }
 /* Green is kept for one thing: the moment the receiver calls a signal alive. */
 .receiver-state[data-verdict='ALIVE'] b { color: var(--alive); text-shadow: 0 0 10px rgb(98 245 154 / .45); }
