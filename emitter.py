@@ -305,13 +305,17 @@ class ApiState:
             return self._status(now)
 
     def reset(self) -> dict[str, object]:
-        """Operator reset: drop replies and conversations, deal new roles."""
+        """Operator reset to the state after a start: no replies or
+        conversations, new roles, and a beacon as the next signal."""
         with self._lock:
             self._replies.clear()
             self._sessions.clear()
             self._transmitted.clear()
             self._conversation_at = self._roles_at = -math.inf
             now = time.monotonic()
+            self._next_kind = "intelligent"
+            self._next_signal_at = now
+            self._signal_requested = False
             self._assign_roles(now)
             return self._status(now)
 

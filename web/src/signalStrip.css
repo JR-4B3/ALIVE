@@ -21,3 +21,6 @@ html:has(body.signal-strip), body.signal-strip, .signal-strip #app { height: 100
   .signal-strip #app > main { gap: 6px; padding: 6px 10px; grid-template-rows: minmax(110px, 1.4fr) minmax(56px, .6fr) auto; }
   .signal-strip #prompt { height: 56px; }
 }
+/* An open debug panel follows the full-height layout, and the page scrolls. */
+html:has(body.debug-open), body.debug-open, .debug-open #app { height: auto; overflow: visible; }
+.debug-open.signal-strip #app > main { position: relative; top: 0; height: 100dvh; }

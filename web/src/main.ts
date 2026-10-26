@@ -10,11 +10,12 @@ import { startSimulatedUnit } from './debug/simulatedUnit';
 import type { Reception, ReceiverStatus } from './types';
 
 // Set at build time: `bun run build` publishes the clean visitor page to docs/,
-// `bun run build:debug` keeps every diagnostic control for local testing.
+// `bun run build:debug` adds a debug panel below the same page.
 declare const __DEBUG_UI__: boolean;
 declare const __PUBLISHED_API__: string;
 const DEBUG_UI = __DEBUG_UI__;
-const LOG_LIMIT = 80;
+const SAVED_LIMIT = 50;
+const NOTICE_MS = 5000;
 
 if (DEBUG_UI) { document.title = 'ALIVE Receiver · debug'; document.body.classList.add('debug-ui'); }
 
@@ -24,13 +25,22 @@ app.innerHTML = `
     <section class="receiver">
       <header class="receiver-head">
         <div class="receiver-ident">
-          <span class="wordmark">ALIVE${DEBUG_UI ? ' debug' : ''}</span>
-          <span id="translationState" class="receiver-state">Listening · <b>DEAD</b></span>
+          <span class="wordmark">ALIVE</span>
+          <span id="translationState" class="receiver-state">Microphone off · <b>DEAD</b></span>
         </div>
+        ${DEBUG_UI ? `<button id="debugToggle" type="button" class="quiet-button" aria-expanded="false" aria-controls="debugPanel">Debug</button>` : ''}
         <button id="clear" type="button" class="quiet-button">Clear</button>
       </header>
-      <ol id="log" class="log" aria-live="polite" aria-label="Received signals"></ol>
-      <p id="logEmpty" class="log-empty">Tap the microphone, then hold your phone toward the units.</p>
+      <div class="reading" aria-live="polite">
+        <p id="readingMeta" class="reading-meta"></p>
+        <p id="readingText" class="reading-text"></p>
+        <p id="readingHint" class="reading-hint">Tap the microphone, then hold your phone toward the units.</p>
+      </div>
+      <div id="saved" class="saved" hidden>
+        <p class="saved-title">Saved messages</p>
+        <ol id="savedList" class="saved-list"></ol>
+      </div>
+      <button id="savedToggle" type="button" class="saved-toggle" aria-expanded="false" aria-controls="saved" hidden></button>
       <button id="mic" type="button" class="mic-toggle" aria-label="Enable microphone" aria-pressed="false" title="Enable microphone">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
           <rect x="9" y="3" width="6" height="12" rx="3" />
@@ -41,67 +51,66 @@ app.innerHTML = `
     </section>
 
     <section class="contact">
-      <form id="contactForm" class="contact-form">
-        ${DEBUG_UI ? `<div id="micDiagnostics" class="debug-line">MIC OFF</div>` : ''}
-        <div class="compose">
-          <input id="prompt" maxlength="120" placeholder="Message" autocomplete="off" enterkeyhint="send" aria-label="Message">
-          <button id="send" type="submit" aria-label="Send message" title="Send message">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
-              <path d="M12 20V5M5.5 11.5L12 5l6.5 6.5" />
-            </svg>
-          </button>
-        </div>
-        ${DEBUG_UI ? `
-        <div id="contactStatus" class="debug-line">---</div>
-        <div class="debug-signals" role="group" aria-label="Send a signal now">
-          <button type="button" class="debug-button" data-kind="noise">noise now</button>
-          <button type="button" class="debug-button" data-kind="clock">clock now</button>
-          <button type="button" class="debug-button" data-kind="intelligent">message now</button>
-        </div>
-        <label class="debug-check">
-          <input id="simulateUnit" type="checkbox">
-          <span>Simulate a unit on this page (local test API only; turns the microphone off)</span>
-        </label>
-        <div id="simulateStatus" class="debug-line"></div>
-        <label class="debug-check">
-          <input id="randomSignals" type="checkbox" checked>
-          <span>Random signals between requests (needs the operator token)</span>
-        </label>
-        <label class="debug-check">
-          <input id="recordDiagnostic" class="sr-only" type="checkbox">
-          <span class="record-checkbox-mark" aria-hidden="true">
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
-              <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" />
-            </svg>
-          </span>
-          <span>Record 25 s with the next signal I send</span>
-        </label>
-        <div id="recordStatus" class="debug-line"></div>
-        <details class="debug-settings">
-          <summary>connection settings</summary>
-          <label for="apiBase">API URL
-            <input id="apiBase" type="url" placeholder="https://api.example.com">
-          </label>
-          <label for="apiToken">Private operator token (required for signals, status, and reset)
-            <input id="apiToken" type="password" autocomplete="off" placeholder="paste operator token">
-          </label>
-          <button id="showStatus" type="button" class="debug-button">show board roles</button>
-          <button id="resetMessage" type="button" class="debug-button">reset conversations and roles</button>
-          <pre id="resetStatus" class="debug-line" role="status"></pre>
-        </details>` : ''}
+      <form id="contactForm" class="compose">
+        <input id="prompt" maxlength="120" placeholder="Message" autocomplete="off" enterkeyhint="send" aria-label="Message">
+        <button id="send" type="submit" aria-label="Send message" title="Send message">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+            <path d="M12 20V5M5.5 11.5L12 5l6.5 6.5" />
+          </svg>
+        </button>
       </form>
     </section>
   </main>
+  ${DEBUG_UI ? `
+  <section id="debugPanel" class="debug-panel" aria-label="Debug" hidden>
+    <div id="micDiagnostics" class="debug-line">MIC OFF</div>
+    <div id="contactStatus" class="debug-line">---</div>
+    <div class="debug-signals" role="group" aria-label="Send a signal now">
+      <button type="button" class="debug-button" data-kind="noise">noise now</button>
+      <button type="button" class="debug-button" data-kind="clock">clock now</button>
+      <button type="button" class="debug-button" data-kind="intelligent">message now</button>
+    </div>
+    <label class="debug-check">
+      <input id="randomSignals" type="checkbox" checked>
+      <span>Random signals between requests</span>
+    </label>
+    <label class="debug-check">
+      <input id="simulateUnit" type="checkbox">
+      <span>Simulate a unit on this page (local test API only; turns the microphone off)</span>
+    </label>
+    <div id="simulateStatus" class="debug-line"></div>
+    <label class="debug-check">
+      <input id="recordDiagnostic" class="sr-only" type="checkbox">
+      <span class="record-checkbox-mark" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
+          <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" />
+        </svg>
+      </span>
+      <span>Record 25 s with the next signal I send</span>
+    </label>
+    <div id="recordStatus" class="debug-line"></div>
+    <label class="debug-field" for="apiBase">API URL
+      <input id="apiBase" type="url" placeholder="https://api.example.com">
+    </label>
+    <label class="debug-field" for="apiToken">Private operator token (required for signals, status, and reset)
+      <input id="apiToken" type="password" autocomplete="off" placeholder="paste operator token">
+    </label>
+    <button id="showStatus" type="button" class="debug-button">show board roles</button>
+    <button id="resetAll" type="button" class="debug-button">reset to the first state</button>
+    <pre id="resetStatus" class="debug-line" role="status"></pre>
+  </section>` : ''}
 `;
 
-// Visitors get the spectrogram layout. The debug page keeps its scrolling
-// diagnostics layout.
-const signalStrip = DEBUG_UI ? null : mountSignalStrip();
+const signalStrip = mountSignalStrip();
 
 const refs = {
   translationState: requiredElement<HTMLSpanElement>('#translationState'),
-  log: requiredElement<HTMLOListElement>('#log'),
-  logEmpty: requiredElement<HTMLParagraphElement>('#logEmpty'),
+  readingMeta: requiredElement<HTMLParagraphElement>('#readingMeta'),
+  readingText: requiredElement<HTMLParagraphElement>('#readingText'),
+  readingHint: requiredElement<HTMLParagraphElement>('#readingHint'),
+  saved: requiredElement<HTMLDivElement>('#saved'),
+  savedList: requiredElement<HTMLOListElement>('#savedList'),
+  savedToggle: requiredElement<HTMLButtonElement>('#savedToggle'),
   mic: requiredElement<HTMLButtonElement>('#mic'),
   clear: requiredElement<HTMLButtonElement>('#clear'),
   contactForm: requiredElement<HTMLFormElement>('#contactForm'),
@@ -112,6 +121,8 @@ const refs = {
 // Debug-only controls. In the visitor build DEBUG_UI is false, so this object
 // (and every diagnostic string in it) is removed from the bundle entirely.
 const debugRefs = DEBUG_UI ? {
+  toggle: requiredElement<HTMLButtonElement>('#debugToggle'),
+  panel: requiredElement<HTMLElement>('#debugPanel'),
   micDiagnostics: requiredElement<HTMLDivElement>('#micDiagnostics'),
   signalButtons: [...document.querySelectorAll<HTMLButtonElement>('.debug-signals button')],
   randomSignals: requiredElement<HTMLInputElement>('#randomSignals'),
@@ -120,7 +131,7 @@ const debugRefs = DEBUG_UI ? {
   apiBase: requiredElement<HTMLInputElement>('#apiBase'),
   apiToken: requiredElement<HTMLInputElement>('#apiToken'),
   showStatus: requiredElement<HTMLButtonElement>('#showStatus'),
-  resetMessage: requiredElement<HTMLButtonElement>('#resetMessage'),
+  resetAll: requiredElement<HTMLButtonElement>('#resetAll'),
   resetStatus: requiredElement<HTMLPreElement>('#resetStatus'),
   contactStatus: requiredElement<HTMLDivElement>('#contactStatus'),
   recordDiagnostic: requiredElement<HTMLInputElement>('#recordDiagnostic'),
@@ -139,7 +150,9 @@ if (debugRefs) {
   debugRefs.apiToken.value = initialApiToken;
 }
 // The API keeps each visitor's conversation under this id for this tab.
-const session = sessionStorage.getItem('aliveSession') ?? newSession();
+let session = sessionStorage.getItem('aliveSession') ?? newSession();
+
+type Saved = { text: string; at: string };
 
 const levels = new SignalLevelTracker();
 const decoder = new BeaconDecoder();
@@ -152,11 +165,16 @@ let processor: ScriptProcessorNode | null = null;
 let silentNode: GainNode | null = null;
 let micActive = false;
 let micError = '';
-// The last intelligent message this phone decoded. The API answers only
-// visitors who can repeat what they heard.
-let heard = '';
-let liveEntry: HTMLLIElement | null = null;
+// The window shows one reception: the one arriving, or else the last one.
+let lastReception: (Reception & { at: Date }) | null = null;
+// Intelligent messages stay for this tab. The newest one is what the API
+// expects a visitor to repeat as proof of contact. Sent messages are not kept.
+let saved = loadSaved();
+let notice: { text: string; until: number } | null = null;
+let noticeTimer = 0;
 let stopSimulation: (() => void) | null = null;
+// The simulated unit's samples also play into the spectrogram, silently.
+let simulationAudio: { ctx: AudioContext; input: GainNode; at: number } | null = null;
 let recording: { chunks: Float32Array[]; samples: number; rate: number; api: string; timer: number } | null = null;
 let recordingDownloadUrl: string | null = null;
 
@@ -164,14 +182,19 @@ refs.mic.addEventListener('click', () => {
   void toggleMicrophone();
 });
 refs.clear.addEventListener('click', () => {
-  translationSnapshot = decoder.reset();
-  refs.log.replaceChildren();
-  liveEntry = null;
+  translationSnapshot = decoder.reset(listening() ? 'listening for signal' : undefined);
+  lastReception = null;
   render();
+});
+refs.savedToggle.addEventListener('click', () => {
+  setSavedOpen(refs.saved.hidden);
 });
 refs.contactForm.addEventListener('submit', (event) => {
   event.preventDefault();
   void sendContactMessage();
+});
+debugRefs?.toggle.addEventListener('click', () => {
+  setDebugOpen(debugRefs.panel.hidden);
 });
 for (const button of debugRefs?.signalButtons ?? []) {
   button.addEventListener('click', () => void requestSignal(button.dataset.kind ?? 'intelligent'));
@@ -185,12 +208,20 @@ debugRefs?.randomSignals.addEventListener('change', () => {
 debugRefs?.showStatus.addEventListener('click', () => {
   void operatorRequest('GET', '/api/status');
 });
-if (debugRefs && initialApiToken) void operatorRequest('GET', '/api/status');
-debugRefs?.resetMessage.addEventListener('click', () => {
-  void operatorRequest('POST', '/api/emitter/main/reset');
+debugRefs?.resetAll.addEventListener('click', () => {
+  void resetToFirstState();
 });
+if (debugRefs) {
+  setDebugOpen(localStorage.getItem('aliveDebugOpen') === '1', false);
+  if (initialApiToken) void operatorRequest('GET', '/api/status');
+}
 
+renderSaved();
 render();
+
+function listening(): boolean {
+  return micActive || stopSimulation !== null;
+}
 
 async function toggleMicrophone(): Promise<void> {
   if (micActive) {
@@ -204,13 +235,25 @@ async function toggleSimulation(on: boolean): Promise<void> {
   if (!debugRefs) return;
   stopSimulation?.();
   stopSimulation = null;
+  if (simulationAudio) {
+    signalStrip.stop();
+    await simulationAudio.ctx.close();
+    simulationAudio = null;
+  }
   if (on) {
     // The decoder needs one unbroken stream, so the microphone stops first.
     if (micActive) await stopMicrophone();
     translationSnapshot = decoder.reset('listening for signal');
+    const ctx = new AudioContext();
+    const input = ctx.createGain();
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
+    input.connect(mute).connect(ctx.destination);
+    signalStrip.connect(input);
+    simulationAudio = { ctx, input, at: 0 };
     stopSimulation = startSimulatedUnit({
       apiBase: requestApiBase,
-      feed: receive,
+      feed: (samples, rate) => { showSimulated(samples, rate); receive(samples, rate); },
       status: (text) => { debugRefs.simulateStatus.textContent = text; }
     });
   } else {
@@ -220,11 +263,25 @@ async function toggleSimulation(on: boolean): Promise<void> {
   render();
 }
 
+function showSimulated(samples: Float32Array, rate: number): void {
+  if (!simulationAudio) return;
+  const { ctx, input } = simulationAudio;
+  const buffer = ctx.createBuffer(1, samples.length, rate);
+  buffer.copyToChannel(new Float32Array(samples), 0);
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(input);
+  // Queue the chunks back to back; after a stall, restart just ahead of now.
+  simulationAudio.at = Math.max(simulationAudio.at, ctx.currentTime + .05);
+  source.start(simulationAudio.at);
+  simulationAudio.at += buffer.duration;
+}
+
 function receive(input: Float32Array, sampleRate: number): void {
   translationSnapshot = decoder.process(input, sampleRate);
   for (const reception of decoder.takeCompleted()) {
-    if (reception.kind === 'intelligent') heard = reception.text;
-    appendEntry(reception.kind, reception.text);
+    lastReception = { ...reception, at: new Date() };
+    if (reception.kind === 'intelligent') saveMessage(reception.text);
   }
   render();
 }
@@ -252,7 +309,7 @@ async function startMicrophone(): Promise<void> {
       levelSnapshot = levels.process(input, performance.now());
       receive(input, audioCtx.sampleRate);
     };
-    signalStrip?.connect(sourceNode);
+    signalStrip.connect(sourceNode);
     sourceNode.connect(processor);
     processor.connect(silentNode).connect(audioCtx.destination);
     await audioCtx.resume();
@@ -273,7 +330,7 @@ async function startMicrophone(): Promise<void> {
 
 async function stopMicrophone(): Promise<void> {
   cancelRecording();
-  signalStrip?.stop();
+  signalStrip.stop();
   processor?.disconnect();
   sourceNode?.disconnect();
   silentNode?.disconnect();
@@ -294,7 +351,6 @@ async function stopMicrophone(): Promise<void> {
 async function sendContactMessage(): Promise<void> {
   const message = refs.prompt.value.trim();
   if (!message || refs.send.disabled) return;
-  const entry = appendEntry('sent', message);
   refs.prompt.value = '';
   refs.send.disabled = true;
   setContactStatus('sending');
@@ -302,7 +358,7 @@ async function sendContactMessage(): Promise<void> {
     const response = await fetch(`${requestApiBase()}/api/message`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...apiAuthHeaders() },
-      body: JSON.stringify({ message, heard, session }),
+      body: JSON.stringify({ message, heard: saved.at(-1)?.text ?? '', session }),
       // The API gives the reply model 12 seconds before answering with an error.
       signal: AbortSignal.timeout(20000)
     });
@@ -310,18 +366,15 @@ async function sendContactMessage(): Promise<void> {
       const failure = (await response.json().catch(() => null)) as { error?: string } | null;
       throw new Error(failure?.error ?? `HTTP ${response.status}`);
     }
-    // Without contact the message goes nowhere, and the page shows nothing more.
+    // Without contact the message goes nowhere. The page says "Sent" either way.
     const payload = (await response.json()) as { contact?: boolean; queued?: number; reply?: string };
+    showNotice('Sent');
     setContactStatus(!payload.contact ? 'no contact: nothing will answer'
       : `queued #${payload.queued ?? '?'}${payload.reply ? `: ${payload.reply}` : ''}`);
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Sending failed.';
-    entry.dataset.failed = 'true';
-    const note = document.createElement('p');
-    note.className = 'entry-note';
-    note.textContent = `Not sent. ${reason}`;
-    entry.append(note);
     if (!refs.prompt.value) refs.prompt.value = message;
+    showNotice(`Not sent: ${reason}`);
     setContactStatus(reason);
   } finally {
     refs.send.disabled = false;
@@ -346,8 +399,25 @@ async function requestSignal(kind: string): Promise<void> {
   await operatorRequest('POST', '/api/emitter/main/play', { kind });
 }
 
-async function operatorRequest(method: 'GET' | 'POST', path: string, body?: object): Promise<void> {
+// Back to what a first visit sees: the API forgets every conversation and
+// sends a beacon next, and this page drops its saved messages and session.
+async function resetToFirstState(): Promise<void> {
   if (!debugRefs) return;
+  const reachedApi = await operatorRequest('POST', '/api/emitter/main/reset');
+  saved = [];
+  sessionStorage.removeItem('aliveMessages');
+  session = newSession();
+  lastReception = null;
+  notice = null;
+  translationSnapshot = decoder.reset(listening() ? 'listening for signal' : undefined);
+  renderSaved();
+  setContactStatus('---');
+  render();
+  if (!reachedApi) debugRefs.resetStatus.textContent += '\nThis page was reset; the API was not.';
+}
+
+async function operatorRequest(method: 'GET' | 'POST', path: string, body?: object): Promise<boolean> {
+  if (!debugRefs) return false;
   debugRefs.resetStatus.textContent = '…';
   try {
     const response = await fetch(`${requestApiBase()}${path}`, {
@@ -363,9 +433,11 @@ async function operatorRequest(method: 'GET' | 'POST', path: string, body?: obje
     }
     if (typeof payload?.randomSignals === 'boolean') debugRefs.randomSignals.checked = payload.randomSignals;
     debugRefs.resetStatus.textContent = JSON.stringify(payload, null, 1);
+    return true;
   } catch (error) {
     cancelRecording();
     debugRefs.resetStatus.textContent = error instanceof Error ? error.message : 'Request failed';
+    return false;
   }
 }
 
@@ -397,72 +469,87 @@ async function saveRecording(): Promise<void> {
     debugRefs!.recordStatus.replaceChildren(status, link);
     const headers = apiAuthHeaders();
     if (!headers.authorization) link.click();
-    status.textContent = `${await uploadRecording(wav, captured.api, heard, headers)} `;
+    status.textContent = `${await uploadRecording(wav, captured.api, saved.at(-1)?.text ?? '', headers)} `;
   } catch (error) {
     setRecordStatus(error instanceof Error ? error.message : 'Could not save recording.');
   }
 }
 
-const KIND_LABELS = { noise: 'noise', clock: 'clock', intelligent: 'message', sent: 'you' } as const;
-
-function buildEntry(kind: keyof typeof KIND_LABELS, text: string): HTMLLIElement {
-  const entry = document.createElement('li');
-  entry.className = 'entry';
-  entry.dataset.kind = kind;
-  entry.innerHTML = '<div class="entry-meta"><time></time><span class="entry-kind"></span></div><p class="entry-text"></p>';
-  const now = new Date();
-  const time = requiredChild<HTMLTimeElement>(entry, 'time');
-  time.dateTime = now.toISOString();
-  time.textContent = now.toTimeString().slice(0, 8);
-  requiredChild(entry, '.entry-kind').textContent = KIND_LABELS[kind];
-  requiredChild(entry, '.entry-text').textContent = text;
-  return entry;
-}
-
-function appendEntry(kind: keyof typeof KIND_LABELS, text: string): HTMLLIElement {
-  const stick = isScrolledToEnd();
-  const entry = buildEntry(kind, text);
-  // Noise and clocks pass by: only the latest one stays on screen. Messages
-  // and the conversation are kept.
-  if (kind === 'noise' || kind === 'clock') {
-    refs.log.querySelectorAll(':is([data-kind=noise], [data-kind=clock]):not([data-live])')
-      .forEach((old) => old.remove());
+function loadSaved(): Saved[] {
+  try {
+    const value = JSON.parse(sessionStorage.getItem('aliveMessages') ?? '[]') as unknown;
+    return Array.isArray(value) ? value.filter((item): item is Saved =>
+      typeof item?.text === 'string' && typeof item?.at === 'string') : [];
+  } catch {
+    return [];
   }
-  // A reception still arriving stays last, below messages sent meanwhile.
-  refs.log.insertBefore(entry, liveEntry);
-  if (kind !== 'sent' && liveEntry) { liveEntry.remove(); liveEntry = null; }
-  while (refs.log.children.length > LOG_LIMIT) refs.log.firstElementChild?.remove();
-  refs.logEmpty.hidden = true;
-  if (stick || kind === 'sent') scrollToEnd();
-  return entry;
 }
 
-function renderLive(live: Reception | null): void {
-  if (!live) {
-    liveEntry?.remove();
-    liveEntry = null;
-    return;
-  }
-  const stick = isScrolledToEnd();
-  if (!liveEntry) {
-    liveEntry = buildEntry(live.kind, '');
-    liveEntry.dataset.live = 'true';
-    requiredChild(liveEntry, '.entry-kind').textContent = 'receiving';
-    refs.log.append(liveEntry);
-    refs.logEmpty.hidden = true;
-  }
-  if (liveEntry.dataset.kind !== live.kind) liveEntry.dataset.kind = live.kind;
-  const text = requiredChild(liveEntry, '.entry-text');
-  if (text.textContent !== live.text) text.textContent = live.text;
-  if (stick) scrollToEnd();
+function saveMessage(text: string): void {
+  saved.push({ text, at: new Date().toISOString() });
+  saved = saved.slice(-SAVED_LIMIT);
+  sessionStorage.setItem('aliveMessages', JSON.stringify(saved));
+  renderSaved();
 }
 
-function isScrolledToEnd(): boolean {
-  return refs.log.scrollHeight - refs.log.scrollTop - refs.log.clientHeight < 40;
+function renderSaved(): void {
+  refs.savedToggle.hidden = saved.length === 0;
+  refs.savedToggle.textContent = `Messages ${saved.length}`;
+  refs.savedList.replaceChildren(...saved.map(({ text, at }) => {
+    const item = document.createElement('li');
+    const time = document.createElement('time');
+    time.dateTime = at;
+    time.textContent = clockTime(new Date(at));
+    const body = document.createElement('p');
+    body.textContent = text;
+    item.append(time, body);
+    return item;
+  }));
+  if (!saved.length) setSavedOpen(false);
+  else if (!refs.saved.hidden) refs.savedList.lastElementChild?.scrollIntoView({ block: 'end' });
 }
 
-function scrollToEnd(): void {
-  refs.log.scrollTop = refs.log.scrollHeight;
+function setSavedOpen(open: boolean): void {
+  refs.saved.hidden = !open;
+  refs.savedToggle.setAttribute('aria-expanded', String(open));
+  if (open) refs.savedList.lastElementChild?.scrollIntoView({ block: 'end' });
+}
+
+function setDebugOpen(open: boolean, scroll = true): void {
+  if (!debugRefs) return;
+  debugRefs.panel.hidden = !open;
+  debugRefs.toggle.setAttribute('aria-expanded', String(open));
+  // Closed, the debug page behaves like the visitor page. Open, it scrolls.
+  document.body.classList.toggle('debug-open', open);
+  localStorage.setItem('aliveDebugOpen', open ? '1' : '0');
+  if (open && scroll) debugRefs.panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function showNotice(text: string): void {
+  notice = { text, until: performance.now() + NOTICE_MS };
+  window.clearTimeout(noticeTimer);
+  noticeTimer = window.setTimeout(render, NOTICE_MS + 50);
+  render();
+}
+
+function clockTime(date: Date): string {
+  return date.toTimeString().slice(0, 8);
+}
+
+const KIND_LABELS = { noise: 'noise', clock: 'clock', intelligent: 'message' } as const;
+
+function renderReading(live: Reception | null): void {
+  const shown = live ?? lastReception;
+  const kind = shown?.kind ?? '';
+  const meta = !shown ? '' : live ? `receiving ${KIND_LABELS[live.kind]}`
+    : `${clockTime(lastReception!.at)} · ${KIND_LABELS[shown.kind]}`;
+  if (refs.readingText.dataset.kind !== kind) refs.readingText.dataset.kind = kind;
+  if (refs.readingText.textContent !== (shown?.text ?? '')) refs.readingText.textContent = shown?.text ?? '';
+  refs.readingText.toggleAttribute('data-live', Boolean(live));
+  if (refs.readingMeta.textContent !== meta) refs.readingMeta.textContent = meta;
+  const hint = shown ? '' : listening() ? 'Listening. Signals appear here as they arrive.'
+    : micError || 'Tap the microphone, then hold your phone toward the units.';
+  if (refs.readingHint.textContent !== hint) refs.readingHint.textContent = hint;
 }
 
 function render(): void {
@@ -470,19 +557,16 @@ function render(): void {
   refs.mic.setAttribute('aria-pressed', String(micActive));
   refs.mic.setAttribute('aria-label', micActive ? 'Disable microphone' : 'Enable microphone');
   refs.mic.title = micActive ? 'Disable microphone' : 'Enable microphone';
-  renderLive(translationSnapshot.live);
-  const state = micActive || stopSimulation ? translationSnapshot.title : 'Microphone off';
+  renderReading(translationSnapshot.live);
+  if (notice && performance.now() >= notice.until) notice = null;
+  const state = notice?.text ?? (listening() ? translationSnapshot.title : 'Microphone off');
   const verdict = translationSnapshot.verdict;
-  if (refs.translationState.dataset.state !== `${state}/${verdict}`) {
-    refs.translationState.dataset.state = `${state}/${verdict}`;
+  const key = `${state}/${verdict}`;
+  if (refs.translationState.dataset.state !== key) {
+    refs.translationState.dataset.state = key;
     refs.translationState.dataset.verdict = verdict;
-    refs.translationState.innerHTML = `${state} · <b>${verdict}</b>`;
+    refs.translationState.replaceChildren(`${state} · `, Object.assign(document.createElement('b'), { textContent: verdict }));
   }
-  const empty = refs.log.children.length === 0;
-  if (refs.logEmpty.hidden !== !empty) refs.logEmpty.hidden = !empty;
-  const hint = micActive ? 'Listening. Signals appear here as they arrive.'
-    : micError || 'Tap the microphone, then hold your phone toward the units.';
-  if (empty && refs.logEmpty.textContent !== hint) refs.logEmpty.textContent = hint;
   if (DEBUG_UI) {
     const diagnostics = debugRefs?.micDiagnostics;
     if (diagnostics) {
@@ -553,12 +637,6 @@ function statusLabel(status: ReceiverStatus): string {
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
-  if (!element) throw new Error(`missing element ${selector}`);
-  return element;
-}
-
-function requiredChild<T extends Element = HTMLElement>(parent: Element, selector: string): T {
-  const element = parent.querySelector<T>(selector);
   if (!element) throw new Error(`missing element ${selector}`);
   return element;
 }

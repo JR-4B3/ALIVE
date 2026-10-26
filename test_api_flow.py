@@ -362,6 +362,17 @@ def test_a_requested_signal_restarts_the_random_pause(clock):
     assert state.status()["nextSignalInSeconds"] >= pause_starts + emitter.SIGNAL_PAUSE_SECONDS[0] - clock.now - .1
 
 
+def test_reset_returns_to_the_first_state(clock):
+    state = started(ApiState(rng=random.Random(9)), clock)
+    beacon = run(state, clock, 2)[0][2]
+    assert state.has_contact("visitor-1", str(beacon["text"]))
+    run(state, clock, 300)
+    state.reset()
+    assert not state.has_contact("visitor-1", str(beacon["text"]))
+    played = run(state, clock, 2 + emitter.DELIVERY_SECONDS + 30)
+    assert played[0][2]["kind"] == "intelligent"
+
+
 def test_health_endpoint_needs_no_token():
     state = ApiState()
     with patch.dict("os.environ", {"ALIVE_WEB_TOKEN": "web-secret"}):

@@ -72,11 +72,11 @@ export function mountSignalStrip() {
     visualViewport?.removeEventListener('scroll', fitVisibleViewport);
   }, { once: true });
   return {
-    connect(node: MediaStreamAudioSourceNode) {
+    connect(node: AudioNode) {
       analyser = node.context.createAnalyser(); analyser.fftSize = 4096; analyser.smoothingTimeConstant = 0;
       analyser.minDecibels = -120; analyser.maxDecibels = -25;
       bins = new Float32Array(analyser.frequencyBinCount);
-      clear(); inputState.textContent = 'Live microphone';
+      clear(); inputState.textContent = node instanceof MediaStreamAudioSourceNode ? 'Live microphone' : 'Simulated unit';
       node.connect(analyser);
     },
     stop() {

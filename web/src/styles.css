@@ -61,7 +61,7 @@
   padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
 }
 
-/* Reception log */
+/* Receiver: one reading at a time */
 .receiver {
   position: relative;
   display: flex;
@@ -74,72 +74,80 @@
   flex: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   min-height: 44px;
   padding: 6px 6px 6px 12px;
   border-bottom: 1px solid var(--rule);
 }
-.receiver-ident { display: flex; align-items: baseline; gap: 12px; min-width: 0; white-space: nowrap; }
+.receiver-ident { flex: 1; display: flex; align-items: baseline; gap: 12px; min-width: 0; white-space: nowrap; }
 .wordmark { font-weight: 700; font-size: 14px; letter-spacing: .28em; }
 .receiver-state { overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--dim); }
 .receiver-state b { font-weight: 400; color: var(--ink); letter-spacing: .06em; }
-.receiver-state[data-verdict='ALIVE'] b { color: var(--alive); }
-.quiet-button { min-height: 32px; padding: 2px 10px; font-size: 12px; color: var(--dim); }
+/* Green is kept for one thing: the moment the receiver calls a signal alive. */
+.receiver-state[data-verdict='ALIVE'] b { color: var(--alive); text-shadow: 0 0 10px rgb(98 245 154 / .45); }
+.quiet-button { flex: none; min-height: 32px; padding: 2px 10px; font-size: 12px; color: var(--dim); }
 
-.log {
+.reading {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px 64px;
+  overflow: hidden;
+  text-align: center;
+}
+.reading-meta { margin: 0; min-height: 1.4em; font-size: 10px; letter-spacing: .08em; color: var(--faint); }
+.reading-meta:empty { display: none; }
+.reading-text {
+  margin: 0;
+  font-size: clamp(24px, 8.5vw, 36px);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  color: var(--dim);
+}
+.reading-text:empty { display: none; }
+.reading-text[data-kind='intelligent'] { font-weight: 700; color: var(--ink); }
+.reading-text[data-live]::after { content: '\258C'; animation: cursor 1s steps(1, end) infinite; }
+.reading-hint { margin: 0; font-size: 14px; line-height: 1.5; color: var(--dim); }
+.reading-hint:empty { display: none; }
+
+@keyframes cursor {
+  50% { opacity: 0; }
+}
+
+/* Saved messages cover the reading while open. */
+.saved {
+  position: absolute;
+  inset: 45px 0 64px;
+  display: flex;
+  flex-direction: column;
+  background: var(--void);
+}
+.saved[hidden] { display: none; }
+.saved-title { flex: none; margin: 0; padding: 10px 12px 6px; font-size: 10px; letter-spacing: .08em; color: var(--faint); }
+.saved-list {
   flex: 1;
   min-height: 0;
   margin: 0;
-  padding: 12px 12px 64px;
+  padding: 0 12px 12px;
   overflow-y: auto;
   overscroll-behavior: contain;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
-/* New entries settle at the bottom, as in a printout. */
-.log > :first-child { margin-top: auto; }
-.log-empty {
-  position: absolute;
-  inset: 45px 64px 64px 12px;
-  display: flex;
-  align-items: flex-end;
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--dim);
+.saved-list > :first-child { margin-top: auto; }
+.saved-list time { display: block; font-size: 10px; color: var(--faint); }
+.saved-list p { margin: 2px 0 0; font-size: 17px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; }
+.saved-toggle {
+  position: absolute; left: 10px; bottom: 10px; height: 44px;
+  padding: 0 12px; font-size: 12px; color: var(--dim);
 }
-.log-empty[hidden] { display: none; }
-
-.entry { min-width: 0; }
-.entry-meta { display: flex; gap: 10px; font-size: 10px; letter-spacing: .04em; color: var(--faint); }
-.entry-text {
-  margin: 2px 0 0;
-  font-size: 19px;
-  line-height: 1.25;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--dim);
-}
-.entry[data-kind='intelligent'] .entry-text {
-  font-size: 23px;
-  font-weight: 700;
-  color: var(--alive);
-  text-shadow: 0 0 14px rgb(98 245 154 / .35);
-}
-.entry[data-kind='intelligent'] .entry-kind { color: var(--alive); }
-.entry[data-kind='sent'] { align-self: flex-end; max-width: 85%; text-align: right; }
-.entry[data-kind='sent'] .entry-meta { justify-content: flex-end; }
-.entry[data-kind='sent'] .entry-text { font-size: 16px; color: var(--ink); }
-.entry[data-failed] .entry-text { color: var(--faint); text-decoration: line-through; }
-.entry-note { margin: 4px 0 0; font-size: 11px; line-height: 1.4; color: var(--on-air); }
-.entry[data-live] .entry-text::after { content: '\258C'; animation: cursor 1s steps(1, end) infinite; }
-
-@keyframes cursor {
-  50% { opacity: 0; }
-}
+.saved-toggle[hidden] { display: none; }
+.saved-toggle[aria-expanded=true] { color: var(--ink); border-color: var(--ink); }
 
 .mic-toggle {
   position: absolute; right: 10px; bottom: 10px; width: 44px; height: 44px;
@@ -154,7 +162,6 @@
 
 /* Contact */
 .contact { min-width: 0; }
-.contact-form { display: grid; gap: 8px; min-width: 0; }
 /* The send button sits inside the message box, in the same spot and size as
    the microphone button inside the log above. */
 .compose { position: relative; min-width: 0; border: 1px solid var(--rule); }
@@ -169,18 +176,26 @@
 .debug-signals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .entry[data-live] .entry-text::after { animation: none; }
+  .reading-text[data-live]::after { animation: none; }
 }
 
-/* Debug page controls */
-.debug-line { min-height: 1.5em; font-size: 12px; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Debug panel, below the visitor layout. While it is open the page scrolls. */
+.debug-panel {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  max-width: 430px;
+  margin: 0 auto;
+  padding: 12px 12px max(24px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--rule);
+}
+.debug-panel[hidden] { display: none; }
+.debug-line { min-height: 1.5em; margin: 0; font-size: 12px; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 .debug-button { min-height: 44px; padding: 4px 12px; font-size: 13px; }
+.debug-signals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .debug-check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--dim); }
-.debug-settings { display: grid; gap: 10px; border-top: 1px solid var(--rule); padding-top: 8px; font-size: 13px; color: var(--dim); }
-.debug-settings summary { cursor: pointer; }
-.debug-settings label { display: grid; gap: 4px; margin-top: 10px; }
-.debug-settings input { min-height: 44px; padding: 0 10px; font-size: 15px; }
-.debug-settings .debug-button { width: 100%; margin-top: 10px; }
+.debug-field { display: grid; gap: 4px; font-size: 13px; color: var(--dim); }
+.debug-field input { min-height: 44px; padding: 0 10px; font-size: 15px; }
 
 .record-checkbox-mark {
   display: inline-flex;
@@ -196,4 +211,3 @@
 #recordDiagnostic:checked + .record-checkbox-mark svg { visibility: visible; }
 #recordDiagnostic:focus-visible + .record-checkbox-mark { outline: 2px solid var(--ink); outline-offset: 2px; }
 
-body.debug-ui .receiver { height: 55vh; }
