@@ -21,9 +21,16 @@ export function mountSignalStrip() {
   const resize = new ResizeObserver(() => {
     const box = canvas.parentElement!.getBoundingClientRect();
     const ratio = Math.min(devicePixelRatio || 1, 2);
-    canvas.width = Math.max(1, Math.round(box.width * ratio));
-    canvas.height = Math.max(1, Math.round(box.height * ratio));
+    const width = Math.max(1, Math.round(box.width * ratio)), height = Math.max(1, Math.round(box.height * ratio));
+    if (width === canvas.width && height === canvas.height) return;
+    // Resizing a canvas erases it, and phones resize it while scrolling (the
+    // address bar hides). Keep the history: same time scale, newest at the right.
+    const old = document.createElement('canvas');
+    old.width = canvas.width; old.height = canvas.height;
+    old.getContext('2d')!.drawImage(canvas, 0, 0);
+    canvas.width = width; canvas.height = height;
     clear();
+    drawing.drawImage(old, 0, 0, old.width, old.height, width - old.width, 0, old.width, height);
   });
   resize.observe(canvas.parentElement!);
   function clear() { drawing.fillStyle = '#000'; drawing.fillRect(0, 0, canvas.width, canvas.height); }
