@@ -33,6 +33,11 @@ UNIT=/etc/systemd/system/alive-hotspot.service
 
 [[ $EUID -eq 0 ]] || { echo "Run with sudo." >&2; exit 1; }
 
+# The laptop's own Wi-Fi channel in MHz, empty while it is not connected.
+station_frequency() {
+  iw dev "$WIFI" link 2>/dev/null | awk '/freq:/ && !seen {print int($2); seen = 1}'
+}
+
 # hostapd writes its pid file only with -B, so look for the process instead.
 hostapd_pid() {
   pgrep -o -f "hostapd .*$RUN/hostapd.conf" || true
@@ -71,8 +76,18 @@ prepare() {
   # the laptop is back online.
   uplink=$(ip route show default | awk 'NR == 1 {print $5}')
   [[ -n $uplink ]] || { uplink="nothing yet"; echo "Note: this laptop has no internet route yet." >&2; }
-  # Share the channel the card already uses, when that is 2.4 GHz.
-  frequency=$(iw dev "$WIFI" link 2>/dev/null | awk '/freq:/ && !seen {print int($2); seen = 1}')
+  # Share the channel the card already uses, when that is 2.4 GHz. After a
+  # boot, wait up to a minute for the laptop to join its network (eduroam),
+  # if a wpa_supplicant runs for this card.
+  frequency=$(station_frequency)
+  if [[ -z $frequency ]] && pgrep -f -- "wpa_supplicant .*-i *$WIFI( |$)" >/dev/null; then
+    echo "Waiting for $WIFI to connect…"
+    for _ in {1..30}; do
+      sleep 2
+      frequency=$(station_frequency)
+      [[ -n $frequency ]] && break
+    done
+  fi
   if [[ -n $frequency && $frequency -lt 2500 ]]; then
     CHANNEL=$(( frequency == 2484 ? 14 : (frequency - 2407) / 5 ))
   elif [[ -n $frequency ]]; then
@@ -127,11 +142,31 @@ start() {
   hostapd -B -P "$RUN/hostapd.pid" "$RUN/hostapd.conf"
 }
 
-# For the systemd service. hostapd stays in the foreground, so systemd
-# notices when it fails and starts it again.
+# For the systemd service, which starts it again 10 seconds after it exits.
+# The card can only run the hotspot on the channel of the laptop's own
+# connection. When eduroam moves the laptop to another channel, or the laptop
+# stays disconnected for a minute (the hotspot may be blocking the new
+# channel), exit, so the next start follows the laptop's channel.
 run() {
   prepare
-  exec hostapd -P "$RUN/hostapd.pid" "$RUN/hostapd.conf"
+  hostapd "$RUN/hostapd.conf" &
+  pid=$!
+  if [[ -z $frequency ]]; then
+    wait "$pid"
+    exit
+  fi
+  lost=0
+  while sleep 15 && kill -0 "$pid" 2>/dev/null; do
+    now=$(station_frequency)
+    if [[ -n $now ]]; then lost=0; else lost=$((lost + 15)); fi
+    if [[ -n $now && $now -ne $frequency ]] || (( lost >= 60 )); then
+      echo "$WIFI is now on ${now:-no network} instead of $frequency MHz; restarting the hotspot."
+      kill "$pid"
+      wait "$pid" || true
+      exit 1
+    fi
+  done
+  wait "$pid"
 }
 
 enable() {
