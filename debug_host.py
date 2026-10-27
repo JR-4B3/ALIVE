@@ -373,7 +373,9 @@ def start_local_api(manual: bool, host: str = "127.0.0.1", port: int = 0) -> tup
         os.environ["OPENAI_API_KEY"] = key
     import emitter
 
-    state = emitter.ApiState(startup_silence=0)
+    # Real boards may still be playing a signal from before a restart, so
+    # only the loopback API for -sim skips the startup silence.
+    state = emitter.ApiState() if host != "127.0.0.1" else emitter.ApiState(startup_silence=0)
     if manual:
         state.set_random_signals(False)
     server = emitter.QuietThreadingHTTPServer((host, port), emitter.make_handler(state))

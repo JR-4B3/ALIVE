@@ -299,7 +299,9 @@ void pollForMessage() {
   const String url = String(localServer ? localServer : ALIVE_SERVER_URL) + "/api/emitter/main/current";
   if (!http.begin(client, url)) return;
 #ifdef ALIVE_DEVICE_TOKEN
-  http.addHeader("Authorization", String("Bearer ") + ALIVE_DEVICE_TOKEN);
+  // Any host on the network can announce itself as a debug host, and its API
+  // takes no token, so the token goes only to the configured APIs.
+  if (debugServer.isEmpty()) http.addHeader("Authorization", String("Bearer ") + ALIVE_DEVICE_TOKEN);
 #endif
   // The API logs these per board to time battery runtime and spot brownouts.
   http.addHeader("X-Alive-Board", WiFi.macAddress());
