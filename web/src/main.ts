@@ -17,7 +17,11 @@ const DEBUG_UI = __DEBUG_UI__;
 const SAVED_LIMIT = 50;
 const NOTICE_MS = 5000;
 const ONLINE_CHECK_MS = 30000;
-const OUT_OF_ORDER = 'Currently out of order :(';
+// eduroam at the venue drops for a few seconds now and then. Visitors see
+// the out-of-order notice only once the API has been away this long.
+const OUT_OF_ORDER_AFTER_MS = 60000;
+// The welcome notice can be closed only after this long, so visitors read it.
+const INTRO_CLOSE_AFTER_MS = 4000;
 
 if (DEBUG_UI) { document.title = 'Anybody Listening? · debug'; document.body.classList.add('debug-ui'); }
 
@@ -62,6 +66,21 @@ app.innerHTML = `
       </form>
     </section>
   </main>
+  ${DEBUG_UI ? '' : `
+  <div id="intro" class="notice" role="dialog" aria-modal="true" aria-labelledby="introTitle" hidden>
+    <div class="notice-box">
+      <p id="introTitle" class="notice-title">Anybody Listening?</p>
+      <p class="notice-text">The units around you send signals too high for most ears to hear. Tap the microphone and hold your phone toward them. Your phone turns what it hears into text.</p>
+      <p class="notice-text">Most of it is noise. When the status at the top turns green and reads ALIVE, someone is out there. Write back in the box at the bottom.</p>
+      <button id="introClose" type="button" class="notice-button" disabled>OK</button>
+    </div>
+  </div>
+  <div id="outOfOrder" class="notice out-of-order" role="alertdialog" aria-modal="true" aria-labelledby="outOfOrderTitle" hidden>
+    <div class="notice-box">
+      <p id="outOfOrderTitle" class="notice-title">Currently out of order :(</p>
+      <p class="notice-text">The units cannot answer right now. This page carries on by itself once they are back.</p>
+    </div>
+  </div>`}
   ${DEBUG_UI ? `
   <section id="debugPanel" class="debug-panel" aria-label="Debug" hidden>
     <div id="micDiagnostics" class="debug-line">MIC OFF</div>
@@ -116,7 +135,11 @@ const refs = {
   clear: requiredElement<HTMLButtonElement>('#clear'),
   contactForm: requiredElement<HTMLFormElement>('#contactForm'),
   prompt: requiredElement<HTMLInputElement>('#prompt'),
-  send: requiredElement<HTMLButtonElement>('#send')
+  send: requiredElement<HTMLButtonElement>('#send'),
+  main: requiredElement<HTMLElement>('#app > main'),
+  outOfOrder: DEBUG_UI ? null : requiredElement<HTMLDivElement>('#outOfOrder'),
+  intro: DEBUG_UI ? null : requiredElement<HTMLDivElement>('#intro'),
+  introClose: DEBUG_UI ? null : requiredElement<HTMLButtonElement>('#introClose')
 };
 
 // Debug-only controls. In the visitor build DEBUG_UI is false, so this object
@@ -173,9 +196,11 @@ let lastReception: (Reception & { at: Date }) | null = null;
 let saved = loadSaved();
 let notice: { text: string; until: number } | null = null;
 let noticeTimer = 0;
-// Out of order while the API is unreachable or no unit polls it. Units may
-// still play signals on their own then, but nothing can answer.
+// Out of order once the API has been unreachable, or no unit has polled it,
+// for OUT_OF_ORDER_AFTER_MS. Units may still play signals on their own then,
+// but nothing can answer. The debug page never checks, so testing goes on.
 let outOfOrder = false;
+let offlineTimer = 0;
 let sending = false;
 let stopSimulation: (() => void) | null = null;
 // The simulated unit's samples also play into the spectrogram, silently.
@@ -223,9 +248,12 @@ if (debugRefs) {
 
 renderSaved();
 render();
-void checkOnline();
-window.setInterval(() => { if (!document.hidden) void checkOnline(); }, ONLINE_CHECK_MS);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) void checkOnline(); });
+if (!DEBUG_UI) {
+  showIntro();
+  void checkOnline();
+  window.setInterval(() => { if (!document.hidden) void checkOnline(); }, ONLINE_CHECK_MS);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) void checkOnline(); });
+}
 
 async function checkOnline(): Promise<void> {
   let online = true;
@@ -238,16 +266,54 @@ async function checkOnline(): Promise<void> {
   } catch {
     online = false;
   }
-  if (outOfOrder === !online) return;
-  outOfOrder = !online;
+  if (online) {
+    window.clearTimeout(offlineTimer);
+    offlineTimer = 0;
+    setOutOfOrder(false);
+  } else if (!offlineTimer && !outOfOrder) {
+    offlineTimer = window.setTimeout(() => {
+      offlineTimer = 0;
+      setOutOfOrder(true);
+    }, OUT_OF_ORDER_AFTER_MS);
+  }
+}
+
+// First-time visitors get a short welcome. Its button unlocks after
+// INTRO_CLOSE_AFTER_MS; once closed it never shows again on this phone.
+function showIntro(): void {
+  const { intro, introClose } = refs;
+  if (!intro || !introClose || localStorage.getItem('aliveIntroSeen') === '1') return;
+  intro.hidden = false;
+  renderInert();
+  window.setTimeout(() => {
+    introClose.disabled = false;
+    introClose.focus();
+  }, INTRO_CLOSE_AFTER_MS);
+  introClose.addEventListener('click', () => {
+    localStorage.setItem('aliveIntroSeen', '1');
+    intro.hidden = true;
+    renderInert();
+  }, { once: true });
+}
+
+// Behind an open notice, the page takes no taps or focus.
+function renderInert(): void {
+  refs.main.inert = outOfOrder || refs.intro?.hidden === false;
+}
+
+// The notice covers the page and cannot be closed, so nobody waits for an
+// answer that cannot come. It goes away by itself once the API is back.
+function setOutOfOrder(value: boolean): void {
+  if (outOfOrder === value || !refs.outOfOrder) return;
+  outOfOrder = value;
+  refs.outOfOrder.hidden = !value;
+  renderInert();
   renderCompose();
 }
 
 function renderCompose(): void {
   refs.prompt.disabled = outOfOrder;
-  refs.prompt.placeholder = outOfOrder ? OUT_OF_ORDER : 'Message';
   refs.send.disabled = outOfOrder || sending;
-  refs.contactForm.toggleAttribute('data-out-of-order', outOfOrder);
 }
 
 function listening(): boolean {
@@ -408,7 +474,7 @@ async function sendContactMessage(): Promise<void> {
     if (!refs.prompt.value) refs.prompt.value = message;
     showNotice(`Not sent: ${reason}`);
     setContactStatus(reason);
-    void checkOnline();
+    if (!DEBUG_UI) void checkOnline();
   } finally {
     sending = false;
     renderCompose();
@@ -519,7 +585,10 @@ function loadSaved(): Saved[] {
   }
 }
 
+// A message heard again moves to the end with its new time instead of
+// appearing twice, since units repeat their beacon lines.
 function saveMessage(text: string): void {
+  saved = saved.filter((item) => item.text !== text);
   saved.push({ text, at: new Date().toISOString() });
   saved = saved.slice(-SAVED_LIMIT);
   sessionStorage.setItem('aliveMessages', JSON.stringify(saved));

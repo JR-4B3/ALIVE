@@ -9,7 +9,8 @@
   --ink: #ecebe4;
   --dim: #8f8e87;
   --faint: #66655f;
-  --rule: #3a3935;
+  /* Panel and button borders are as bright as the text, as they first were. */
+  --rule: var(--ink);
   --alive: #62f59a;
   --on-air: #ff5a36;
   color-scheme: dark;
@@ -169,7 +170,6 @@
 #prompt:focus-visible { outline: none; }
 #prompt::placeholder { color: var(--faint); }
 #prompt:disabled { background: transparent; opacity: 1; }
-.compose[data-out-of-order] #prompt::placeholder { color: var(--dim); }
 #send {
   position: absolute; right: 10px; top: 50%; width: 44px; height: 44px; margin-top: -22px;
   padding: 0; display: grid; place-items: center; border-color: var(--ink);
@@ -179,6 +179,22 @@
 @media (prefers-reduced-motion: reduce) {
   .reading-text[data-live]::after { animation: none; }
 }
+
+/* Notices over the whole page, in the panels' style: the welcome for a
+   first visit and, above it, the out-of-order notice. */
+.notice {
+  position: fixed; inset: 0; z-index: 10; display: grid; place-items: center;
+  padding: 24px; background: rgb(0 0 0 / .85);
+}
+.notice[hidden] { display: none; }
+.out-of-order { z-index: 11; }
+.notice-box {
+  display: grid; gap: 12px; width: 100%; max-width: 360px; padding: 20px;
+  border: 1px solid var(--ink); background: var(--void);
+}
+.notice-title { margin: 0; font-size: 20px; color: var(--ink); }
+.notice-text { margin: 0; font-size: 14px; line-height: 1.5; color: var(--dim); }
+.notice-button { justify-self: end; min-width: 88px; min-height: 44px; margin-top: 4px; border-color: var(--ink); }
 
 /* Debug panel, below the visitor layout. While it is open the page scrolls. */
 .debug-panel {
