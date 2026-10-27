@@ -39,7 +39,7 @@ app.innerHTML = `
       <div class="reading" aria-live="polite">
         <p id="readingMeta" class="reading-meta"></p>
         <p id="readingText" class="reading-text"></p>
-        <p id="readingHint" class="reading-hint">Tap the microphone, then point your phone around the room.</p>
+        <p id="readingHint" class="reading-hint">Turn on recording and explore the room.</p>
       </div>
       <div id="saved" class="saved" hidden>
         <p class="saved-title">Saved messages</p>
@@ -70,15 +70,15 @@ app.innerHTML = `
   <div id="intro" class="notice" role="dialog" aria-modal="true" aria-labelledby="introTitle" hidden>
     <div class="notice-box">
       <p id="introTitle" class="notice-title">Anybody Listening?</p>
-      <p class="notice-text">Something in this room is sending signals too high for most ears to hear. Tap the microphone and point your phone around the room. Your phone turns what it hears into text.</p>
-      <p class="notice-text">Most of it is noise. When the status at the top turns green and reads ALIVE, someone is out there. Write back in the box at the bottom.</p>
+      <p class="notice-text">Welcome to your first shift at the listening station. You are our newest researcher, and your job is to search for signals from deep space. Turn on recording and explore the room. Your phone translates whatever it picks up. Nobody here has ever found anything, so no pressure.</p>
+      <p class="notice-text">Most of it is noise. If the status at the top ever turns green and reads ALIVE, check twice. Still green? Then answer in the box at the bottom. Nobody will read it, of course, but be nice anyway.</p>
       <button id="introClose" type="button" class="notice-button" disabled>OK</button>
     </div>
   </div>
   <div id="outOfOrder" class="notice out-of-order" role="alertdialog" aria-modal="true" aria-labelledby="outOfOrderTitle" hidden>
     <div class="notice-box">
       <p id="outOfOrderTitle" class="notice-title">Currently out of order :(</p>
-      <p class="notice-text">Nothing can answer right now. This page carries on by itself once the connection is back.</p>
+      <p class="notice-text">The station lost contact. This page carries on by itself once the line is back.</p>
     </div>
   </div>`}
   ${DEBUG_UI ? `
@@ -651,7 +651,7 @@ function renderReading(live: Reception | null): void {
   refs.readingText.toggleAttribute('data-live', Boolean(live));
   if (refs.readingMeta.textContent !== meta) refs.readingMeta.textContent = meta;
   const hint = shown ? '' : listening() ? 'Listening. Signals appear here as they arrive.'
-    : micError || 'Tap the microphone, then point your phone around the room.';
+    : micError || 'Turn on recording and explore the room.';
   if (refs.readingHint.textContent !== hint) refs.readingHint.textContent = hint;
 }
 
