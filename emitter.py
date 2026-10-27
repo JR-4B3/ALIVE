@@ -46,6 +46,9 @@ BEACON_LINES = ("IS ANYONE THERE", "WE ARE HERE", "THIS IS LANTERN", "AURORA CAL
                 "CAN YOU HEAR US", "ANSWER IF YOU HEAR")
 # Boards get new random roles this often, unless a conversation is running.
 ROLE_SECONDS = 600
+# A conversation runs from a visitor's message until this long after the last
+# reply was queued. Meanwhile roles stay and no random signal plays, so the
+# next thing the visitor hears is the reply.
 CONVERSATION_HOLD_SECONDS = 180
 # A visitor keeps contact this long after their phone decoded a message.
 CONTACT_SECONDS = 1800
@@ -179,7 +182,8 @@ class ApiState:
             if role != "intelligent":
                 return None
             score = message_score(self._replies.popleft()[1])
-        elif now >= self._next_signal_at and (self._random_signals or self._signal_requested):
+        elif now >= self._next_signal_at and (self._signal_requested or self._random_signals and not (
+                self._pending_replies or now - self._conversation_at < CONVERSATION_HOLD_SECONDS)):
             # A kind without a board of that role (e.g. a single board) falls
             # to any board that is not dead.
             kind = self._next_kind

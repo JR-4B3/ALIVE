@@ -148,6 +148,21 @@ def test_a_reply_waits_for_the_air_and_goes_to_the_intelligent_board(clock):
     assert poll(state, played[0][1])["role"] == "intelligent"
 
 
+def test_no_random_signal_plays_during_a_conversation(clock):
+    state = started(ApiState(rng=random.Random(8)), clock)
+    run(state, clock, 30)
+    # While the model call runs, the air stays free for its reply.
+    assert state.reserve_reply() == ""
+    assert run(state, clock, 20) == []
+    state.queue_reply("visitor-0001", "who are you", "WE ARE LANTERN")
+    played = run(state, clock, emitter.CONVERSATION_HOLD_SECONDS - 10)
+    assert [play.get("text") for _, _, play in played] == ["WE ARE LANTERN"]
+    # An operator's request still plays, and random signals return afterwards.
+    state.play_now("noise")
+    assert [play["kind"] for _, _, play in run(state, clock, 4)] == ["noise"]
+    assert run(state, clock, 60)
+
+
 def test_old_replies_expire_when_no_board_plays_them(clock):
     state = started(ApiState(rng=random.Random(1)), clock)
     poll(state, BOARDS[0])
