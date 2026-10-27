@@ -14,7 +14,7 @@ EnvironmentFile=/etc/alive/api.env
 Environment=ALIVE_STATE_FILE=/var/lib/alive/state.json
 # Receiver recordings are written below $HOME/.local/state/alive.
 Environment=HOME=/var/lib/alive
-ExecStart=/usr/bin/python3 -u /opt/alive/emitter.py --host 127.0.0.1 --port 8765 --http
+ExecStart=/usr/bin/python3 -u /opt/alive/emitter.py --host 127.0.0.1 --port 8765 --also-host 10.42.7.1
 # emitter.py sends WATCHDOG=1 only after its own /healthz request succeeds,
 # so a hung server is killed and restarted like a crashed one.
 WatchdogSec=30

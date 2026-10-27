@@ -4,12 +4,26 @@ set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
 
 install -d -m 755 /opt/alive
-install -m 644 "$repo/emitter.py" "$repo/reply_engine.py" "$repo/simple_qr.py" /opt/alive/
+install -m 644 "$repo/emitter.py" "$repo/reply_engine.py" "$repo/signals.py" "$repo/simple_qr.py" /opt/alive/
 install -d -m 700 /etc/alive
 if [ ! -e /etc/alive/api.env ]; then
   install -m 600 "$repo/deploy/api.env.example" /etc/alive/api.env
   echo "Created /etc/alive/api.env from the example. Fill it in, then run this script again."
   exit 1
+fi
+# Keep the operator token and OpenAI key readable by the user who ran sudo, so
+# `python3 debug_host.py` on another computer can fetch them over SSH.
+if [ -n "${SUDO_USER:-}" ]; then
+  user_config=$(getent passwd "$SUDO_USER" | cut -d: -f6)/.config/alive
+  install -d -m 700 -o "$SUDO_USER" "$user_config"
+  # A plain redirect, because uutils install (Ubuntu 25.10) cannot copy from
+  # /dev/stdin over an existing file.
+  for pair in ALIVE_WEB_TOKEN:operator-token OPENAI_API_KEY:openai-key; do
+    dest="$user_config/${pair#*:}"
+    (umask 077; sed -n "s/^${pair%%:*}=//p" /etc/alive/api.env > "$dest")
+    chmod 600 "$dest"
+    chown "$SUDO_USER": "$dest"
+  done
 fi
 install -m 644 "$repo/deploy/alive-api.service" /etc/systemd/system/alive-api.service
 systemctl daemon-reload

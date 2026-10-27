@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
-import { renderBeacon, BEACON_RATE, beaconDuration } from './beacon';
+import { renderBeacon, renderChirps, BEACON_RATE, beaconDuration, type Chirp } from './beacon';
 import { BeaconDecoder } from '../sensing/beaconDecoder';
 
 function resample(input: Float32Array, rate: number): Float32Array {
@@ -67,6 +67,61 @@ test('tolerates hand-held Doppler shift', () => {
 test('rejects unframed chirps and broadband noise', () => {
   expect(receive(renderBeacon('HELLO').subarray(Math.round(1.43 * BEACON_RATE)))).toBe('---');
   expect(receive(noise(BEACON_RATE * 3, .025, 15))).toBe('---');
+});
+
+function receptions(input: Float32Array, rate = BEACON_RATE) {
+  const decoder = new BeaconDecoder();
+  decoder.beginCapture(0);
+  const log = [], kinds = new Set<string>();
+  for (let i = 0; i < input.length; i += 2048) {
+    const snapshot = decoder.process(input.subarray(i, i + 2048), rate);
+    if (snapshot.live) kinds.add(snapshot.live.kind);
+    log.push(...decoder.takeCompleted());
+  }
+  return { log, kinds };
+}
+
+const pause = (seconds: number) => new Float32Array(Math.round(seconds * BEACON_RATE));
+const join = (...parts: Float32Array[]) => {
+  const output = new Float32Array(parts.reduce((n, part) => n + part.length, 0));
+  let offset = 0; for (const part of parts) { output.set(part, offset); offset += part.length; }
+  return output;
+};
+const clock = (symbol: number, periodMs: number, ticks: number) =>
+  renderChirps(Array.from({ length: ticks }, (): Chirp => [symbol, periodMs - 360]));
+
+test('tells a clock, noise, and a message apart, in the order they arrive', () => {
+  const noiseChirps: Chirp[] = [[3, 400], [17, 180], [3, 900], [25, 250], [8, 600]];
+  const { log } = receptions(join(clock(10, 1200, 8), pause(3), renderChirps(noiseChirps), pause(3),
+    renderBeacon('IS ANYONE THERE'), pause(3), clock(26, 900, 6), pause(3)));
+  expect(log).toEqual([
+    { kind: 'clock', text: 'KKKKKKKK' },
+    { kind: 'noise', text: 'DRDZI' },
+    { kind: 'intelligent', text: 'IS ANYONE THERE' },
+    { kind: 'clock', text: '      ' }
+  ]);
+});
+
+test('a clock at the slowest period stays one reception', () => {
+  const { log } = receptions(join(clock(4, 1600, 6), pause(3)));
+  expect(log).toEqual([{ kind: 'clock', text: 'EEEEEE' }]);
+});
+
+test('one channel at an uneven pace is noise, not a clock', () => {
+  const { log } = receptions(join(renderChirps([[5, 400], [5, 900], [5, 300], [5, 700]]), pause(3)));
+  expect(log).toEqual([{ kind: 'noise', text: 'FFFF' }]);
+});
+
+test('unframed chirps never count as a message', () => {
+  const { log, kinds } = receptions(join(renderChirps([[7, 180], [4, 180], [11, 180], [11, 180], [14, 180]]), pause(3)));
+  expect(kinds.has('intelligent')).toBe(false);
+  expect(log).toEqual([{ kind: 'noise', text: 'HELLO' }]);
+});
+
+test('decodes a 40-character reply', () => {
+  const text = 'WE ARE THE LAST LIGHT OF AURORA AND WE A';
+  expect(text.length).toBe(40);
+  expect(receive(renderBeacon(text))).toBe(text);
 });
 
 test('duration matches the rendered samples and the API', () => {

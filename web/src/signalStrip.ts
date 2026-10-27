@@ -1,4 +1,4 @@
-// Visitor layout: translation, a black-and-white spectrogram, and contact.
+// Visitor layout: reception log, a black-and-white spectrogram, and contact.
 import './signalStrip.css';
 
 const HIDDEN_LOW_HZ = 17500, HIDDEN_HIGH_HZ = 20500, HIDDEN_SHARE = .6;
@@ -6,10 +6,8 @@ const HIDDEN_LOW_HZ = 17500, HIDDEN_HIGH_HZ = 20500, HIDDEN_SHARE = .6;
 export function mountSignalStrip() {
   document.body.classList.add('signal-strip');
   const main = document.querySelector('main')!;
-  main.children[0].classList.add('translation-panel');
-  main.children[1].classList.add('contact-panel');
   main.children[0].insertAdjacentHTML('afterend', `<section class="spectrum-panel" aria-label="Live sound spectrum">
-    <div class="spectrum-heading"><span>Signal strip</span><span id="inputState" role="status">Microphone off</span></div>
+    <div class="spectrum-heading"><span>Spectrogram</span><span id="inputState" role="status">Microphone off</span></div>
     <div class="spectrum-history"><canvas id="spectrogram" aria-label="Black-and-white microphone spectrogram"></canvas>
       <span class="spectrum-boundary" style="top: ${HIDDEN_SHARE * 100}%">${HIDDEN_LOW_HZ / 1000} kHz</span></div>
     <div class="spectrum-scale"><span>${HIDDEN_HIGH_HZ / 1000} kHz</span><span>Frequency / time</span><span>100 Hz · now</span></div>
@@ -23,9 +21,16 @@ export function mountSignalStrip() {
   const resize = new ResizeObserver(() => {
     const box = canvas.parentElement!.getBoundingClientRect();
     const ratio = Math.min(devicePixelRatio || 1, 2);
-    canvas.width = Math.max(1, Math.round(box.width * ratio));
-    canvas.height = Math.max(1, Math.round(box.height * ratio));
+    const width = Math.max(1, Math.round(box.width * ratio)), height = Math.max(1, Math.round(box.height * ratio));
+    if (width === canvas.width && height === canvas.height) return;
+    // Resizing a canvas erases it, and phones resize it while scrolling (the
+    // address bar hides). Keep the history: same time scale, newest at the right.
+    const old = document.createElement('canvas');
+    old.width = canvas.width; old.height = canvas.height;
+    old.getContext('2d')!.drawImage(canvas, 0, 0);
+    canvas.width = width; canvas.height = height;
     clear();
+    drawing.drawImage(old, 0, 0, old.width, old.height, width - old.width, 0, old.width, height);
   });
   resize.observe(canvas.parentElement!);
   function clear() { drawing.fillStyle = '#000'; drawing.fillRect(0, 0, canvas.width, canvas.height); }
@@ -74,11 +79,11 @@ export function mountSignalStrip() {
     visualViewport?.removeEventListener('scroll', fitVisibleViewport);
   }, { once: true });
   return {
-    connect(node: MediaStreamAudioSourceNode) {
+    connect(node: AudioNode) {
       analyser = node.context.createAnalyser(); analyser.fftSize = 4096; analyser.smoothingTimeConstant = 0;
       analyser.minDecibels = -120; analyser.maxDecibels = -25;
       bins = new Float32Array(analyser.frequencyBinCount);
-      clear(); inputState.textContent = 'Live microphone';
+      clear(); inputState.textContent = node instanceof MediaStreamAudioSourceNode ? 'Live microphone' : 'Simulated unit';
       node.connect(analyser);
     },
     stop() {

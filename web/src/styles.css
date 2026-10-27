@@ -2,6 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Receiver tokens. Noise and clocks stay grey; only an intelligent message is
+   green. The red dot marks a live microphone. */
+:root {
+  --void: #000000;
+  --ink: #ecebe4;
+  --dim: #8f8e87;
+  --faint: #66655f;
+  /* Panel and button borders are as bright as the text, as they first were. */
+  --rule: var(--ink);
+  --alive: #62f59a;
+  --on-air: #ff5a36;
+  color-scheme: dark;
+}
+
 @layer base {
   html,
   body,
@@ -10,20 +24,195 @@
   }
 
   body {
-    @apply m-0 bg-black text-white antialiased;
+    margin: 0;
+    background: var(--void);
+    color: var(--ink);
+    font-family: 'Space Mono', ui-monospace, monospace;
+    -webkit-font-smoothing: antialiased;
   }
 
   button,
   input {
-    @apply rounded-none border border-white bg-black text-white outline-none;
+    border-radius: 0;
+    border: 1px solid var(--rule);
+    background: var(--void);
+    color: var(--ink);
+    font: inherit;
+    outline: none;
   }
+
+  button { cursor: pointer; }
+  button:disabled { cursor: default; opacity: .45; }
 
   button:focus-visible,
   input:focus-visible,
   summary:focus-visible {
-    @apply outline outline-2 outline-offset-2 outline-white;
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
   }
 }
+
+#app > main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  max-width: 430px;
+  margin: 0 auto;
+  padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+}
+
+/* Receiver: one reading at a time */
+.receiver {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--rule);
+}
+.receiver-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.receiver-ident { flex: 1; display: flex; align-items: baseline; gap: 12px; min-width: 0; white-space: nowrap; }
+.receiver-state { overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--dim); }
+.receiver-state b { font-weight: 400; color: var(--ink); letter-spacing: .06em; }
+/* Green is kept for one thing: the moment the receiver calls a signal alive. */
+.receiver-state[data-verdict='ALIVE'] b { color: var(--alive); text-shadow: 0 0 10px rgb(98 245 154 / .45); }
+.quiet-button { flex: none; min-height: 32px; padding: 2px 10px; font-size: 12px; color: var(--dim); }
+
+.reading {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px 64px;
+  overflow: hidden;
+  text-align: center;
+}
+.reading-meta { margin: 0; min-height: 1.4em; font-size: 10px; letter-spacing: .08em; color: var(--faint); }
+.reading-meta:empty { display: none; }
+.reading-text {
+  margin: 0;
+  font-size: clamp(24px, 8.5vw, 36px);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  color: var(--dim);
+}
+.reading-text:empty { display: none; }
+.reading-text[data-kind='intelligent'] { font-weight: 700; color: var(--ink); }
+.reading-text[data-live]::after { content: '\258C'; animation: cursor 1s steps(1, end) infinite; }
+.reading-hint { margin: 0; font-size: 14px; line-height: 1.5; color: var(--dim); }
+.reading-hint:empty { display: none; }
+
+@keyframes cursor {
+  50% { opacity: 0; }
+}
+
+/* Saved messages cover the reading while open. */
+.saved {
+  position: absolute;
+  inset: 45px 0 64px;
+  display: flex;
+  flex-direction: column;
+  background: var(--void);
+}
+.saved[hidden] { display: none; }
+.saved-title { flex: none; margin: 0; padding: 10px 12px 6px; font-size: 10px; letter-spacing: .08em; color: var(--faint); }
+.saved-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0 12px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.saved-list > :first-child { margin-top: auto; }
+.saved-list time { display: block; font-size: 10px; color: var(--faint); }
+.saved-list p { margin: 2px 0 0; font-size: 17px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; }
+.saved-toggle {
+  position: absolute; left: 10px; bottom: 10px; height: 44px;
+  padding: 0 12px; font-size: 12px; color: var(--dim);
+}
+.saved-toggle[hidden] { display: none; }
+.saved-toggle[aria-expanded=true] { color: var(--ink); border-color: var(--ink); }
+
+.mic-toggle {
+  position: absolute; right: 10px; bottom: 10px; width: 44px; height: 44px;
+  padding: 0; display: grid; place-items: center; color: var(--dim);
+}
+.mic-toggle[data-active=true] { color: var(--ink); border-color: var(--ink); }
+.mic-toggle[data-active=true] .mic-off-cross { display: none; }
+.mic-toggle[data-active=true]::after {
+  content: ''; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--on-air);
+}
+
+/* Contact */
+.contact { min-width: 0; }
+/* The send button sits inside the message box, in the same spot and size as
+   the microphone button inside the log above. */
+.compose { position: relative; min-width: 0; border: 1px solid var(--rule); }
+.compose:focus-within { border-color: var(--ink); }
+#prompt { display: block; width: 100%; height: 62px; padding: 0 64px 0 12px; border: 0; font-size: 17px; }
+#prompt:focus-visible { outline: none; }
+#prompt::placeholder { color: var(--faint); }
+#prompt:disabled { background: transparent; opacity: 1; }
+#send {
+  position: absolute; right: 10px; top: 50%; width: 44px; height: 44px; margin-top: -22px;
+  padding: 0; display: grid; place-items: center; border-color: var(--ink);
+}
+.debug-signals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .reading-text[data-live]::after { animation: none; }
+}
+
+/* Notices over the whole page, in the panels' style: the welcome for a
+   first visit and, above it, the out-of-order notice. */
+.notice {
+  position: fixed; inset: 0; z-index: 10; display: grid; place-items: center;
+  padding: 24px; background: rgb(0 0 0 / .85);
+}
+.notice[hidden] { display: none; }
+.out-of-order { z-index: 11; }
+.notice-box {
+  display: grid; gap: 12px; width: 100%; max-width: 360px; padding: 20px;
+  border: 1px solid var(--ink); background: var(--void);
+}
+.notice-title { margin: 0; font-size: 20px; color: var(--ink); }
+.notice-text { margin: 0; font-size: 14px; line-height: 1.5; color: var(--dim); }
+.notice-button { justify-self: end; min-width: 88px; min-height: 44px; margin-top: 4px; border-color: var(--ink); }
+
+/* Debug panel, below the visitor layout. While it is open the page scrolls. */
+.debug-panel {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  max-width: 430px;
+  margin: 0 auto;
+  padding: 12px 12px max(24px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--rule);
+}
+.debug-panel[hidden] { display: none; }
+.debug-line { min-height: 1.5em; margin: 0; font-size: 12px; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; }
+.debug-button { min-height: 44px; padding: 4px 12px; font-size: 13px; }
+.debug-signals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.debug-check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--dim); }
+.debug-field { display: grid; gap: 4px; font-size: 13px; color: var(--dim); }
+.debug-field input { min-height: 44px; padding: 0 10px; font-size: 15px; }
 
 .record-checkbox-mark {
   display: inline-flex;
@@ -32,92 +221,10 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  border: 1px solid white;
-  background: black;
-  color: white;
+  border: 1px solid var(--ink);
+  color: var(--ink);
 }
+.record-checkbox-mark svg { visibility: hidden; }
+#recordDiagnostic:checked + .record-checkbox-mark svg { visibility: visible; }
+#recordDiagnostic:focus-visible + .record-checkbox-mark { outline: 2px solid var(--ink); outline-offset: 2px; }
 
-.record-checkbox-mark svg {
-  visibility: hidden;
-}
-
-#recordDiagnostic:checked + .record-checkbox-mark svg {
-  visibility: visible;
-}
-
-#recordDiagnostic:focus-visible + .record-checkbox-mark {
-  outline: 2px solid white;
-  outline-offset: 2px;
-}
-
-.play-loading {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 1em;
-}
-
-.play-loading span {
-  width: 7px;
-  height: 7px;
-  background: currentColor;
-  opacity: 0;
-  animation: play-loading-first 2.4s steps(1, end) infinite;
-}
-
-.play-loading span:nth-child(2) { animation-name: play-loading-second; }
-.play-loading span:nth-child(3) { animation-name: play-loading-third; }
-
-@keyframes play-loading-first {
-  0%, 74.99% { opacity: 1; }
-  75%, 100% { opacity: 0; }
-}
-
-@keyframes play-loading-second {
-  0%, 24.99% { opacity: 0; }
-  25%, 74.99% { opacity: 1; }
-  75%, 100% { opacity: 0; }
-}
-
-@keyframes play-loading-third {
-  0%, 49.99% { opacity: 0; }
-  50%, 74.99% { opacity: 1; }
-  75%, 100% { opacity: 0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .play-loading span { animation: none; opacity: 1; }
-}
-
-/* The exhibition receiver fits the phone viewport, including its safe areas. */
-html, body, #app { height: 100dvh; min-height: 0; overflow: hidden; }
-#app > main {
-  height: 100dvh;
-  min-height: 0;
-  max-width: 430px;
-  padding-top: max(12px, env(safe-area-inset-top));
-  padding-bottom: max(12px, env(safe-area-inset-bottom));
-}
-#app > main > section:first-child { min-height: 0; }
-#app > main > section:first-child > div:nth-child(2) { min-height: 0; padding-top: 12px; padding-bottom: 12px; }
-#message { font-size: clamp(24px, 9vw, 44px); }
-@media (max-height: 620px) {
-  #app > main { gap: 8px; padding: 8px 12px; }
-  #app > main > section:last-child { gap: 8px; }
-  #mic { min-height: 42px; font-size: 14px; }
-  #contactForm { gap: 8px; padding: 8px; }
-  #prompt, #send, #playSignal { min-height: 36px; }
-}
-
-#app > main > section:first-child { position: relative; }
-.mic-toggle {
-  position: absolute; right: 10px; bottom: 10px; width: 42px; height: 42px;
-  min-height: 42px; padding: 0; display: grid; place-items: center;
-}
-.mic-toggle[data-active=true] .mic-off-cross { display: none; }
-#app > main > section:first-child > div:nth-child(2) { padding-bottom: 58px; }
-
-/* Diagnostics retain scrolling for connection settings and recording controls. */
-html:has(body.debug-ui), body.debug-ui, body.debug-ui #app { height: auto; min-height: 100%; overflow: auto; }
-body.debug-ui #app > main { height: auto; min-height: 100dvh; max-width: 36rem; }

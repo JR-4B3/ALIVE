@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 // Near-ultrasound chirp alphabet. Mirrors web/src/audio/beacon.ts, and
-// `bun run verify:beacon` checks both produce identical samples.
+// `bun test` checks both produce identical samples.
 namespace beacon {
 constexpr uint32_t rate = 48000;
 constexpr uint32_t frames = 17280; // 360 ms, with smooth attack and release.
