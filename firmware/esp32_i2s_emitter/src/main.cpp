@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -33,6 +34,9 @@ constexpr uint32_t RESTART_AFTER_MS = 600000;
 // A later arrival is dropped, since another board may already be playing.
 constexpr uint32_t DELIVERY_MS = 4000;
 constexpr uint32_t WATCHDOG_S = 30;
+// While the API does not answer, the board looks this often for a debug host
+// on its network (python3 debug_host.py), which runs the API without the T480.
+constexpr uint32_t DISCOVERY_MS = 10000;
 static_assert(SAMPLE_RATE == beacon::rate, "The chirp tables assume 48 kHz");
 
 // A network may name its own API URL, such as the laptop hotspot's
@@ -74,7 +78,12 @@ uint32_t lastPollAt = 0;
 uint32_t lastHealthyAt = 0;
 uint32_t wifiJoinStartedAt = 0;
 uint32_t nextOfflineSignalAt = 0;
+uint32_t lastDiscoveryAt = 0;
 bool offline = false;
+bool serverReachable = false;
+// A debug host's API found over mDNS, such as "http://192.168.178.32:8765".
+// While set, the board polls it instead of its usual API.
+String debugServer;
 // This board's offline clock: channel, period, and tick count.
 int clockSymbol = 0;
 uint32_t clockPeriodMs = 1000, clockTicks = 8;
@@ -257,9 +266,25 @@ void setupWifi() {
   joinWifi();
 }
 
+// A debug host announces its API as the mDNS service _alive-api._tcp. The
+// lookup blocks for up to 3 seconds, so it runs only while the API is away.
+void discoverDebugHost() {
+  lastDiscoveryAt = millis();
+  static bool mdnsStarted = false;
+  if (!mdnsStarted) {
+    String name = "alive-" + WiFi.macAddress();
+    name.replace(":", "");
+    mdnsStarted = MDNS.begin(name.c_str());
+    if (!mdnsStarted) return;
+  }
+  if (MDNS.queryService("alive-api", "tcp") <= 0) return;
+  debugServer = "http://" + MDNS.IP(0).toString() + ":" + String(MDNS.port(0));
+  Serial.printf("Found a debug host at %s\n", debugServer.c_str());
+}
+
 void pollForMessage() {
-  static bool serverReachable = false;
-  const char *localServer = currentNetwork >= 0 ? NETWORKS[currentNetwork].server : nullptr;
+  const char *localServer = !debugServer.isEmpty() ? debugServer.c_str()
+                            : currentNetwork >= 0 ? NETWORKS[currentNetwork].server : nullptr;
   WiFiClient &client = localServer ? localPollClient : static_cast<WiFiClient &>(pollClient);
   pollClient.setHandshakeTimeout(8);
 #ifdef ALIVE_SERVER_CA_CERT
@@ -320,6 +345,8 @@ void pollForMessage() {
     }
   } else {
     serverReachable = false;
+    // A debug host that stopped answering is gone; go back to the usual API.
+    debugServer = "";
     char tlsError[128] = {};
     const int tlsCode = localServer ? 0 : pollClient.lastError(tlsError, sizeof(tlsError));
     Serial.printf("Poll failed: HTTP %d (%s), TLS %d (%s)\n", status,
@@ -343,7 +370,8 @@ void setup() {
   clockSymbol = random(27);
   clockPeriodMs = random(900, 1601);
   clockTicks = random(6, 13);
-  Serial.println("ALIVE ultrasound emitter ready");
+  // The build time tells this firmware apart from older builds on a board.
+  Serial.println("ALIVE ultrasound emitter ready, built " __DATE__ " " __TIME__);
 }
 
 void loop() {
@@ -371,7 +399,11 @@ void loop() {
   if (joinTimedOut || noRoute) {
     if (noRoute) Serial.printf("No API reply over %s; trying another network\n", NETWORKS[currentNetwork].ssid);
     if (currentNetwork >= 0) failedNetworks |= 1u << currentNetwork;
+    debugServer = "";
     joinWifi();
+  } else if (WiFi.status() == WL_CONNECTED && !serverReachable && debugServer.isEmpty() &&
+             millis() - lastDiscoveryAt >= DISCOVERY_MS) {
+    discoverDebugHost();
   } else if (WiFi.status() == WL_CONNECTED && millis() - lastPollAt >= POLL_MS) {
     lastPollAt = millis();
     pollForMessage();

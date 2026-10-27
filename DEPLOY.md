@@ -80,7 +80,8 @@ Each letter is a 360 ms chirp that falls by 48 Hz around its own center frequenc
 Run these from a checkout on the MacBook (or any computer with Python 3.9 or newer). The first run fetches the operator token and OpenAI key from the T480 over `ssh t480` and keeps them in `~/.config/alive/`; `sudo deploy/install.sh` on the T480 puts them where that fetch looks. Each command prints the page URL, a QR code, the API, the units and their networks, and the other options.
 
 - `python3 debug_host.py -sim` needs no unit. The API runs inside the script, and the computer plays every signal through its speakers, so a phone held near it receives noise, clocks, and messages, and can answer. Turn the volume up. `--volume` sets the level; `--no-speaker` leaves the sound to **Simulate a unit on this page** in the Debug panel.
-- `python3 debug_host.py` uses the real units through the API on the T480 and lists each unit's role and network as they change.
+- `python3 debug_host.py` uses the real units through the API on the T480 and lists each unit's role and network as they change. If neither the T480's public address nor its hotspot address `http://10.42.7.1:8765` answers, the API runs inside the script instead, on port 8765, and the computer announces it over mDNS as `_alive-api._tcp`. Boards on the same Wi-Fi as the computer look for that announcement every 10 seconds while their usual API does not answer, and poll the computer until it stops answering. They need firmware built after this change and a network from their list that the computer shares, such as a phone hotspot both are on. Replies need an OpenAI key on the computer, and the visitor page still needs the T480, so use the debug page.
+- `python3 debug_host.py -local` runs the API on the computer even when the T480 answers.
 - Add `--manual` to either one to stop random signals; units then play only what you send from the Debug panel. Without `-sim` it turns random signals back on when it stops.
 - `python3 debug_host.py -kill` stops every running copy.
 
@@ -107,7 +108,7 @@ A board joins the first listed network it can see. Each poll reports the network
 
 Visitors' phones use mobile data and never join these networks.
 
-When eduroam drops, the boards lose the API after a minute and play signals on their own (see [How the units behave](#how-the-units-behave)). The visitor page checks every 30 seconds whether the API answers and at least one board polls it. While either fails, the message box reads "Currently out of order :(" and cannot send. The page also checks again right after a message fails to send. It switches back by itself.
+When eduroam drops, the boards lose the API after a minute and play signals on their own (see [How the units behave](#how-the-units-behave)). The visitor page checks every 30 seconds whether the API answers and at least one board polls it. When either has failed for a minute, a notice reading "Currently out of order :(" covers the page. Visitors cannot close it, and it disappears once the API answers and a board polls it again. The page also checks again right after a message fails to send. The debug page never shows the notice, so testing continues while the API is down.
 
 ## Measure battery runtime
 

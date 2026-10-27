@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Start an ALIVE test from this computer, such as the MacBook at the venue.
 
-    python3 debug_host.py         # your real units, through the API on the T480
+    python3 debug_host.py         # your real units, through the API on the T480,
+                                  # or on this computer when the T480 does not answer
+    python3 debug_host.py -local # your real units, through an API on this computer
     python3 debug_host.py -sim   # no unit: this computer plays the signals
     python3 debug_host.py -kill   # stop every running debug host
 
@@ -40,6 +42,8 @@ DEBUG_APP_DIR = ROOT / "docs" / "debug"
 DEBUG_APP = DEBUG_APP_DIR / "index.html"
 SERVER_API = os.environ.get("ALIVE_API_URL", "https://t480.tail688a7b.ts.net")
 VISITOR_PAGE = "https://jr-4b3.github.io/ALIVE/"
+# The API on the T480 as seen from its own hotspot, ALIVE-T480.
+HOTSPOT_API = "http://10.42.7.1:8765"
 # The T480 runs the API, at the venue during the show. Secrets missing here are fetched from it once
 # over SSH and kept in CONFIG_DIR, readable only by this user.
 SERVER_SSH = os.environ.get("ALIVE_SERVER_SSH", "t480")
@@ -48,6 +52,10 @@ SECRETS_H = ROOT / "firmware" / "esp32_i2s_emitter" / "include" / "secrets.h"
 MAX_REQUEST_BYTES = 12_000_000
 # A locally administered MAC address, so it never matches a real board.
 SPEAKER_BOARD = "02:A1:1E:00:00:02"
+# Without the T480, boards on this computer's network poll the API here. They
+# find it through this mDNS service, which the firmware looks up.
+BOARD_API_PORT = 8765
+BOARD_API_SERVICE = "_alive-api._tcp"
 
 
 def running_debug_hosts() -> set[int]:
@@ -349,10 +357,11 @@ def run_speaker_unit(api: str, player: list[str], amplitude: int, stop: threadin
         stop.wait(2)
 
 
-def start_local_api(manual: bool) -> tuple[str, str]:
-    """Run the API in this process on a free local port. Returns its URL and
-    a note on replies."""
-    # The local API takes no tokens; this script is its only caller.
+def start_local_api(manual: bool, host: str = "127.0.0.1", port: int = 0) -> tuple[str, str]:
+    """Run the API in this process, by default on a free loopback port. Returns
+    its URL and a note on replies."""
+    # The local API takes no tokens. On loopback this script is its only
+    # caller; on the network it is a test API for boards and needs none either.
     for name in ("ALIVE_WEB_TOKEN", "ALIVE_DEVICE_TOKEN", "ALIVE_WEB_ORIGIN", "ALIVE_NOTIFY_URL"):
         os.environ.pop(name, None)
     os.environ["ALIVE_PUBLIC_DEMO"] = "1"
@@ -367,11 +376,20 @@ def start_local_api(manual: bool) -> tuple[str, str]:
     state = emitter.ApiState(startup_silence=0)
     if manual:
         state.set_random_signals(False)
-    server = emitter.QuietThreadingHTTPServer(("127.0.0.1", 0), emitter.make_handler(state))
+    server = emitter.QuietThreadingHTTPServer((host, port), emitter.make_handler(state))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     replies = (f"on (OpenAI key from {source})" if key else
                f"off: no OpenAI key in $OPENAI_API_KEY, ~/.config/alive/openai-key, or on {SERVER_SSH}")
     return f"http://127.0.0.1:{server.server_address[1]}", replies
+
+
+def advertise_board_api(port: int) -> subprocess.Popen | None:
+    """Announce the API to boards on this network over mDNS until stopped."""
+    for command in (["dns-sd", "-R", "ALIVE API", BOARD_API_SERVICE, "local", str(port)],
+                    ["avahi-publish-service", "ALIVE API", BOARD_API_SERVICE, str(port)]):
+        if shutil.which(command[0]):
+            return subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return None
 
 
 def board_lines(status: dict) -> list[str]:
@@ -405,16 +423,21 @@ def watch_units(api: str, token: str, stop: threading.Event) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Start an ALIVE test: the debug page for a phone, plus either a unit played by "
-                    "this computer (-sim) or, by default, the real units through the API on the T480.")
+                    "this computer (-sim) or, by default, the real units through the API on the T480. "
+                    "When the T480 does not answer, or with -local, the API runs on this computer.")
     parser.add_argument("-sim", "--sim", action="store_true",
                         help="no unit needed: run the API here and play the signals through this computer")
+    parser.add_argument("-local", "--local", action="store_true",
+                        help="real units without the T480: run the API here for boards on this network")
     parser.add_argument("--manual", action="store_true",
                         help="no random signals; units play only what you send from the Debug panel")
     parser.add_argument("--volume", type=int, default=60, metavar="0-100",
                         help="-sim: loudness of the signals from this computer (default: %(default)s)")
     parser.add_argument("--no-speaker", action="store_true",
                         help="-sim: do not play through this computer; use 'Simulate a unit on this page' instead")
-    parser.add_argument("--api", default=SERVER_API, help="without -sim: API the units poll (default: %(default)s)")
+    parser.add_argument("--api", default=SERVER_API,
+                        help="without -sim or -local: API the units poll; if it does not answer, the API "
+                             "runs here as with -local (default: %(default)s)")
     parser.add_argument("--port", type=int, default=8443)
     parser.add_argument("--http", action="store_true",
                         help="serve plain HTTP; phone microphones usually need HTTPS")
@@ -431,6 +454,22 @@ def main() -> int:
     stop = threading.Event()
     lines: list[str] = []
     restore_random = False
+    advertiser: subprocess.Popen | None = None
+    unreachable = ""
+    if not args.sim and not args.local:
+        try:
+            api_request(args.api, "/healthz", timeout=8)
+        except (OSError, ValueError) as exc:
+            unreachable = str(exc)
+        # On the T480's hotspot its public address refuses this computer too,
+        # so try the T480 directly before running the API here.
+        if unreachable and args.api == SERVER_API:
+            try:
+                api_request(HOTSPOT_API, "/healthz", timeout=3)
+                args.api, unreachable = HOTSPOT_API, ""
+            except (OSError, ValueError):
+                pass
+    local_api = not args.sim and bool(args.local or unreachable)
     if args.sim:
         api, replies = start_local_api(args.manual)
         token = ""
@@ -447,15 +486,32 @@ def main() -> int:
         else:
             lines += ["Sound:    nothing plays here" + ("" if args.no_speaker else " (no afplay, pw-play, paplay, or aplay)")
                       + ". On the page, tap Debug and tick 'Simulate a unit on this page'."]
+    elif local_api:
+        try:
+            api, replies = start_local_api(args.manual, "0.0.0.0", BOARD_API_PORT)
+        except OSError as error:
+            if error.errno != errno.EADDRINUSE:
+                raise
+            print(f"Port {BOARD_API_PORT} is in use. A debug host or emitter.py may already run; stop the "
+                  "debug host with 'python3 debug_host.py -kill'.", file=sys.stderr)
+            return 1
+        token = ""
+        advertiser = advertise_board_api(BOARD_API_PORT)
+        board_url = f"http://{local_ip()}:{BOARD_API_PORT}"
+        lines += ["Mode:     the real units, with the API on this computer"
+                  + ("" if args.local else f" because {args.api} does not answer ({unreachable})")]
+        lines += [f"API:      {board_url}, inside this script. Replies: {replies}"]
+        lines += ["Boards:   " + (f"they find it over mDNS ({BOARD_API_SERVICE}) when they share this "
+                                  "computer's Wi-Fi" if advertiser else
+                                  "not announced (no dns-sd or avahi-publish-service); boards will not find it"),
+                  "          and run firmware with that lookup. They switch to it within about 10 seconds",
+                  "          of losing their usual API. macOS may ask to allow incoming connections; allow them."]
+        threading.Thread(target=watch_units, args=(api, token, stop), daemon=True).start()
     else:
         api = args.api
         token, source = load_secret("ALIVE_WEB_TOKEN", "operator-token", "cat ~/.config/alive/operator-token")
-        lines += ["Mode:     the real units (add -sim to test without one)",
+        lines += ["Mode:     the real units (add -sim to test without one, -local to run the API here)",
                   f"API:      {api}"]
-        try:
-            api_request(api, "/healthz", timeout=8)
-        except (OSError, ValueError) as exc:
-            lines += [f"          not reachable ({exc}). Is the T480 on and online (eduroam)?"]
         if token:
             lines += [f"Token:    operator token from {source}; the page needs nothing pasted"]
             try:
@@ -470,16 +526,24 @@ def main() -> int:
             lines += ["Token:    not found. Signal buttons, status, and reset will fail.",
                       f"          On the T480 run 'sudo deploy/install.sh' once; it saves the token where this "
                       f"script fetches it over 'ssh {SERVER_SSH}'. Or put it in ~/.config/alive/operator-token."]
+    if not args.sim:
         networks = firmware_networks()
-        lines += [
-            "Networks: units need internet over Wi-Fi, nothing else. They join the first network of",
-            "          their firmware list that is in range"
-            + (f": {' > '.join(networks)}." if networks else " (secrets.h, not in this checkout)."),
-            "          At HfK that is the T480's hotspot (sudo deploy/laptop-hotspot.sh status on the T480).",
-            "          If it fails, turn on your phone hotspot with Maximize Compatibility; units switch",
-            "          to it within about a minute. 'Units' above lists each unit's network.",
-            f"Visitors: {VISITOR_PAGE} works on any phone with mobile data.",
-        ]
+        listed = f": {' > '.join(networks)}." if networks else " (secrets.h, not in this checkout)."
+        if local_api:
+            lines += [
+                "Networks: units must be on this computer's Wi-Fi. They join the first network of their",
+                "          firmware list that is in range" + listed,
+                f"Visitors: {VISITOR_PAGE} needs the T480; use the page above instead.",
+            ]
+        else:
+            lines += [
+                "Networks: units need internet over Wi-Fi, nothing else. They join the first network of",
+                "          their firmware list that is in range" + listed,
+                "          At HfK that is the T480's hotspot (sudo deploy/laptop-hotspot.sh status on the T480).",
+                "          If it fails, turn on your phone hotspot with Maximize Compatibility; units switch",
+                "          to it within about a minute. 'Units' above lists each unit's network.",
+                f"Visitors: {VISITOR_PAGE} works on any phone with mobile data.",
+            ]
 
     ip = local_ip()
     try:
@@ -505,7 +569,7 @@ def main() -> int:
     if https_active:
         print("          The phone shows a certificate warning once; accept it.")
     print("          Tap Debug for signal buttons, board roles, and 'reset to the first state'.")
-    print("Other:    python3 debug_host.py [-sim]   ·   --help for all options   ·   -kill to stop")
+    print("Other:    python3 debug_host.py [-sim | -local]   ·   --help for all options   ·   -kill to stop")
     try:
         print(terminal_qr(url))
     except Exception:
@@ -519,6 +583,8 @@ def main() -> int:
     finally:
         stop.set()
         server.server_close()
+        if advertiser:
+            advertiser.terminate()
         if restore_random:
             set_random_signals(api, token, True)
     return 0
