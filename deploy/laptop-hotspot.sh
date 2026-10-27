@@ -33,8 +33,14 @@ UNIT=/etc/systemd/system/alive-hotspot.service
 
 [[ $EUID -eq 0 ]] || { echo "Run with sudo." >&2; exit 1; }
 
+# hostapd writes its pid file only with -B, so look for the process instead.
+hostapd_pid() {
+  pgrep -o -f "hostapd .*$RUN/hostapd.conf" || true
+}
+
 stop() {
-  [[ -f $RUN/hostapd.pid ]] && kill "$(cat "$RUN/hostapd.pid")" 2>/dev/null || true
+  pid=$(hostapd_pid)
+  [[ -n $pid ]] && kill "$pid" 2>/dev/null || true
   iw dev "$AP" del 2>/dev/null || true
   rm -f "$NETWORK_FILE"
   rm -rf "$RUN"
@@ -43,7 +49,7 @@ stop() {
 }
 
 status() {
-  if [[ -f $RUN/hostapd.pid ]] && kill -0 "$(cat "$RUN/hostapd.pid")" 2>/dev/null; then
+  if [[ -n $(hostapd_pid) ]]; then
     echo "Hotspot $SSID is running on $AP."
     iw dev "$AP" info | grep -E 'channel|ssid' || true
     echo "Connected boards: $(iw dev "$AP" station dump | grep -c "^Station" || true)"
