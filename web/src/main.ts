@@ -39,7 +39,7 @@ app.innerHTML = `
       <div class="reading" aria-live="polite">
         <p id="readingMeta" class="reading-meta"></p>
         <p id="readingText" class="reading-text"></p>
-        <p id="readingHint" class="reading-hint">Tap the microphone, then hold your phone toward the units.</p>
+        <p id="readingHint" class="reading-hint">Tap the microphone, then hold your phone toward the installation.</p>
       </div>
       <div id="saved" class="saved" hidden>
         <p class="saved-title">Saved messages</p>
@@ -70,7 +70,7 @@ app.innerHTML = `
   <div id="intro" class="notice" role="dialog" aria-modal="true" aria-labelledby="introTitle" hidden>
     <div class="notice-box">
       <p id="introTitle" class="notice-title">Anybody Listening?</p>
-      <p class="notice-text">The units around you send signals too high for most ears to hear. Tap the microphone and hold your phone toward them. Your phone turns what it hears into text.</p>
+      <p class="notice-text">This installation sends signals too high for most ears to hear. Tap the microphone and hold your phone toward it. Your phone turns what it hears into text.</p>
       <p class="notice-text">Most of it is noise. When the status at the top turns green and reads ALIVE, someone is out there. Write back in the box at the bottom.</p>
       <button id="introClose" type="button" class="notice-button" disabled>OK</button>
     </div>
@@ -78,7 +78,7 @@ app.innerHTML = `
   <div id="outOfOrder" class="notice out-of-order" role="alertdialog" aria-modal="true" aria-labelledby="outOfOrderTitle" hidden>
     <div class="notice-box">
       <p id="outOfOrderTitle" class="notice-title">Currently out of order :(</p>
-      <p class="notice-text">The units cannot answer right now. This page carries on by itself once they are back.</p>
+      <p class="notice-text">Nothing can answer right now. This page carries on by itself once the connection is back.</p>
     </div>
   </div>`}
   ${DEBUG_UI ? `
@@ -651,7 +651,7 @@ function renderReading(live: Reception | null): void {
   refs.readingText.toggleAttribute('data-live', Boolean(live));
   if (refs.readingMeta.textContent !== meta) refs.readingMeta.textContent = meta;
   const hint = shown ? '' : listening() ? 'Listening. Signals appear here as they arrive.'
-    : micError || 'Tap the microphone, then hold your phone toward the units.';
+    : micError || 'Tap the microphone, then hold your phone toward the installation.';
   if (refs.readingHint.textContent !== hint) refs.readingHint.textContent = hint;
 }
 
