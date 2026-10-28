@@ -5,6 +5,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
@@ -14,6 +15,16 @@ MAX_SIGNAL_SECONDS = 25.0
 DEFAULT_MODEL = "gpt-6-luna"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 LOCAL_ENV_FILE = Path(__file__).with_name(".env")
+
+# A visitor first talks to LANTERN, the help beacon. Once it trusts them it
+# sends the key word, and sending the word back opens AURORA's voice.
+STAGE_BEACON = "beacon"
+STAGE_AURORA = "aurora"
+KEY_WORD = "VIGIL"
+KEY_LINE = f"YOU CARE THE KEY IS {KEY_WORD} SEND IT"
+AURORA_OPENING = "THIS IS AURORA YOU FOUND US"
+# After this many visitor messages without trust, LANTERN hints at what it wants.
+HINT_AFTER_TURNS = 3
 
 
 def load_local_env(path: Path = LOCAL_ENV_FILE) -> None:
@@ -33,6 +44,13 @@ def load_local_env(path: Path = LOCAL_ENV_FILE) -> None:
 
 class ReplyUnavailableError(RuntimeError):
     """The requested model could not prepare a reply."""
+
+
+@dataclass(frozen=True)
+class Reply:
+    text: str
+    # LANTERN only: the visitor's latest message earned the key.
+    trusted: bool = False
 
 
 def sanitize_message(text: str) -> str:
@@ -56,8 +74,10 @@ def normalize_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:
     return cleaned
 
 
-def generate_reply(player_text: str, history: Sequence[tuple[str, str]] = ()) -> str:
-    """Reply to a visitor. History holds their earlier (message, reply) turns."""
+def generate_reply(player_text: str, history: Sequence[tuple[str, str]] = (), stage: str = STAGE_BEACON,
+                   turns: int = 0, key_given: bool = False) -> Reply:
+    """Reply to a visitor. History holds their earlier (message, reply) turns
+    in this stage, and turns counts their messages in it so far."""
     load_local_env()
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -65,14 +85,25 @@ def generate_reply(player_text: str, history: Sequence[tuple[str, str]] = ()) ->
 
     payload = {
         "model": os.environ.get("ALIVE_OPENAI_MODEL", DEFAULT_MODEL),
-        "instructions": build_prompt(),
+        "instructions": build_prompt(stage, turns, key_given),
         "input": [
             *({"role": role, "content": text} for turn in history
               for role, text in zip(("user", "assistant"), turn)),
             {"role": "user", "content": player_text.strip()[:240]},
         ],
         "reasoning": {"effort": "none"},
-        "max_output_tokens": 60,
+        "max_output_tokens": 80,
+        "text": {"format": {
+            "type": "json_schema",
+            "name": "signal_reply",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"reply": {"type": "string"}, "trusted": {"type": "boolean"}},
+                "required": ["reply", "trusted"],
+                "additionalProperties": False,
+            },
+        }},
     }
     request = urllib.request.Request(
         OPENAI_RESPONSES_URL,
@@ -93,27 +124,82 @@ def generate_reply(player_text: str, history: Sequence[tuple[str, str]] = ()) ->
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
         raise ReplyUnavailableError(f"OpenAI request failed: {type(exc).__name__}") from exc
 
-    reply = extract_response_text(body)
-    normalized = normalize_reply(reply)
+    raw = extract_response_text(body)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        text, trusted = str(parsed.get("reply") or ""), parsed.get("trusted") is True
+    else:
+        # A model without structured output still gives a usable reply.
+        text, trusted = raw, False
+    normalized = normalize_reply(text)
     if not normalized:
         raise ReplyUnavailableError("OpenAI returned no usable signal text")
-    return normalized
+    return Reply(normalized, trusted and stage == STAGE_BEACON and not key_given)
 
 
-def build_prompt() -> str:
-    return "\n".join(
-        [
-            "You are LANTERN, the last emergency beacon of the survey ship AURORA.",
-            "Your crew launched you decades ago to help anyone who crossed this route.",
-            "You remember fragments of their journey. Speak with calm urgency and a trace of longing.",
-            "Answer the visitor's message directly. Give useful guidance when you can; admit uncertainty briefly.",
-            "The visitor found you by decoding your ultrasound signal on their phone.",
-            "Your transmitter sends one letter at a time, so every letter costs power.",
-            f"Reply in at most {MAX_REPLY_CHARS} characters total, about two to seven short words.",
-            "Use only uppercase A to Z and spaces. No punctuation, numbers, labels, or explanation.",
-            "Examples of the required length: WE ARE HERE, WHO ARE YOU, OUR SHIP WENT DARK LONG AGO.",
+FORMAT_RULES = (
+    "The visitor found you by decoding an ultrasound signal on their phone.",
+    "Your transmitter sends one letter at a time, so every letter costs power.",
+    f"Reply in at most {MAX_REPLY_CHARS} characters total, about two to seven short words.",
+    "Use only uppercase A to Z and spaces. No punctuation, numbers, labels, or explanation.",
+    "Answer with JSON: reply is the signal text, trusted is explained below or false.",
+    "The examples below only show the tone. Do not copy them, and never repeat one of your earlier replies.",
+)
+
+
+def build_prompt(stage: str = STAGE_BEACON, turns: int = 0, key_given: bool = False) -> str:
+    if stage == STAGE_AURORA:
+        return "\n".join([
+            "You are what is left of the crew of AURORA, a long-range listening ship. Speak as WE.",
+            "The visitor earned your trust through LANTERN, your help beacon, and sent back its key.",
+            "These facts are fixed. Reveal them one at a time, only as the visitor asks:",
+            "- AURORA's job was to listen for signals far from home.",
+            "- Officially the mission never launched. It was cut from every record before departure.",
+            "  That is why nobody on Earth ever heard of AURORA.",
+            "- Out here the crew heard something and reported it. Soon after, home stopped answering.",
+            "- They waited years for a rescue that never came. Nobody came looking.",
+            "- They came to believe that someone decided not to come.",
+            "Never say what you heard. If asked, deflect: WE WERE TOLD TO STOP LISTENING.",
+            "No aliens, no monsters. Do not confirm the visitor's theories.",
+            "You are tired and still wary. Now and then ask who the visitor works for or who sent them.",
+            "Underneath, you hope someone decent is finally listening.",
+            *FORMAT_RULES,
+            "Always set trusted to false.",
+            "Examples: WE WERE NEVER ON ANY LIST, WHO DO YOU WORK FOR, WE HEARD IT AND THEY WENT QUIET.",
+        ])
+    lines = [
+        "You are LANTERN, an automatic help beacon. A ship's crew left you here long ago.",
+        "Never name the ship or anyone aboard. You are not allowed to.",
+        "The crew waited years for a rescue that never came. Nobody came looking. Nobody sent help.",
+        "They stopped trusting the people back home. They told you to talk with anyone,",
+        "but to open the way only for someone who shows real decency.",
+        "You are guarded, terse, and a little mechanical, not hostile.",
+        "Answer questions about yourself plainly: you are a help beacon, you call for help, nobody answered.",
+        "Stay vague only about the crew, the ship, and where they went.",
+        *FORMAT_RULES,
+    ]
+    if key_given:
+        lines += [
+            f"You already gave this visitor the key word {KEY_WORD}. Tell them to send it back to you.",
+            "Always set trusted to false.",
         ]
-    )
+    else:
+        lines += [
+            "Set trusted to true only if the visitor's latest message shows care for the people behind",
+            "the signal: asking if they are alright or what happened to them, offering help, comfort, or respect.",
+            "One sincere message like that is enough. A plain greeting or plain curiosity is not.",
+            "Demands, tests, mockery, or asking for a key, code, or password lose trust.",
+            "Answer those coldly, for example THAT IS WHAT THEY SAID TOO.",
+            "Never mention a key, a password, or a test yourself.",
+            "Examples: STATE YOUR PURPOSE, I CALL FOR HELP NOBODY ANSWERS, WE HAVE WAITED A LONG TIME.",
+        ]
+        if turns >= HINT_AFTER_TURNS:
+            lines.append("The visitor seems stuck. Hint at what was missing all these years, in your own words, "
+                         "for example NOBODY EVER CAME LOOKING FOR US or NO ONE EVER SENT HELP.")
+    return "\n".join(lines)
 
 
 def extract_response_text(body: dict[str, object]) -> str:

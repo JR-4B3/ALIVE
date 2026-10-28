@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 import emitter
+from reply_engine import AURORA_OPENING, KEY_LINE, STAGE_AURORA, STAGE_BEACON, Reply
 from emitter import ApiState, QuietThreadingHTTPServer, make_handler
 from reply_engine import signal_duration_seconds
 from signals import chirp_samples, message_score, noise_score, score_seconds, score_wav
@@ -277,9 +278,9 @@ def test_public_visitor_reaches_the_model_only_after_hearing_a_signal(clock):
     base, stop = serve(state, environment)
     replies = []
 
-    def fake_reply(text, history):
+    def fake_reply(text, history, *story):
         replies.append((text, history))
-        return "WE ARE LANTERN"
+        return Reply("WE ARE LANTERN")
 
     try:
         with patch("emitter.generate_reply", fake_reply):
@@ -304,6 +305,43 @@ def test_public_visitor_reaches_the_model_only_after_hearing_a_signal(clock):
             assert replies[-1] == ("Who?", [("Are you there?", "WE ARE LANTERN")])
             assert http_error(lambda: request(base, "/api/emitter/main/play", method="POST"))[0] == 401
             assert http_error(lambda: request(base, "/api/emitter/main/current"))[0] == 401
+    finally:
+        stop()
+
+
+def test_lantern_sends_the_key_and_the_key_opens_aurora(clock):
+    state = started(ApiState(rng=random.Random(8)), clock)
+    environment = {"ALIVE_WEB_TOKEN": "operator-secret", "ALIVE_DEVICE_TOKEN": "device-secret",
+                   "ALIVE_WEB_ORIGIN": "https://site.example"}
+    base, stop = serve(state, environment)
+    calls = []
+    answers = iter([Reply("WHY DO YOU ASK"), Reply("THANK YOU", trusted=True),
+                    Reply("SEND THE WORD"), Reply("WE WERE NEVER ON ANY LIST")])
+
+    def fake_reply(text, history, stage, turns, key_given):
+        calls.append((text, stage, turns, key_given, list(history)))
+        return next(answers)
+
+    def send(message, **extra):
+        payload = {"session": "visitor-0002", "message": message, **extra}
+        with request(base, "/api/message", method="POST", payload=payload,
+                     token="operator-secret") as response:
+            reply = json.load(response)["reply"]
+        run(state, clock, 60)  # Let the board play it so the queue stays short.
+        return reply
+
+    try:
+        with patch("emitter.generate_reply", fake_reply):
+            heard = run(state, clock, 4)[0][2]["text"]
+            assert send("Who are you?", heard=heard) == "WHY DO YOU ASK"
+            assert send("Are you alright?") == KEY_LINE
+            assert send("What now?") == "SEND THE WORD"
+            assert calls[-1][1:4] == (STAGE_BEACON, 2, True)
+            # The key word opens AURORA without a model call.
+            assert send("vigil!") == AURORA_OPENING
+            assert len(calls) == 3
+            assert send("Where are you?") == "WE WERE NEVER ON ANY LIST"
+            assert calls[-1] == ("Where are you?", STAGE_AURORA, 1, True, [("vigil!", AURORA_OPENING)])
     finally:
         stop()
 
