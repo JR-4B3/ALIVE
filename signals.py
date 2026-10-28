@@ -3,7 +3,9 @@
 A sequence is a lead silence and a list of [symbol, gap after it in ms]. Every
 chirp lasts 360 ms (beacon_voice.h). Symbol -1 is the 18.2 kHz sync chirp,
 0-25 are A-Z and 26 is space. Only intelligent messages are framed by sync
-chirps; a phone treats any unframed chirp as noise or a clock.
+chirps; a phone treats any unframed chirp as noise or a clock. A sealed
+message opens with a third sync chirp, and its letters are swapped by a
+keyword alphabet that only phones holding the key can undo.
 """
 from __future__ import annotations
 
@@ -22,13 +24,28 @@ ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ "
 MIN_GAP_MS = 180
 
 
-def message_score(text: str) -> dict[str, object]:
+def message_score(text: str, sealed_with: str = "") -> dict[str, object]:
     """Two sync chirps, one chirp per character, and a closing sync chirp.
-    The timing matches reply_engine.signal_duration_seconds()."""
-    chirps = [[SYNC, 180], [SYNC, 280]]
-    chirps += [[ALPHABET.index(char), 180] for char in text if char in ALPHABET]
+    The timing matches reply_engine.signal_duration_seconds(). A sealed
+    message adds a third sync chirp and swaps its letters with the key."""
+    chirps = [[SYNC, 180], [SYNC, 180], [SYNC, 280]] if sealed_with else [[SYNC, 180], [SYNC, 280]]
+    sent = seal(text, sealed_with) if sealed_with else text
+    chirps += [[ALPHABET.index(char), 180] for char in sent if char in ALPHABET]
     chirps.append([SYNC, 760])
     return {"kind": "intelligent", "text": text, "leadMs": 150, "chirps": chirps}
+
+
+def cipher_alphabet(key: str) -> str:
+    """The key's letters without repeats, then the rest of A to Z. Each letter
+    maps on its own, so a letter the phone misses does not garble the rest.
+    web/src/sensing/seal.ts mirrors this."""
+    letters = ALPHABET[:26]
+    return "".join(dict.fromkeys(char for char in key.upper() + letters if char in letters))
+
+
+def seal(text: str, key: str) -> str:
+    cipher = cipher_alphabet(key)
+    return "".join(cipher[ALPHABET.index(char)] if "A" <= char <= "Z" else char for char in text)
 
 
 def noise_score(rng: random.Random) -> dict[str, object]:

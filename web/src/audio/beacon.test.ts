@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
-import { renderBeacon, renderChirps, BEACON_RATE, beaconDuration, type Chirp } from './beacon';
+import { renderBeacon, renderChirps, messageChirps, BEACON_RATE, beaconDuration, type Chirp } from './beacon';
+import { cipherAlphabet, unseal } from '../sensing/seal';
 import { BeaconDecoder } from '../sensing/beaconDecoder';
 
 function resample(input: Float32Array, rate: number): Float32Array {
@@ -150,4 +151,18 @@ int main(){silence(7200);pulse(-1);silence(8640);pulse(-1);silence(13440);for(ch
   let differences = 0;
   for (let i = 0; i < rendered.length; i++) if (rendered[i] * 32768 !== pcm.getInt16(i * 2, true)) differences++;
   expect(differences).toBe(0);
+});
+
+test('a third opening sync chirp marks a sealed message, and only the key opens it', () => {
+  const sealed = 'SDER ER VTQNQV';
+  const { log } = receptions(join(renderChirps(messageChirps(sealed, true), 150), pause(3),
+    renderBeacon('WE ARE HERE'), pause(3)));
+  expect(log).toEqual([
+    { kind: 'intelligent', text: sealed, sealed: true },
+    { kind: 'intelligent', text: 'WE ARE HERE' }
+  ]);
+  // signals.py seals with the same keyword alphabet.
+  expect(cipherAlphabet('VIGIL')).toBe('VIGLABCDEFHJKMNOPQRSTUWXYZ');
+  expect(unseal(sealed, 'VIGIL')).toBe('THIS IS AURORA');
+  expect(unseal(sealed, 'LANTERN')).not.toBe('THIS IS AURORA');
 });

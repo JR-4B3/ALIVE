@@ -24,6 +24,7 @@ export class BeaconDecoder {
   private burstEnd = 0;
   private firstSync: number | null = null;
   private locked = false;
+  private sealed = false;
   private text = '';
   private finalText = '';
   private lastLetterAt = -Infinity;
@@ -38,7 +39,7 @@ export class BeaconDecoder {
 
   reset(reason = 'decoded stream cleared'): TranslationSnapshot {
     this.fill = this.processed = this.evidence = this.quiet = this.peak = 0;
-    this.votes.clear(); this.firstSync = null; this.locked = false;
+    this.votes.clear(); this.firstSync = null; this.locked = this.sealed = false;
     this.text = this.finalText = ''; this.lastLetterAt = this.lastLetterStartAt = -Infinity;
     this.raw = []; this.rawEnd = 0; this.lastKind = null; this.completed = [];
     this.pair = '--'; this.stream = reason;
@@ -64,7 +65,7 @@ export class BeaconDecoder {
   }
 
   private live(): Reception | null {
-    if (this.locked) return { kind: 'intelligent', text: this.text };
+    if (this.locked) return this.message(this.text);
     if (!this.raw.length) return null;
     return { kind: this.rawKind(3), text: this.rawText() };
   }
@@ -124,10 +125,13 @@ export class BeaconDecoder {
     const duration = this.burstEnd - this.burstStart;
     if (winner !== undefined && this.evidence >= .10 && duration >= .14 && duration < .56) {
       if (winner === -1) {
-        if (this.locked) this.finishMessage();
+        // A third sync chirp right after the pair marks a sealed message.
+        if (this.locked && !this.text && !this.sealed && this.burstStart - this.lastLetterAt < .5) {
+          this.sealed = true; this.lastLetterAt = this.burstEnd; this.stream = 'sealed signal acquired';
+        } else if (this.locked) this.finishMessage();
         else if (this.firstSync !== null && this.burstStart - this.firstSync >= .38 && this.burstStart - this.firstSync < .72) {
           if (this.raw.length) this.finishRaw();
-          this.locked = true; this.text = ''; this.firstSync = null; this.lastLetterStartAt = -Infinity;
+          this.locked = true; this.sealed = false; this.text = ''; this.firstSync = null; this.lastLetterStartAt = -Infinity;
           this.lastLetterAt = this.burstEnd; this.stream = 'ultrasound signal acquired';
         } else this.firstSync = this.burstStart;
         this.pair = `${SYNC_HZ} Hz`;
@@ -151,7 +155,12 @@ export class BeaconDecoder {
   private finishMessage(): void {
     this.finalText = this.text.trim(); this.locked = false; this.firstSync = null;
     this.stream = 'message complete';
-    if (this.finalText) this.complete({ kind: 'intelligent', text: this.finalText });
+    if (this.finalText) this.complete(this.message(this.finalText));
+    this.sealed = false;
+  }
+
+  private message(text: string): Reception {
+    return this.sealed ? { kind: 'intelligent', text, sealed: true } : { kind: 'intelligent', text };
   }
 
   private finishRaw(): void {

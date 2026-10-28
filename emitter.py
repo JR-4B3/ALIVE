@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from reply_engine import (AURORA_OPENING, KEY_LINE, KEY_WORD, STAGE_AURORA, STAGE_BEACON,
+from reply_engine import (AURORA_OPENING, KEY_WORD, STAGE_AURORA, STAGE_BEACON,
                           ReplyUnavailableError, generate_reply, normalize_reply, sanitize_message)
 from signals import clock_score, clock_settings, message_score, noise_score, score_seconds
 
@@ -121,7 +121,8 @@ class ApiState:
         # The first unprompted signal after a start is a beacon, so a test
         # visit hears an intelligent message quickly.
         self._next_kind = "intelligent"
-        self._replies: deque[tuple[float, str]] = deque()
+        # Queued replies: when, the text, and the key that seals it, or "".
+        self._replies: deque[tuple[float, str, str]] = deque()
         # Replies whose model call is running; they count against the queue limit.
         self._pending_replies = 0
         # Intelligent texts that went on the air. Repeating one back proves a
@@ -183,7 +184,8 @@ class ApiState:
             # Replies wait for the intelligent board; nothing else may take the air.
             if role != "intelligent":
                 return None
-            score = message_score(self._replies.popleft()[1])
+            _, text, sealed_with = self._replies.popleft()
+            score = message_score(text, sealed_with)
         elif now >= self._next_signal_at and (self._signal_requested or self._random_signals and not (
                 self._pending_replies or now - self._conversation_at < CONVERSATION_HOLD_SECONDS)):
             # A kind without a board of that role (e.g. a single board) falls
@@ -242,13 +244,11 @@ class ApiState:
                                        for at, text in self._transmitted)
             return bool(entry["contact"])
 
-    def story(self, session: str) -> tuple[str, int, bool]:
-        """This visitor's stage, their messages in it so far, and whether
-        LANTERN has sent them the key."""
+    def story(self, session: str) -> tuple[str, int]:
+        """This visitor's stage and their messages in it so far."""
         with self._lock:
             entry = self._sessions.get(session, {})
-            return (str(entry.get("stage", STAGE_BEACON)), int(entry.get("turns", 0)),
-                    bool(entry.get("keyGiven")))
+            return str(entry.get("stage", STAGE_BEACON)), int(entry.get("turns", 0))
 
     def conversation(self, session: str) -> list[tuple[str, str]]:
         with self._lock:
@@ -281,24 +281,26 @@ class ApiState:
             self._pending_replies = max(0, self._pending_replies - 1)
 
     def queue_reply(self, session: str, message: str, reply: str, stage: str = STAGE_BEACON,
-                    key_given: bool = False) -> int:
+                    unlocked: bool = False) -> int:
         """Queue a reply for the intelligent board and return its place in line.
-        A new stage starts the visitor's history and turn count afresh."""
+        AURORA's replies go out sealed. When LANTERN unlocks a visitor, AURORA's
+        sealed opening follows, and the visitor's history starts afresh."""
         with self._lock:
             now = time.monotonic()
             self._pending_replies = max(0, self._pending_replies - 1)
-            self._replies.append((now, reply))
+            self._replies.append((now, reply, KEY_WORD if stage == STAGE_AURORA else ""))
+            if unlocked:
+                self._replies.append((now, AURORA_OPENING, KEY_WORD))
             self._conversation_at = now
             if session:
                 entry = self._session(session, now)
-                if entry.get("stage", STAGE_BEACON) != stage:
-                    entry.update(stage=stage, turns=0, history=[])
                 entry["turns"] = int(entry.get("turns", 0)) + 1
-                entry["keyGiven"] = bool(entry.get("keyGiven")) or key_given
                 history = entry["history"]
                 assert isinstance(history, list)
                 history.append((message, reply))
                 del history[:-CONVERSATION_TURNS]
+                if unlocked:
+                    entry.update(stage=STAGE_AURORA, turns=0, history=[])
             return len(self._replies)
 
     def play_now(self, kind: str = "intelligent", message: str = "") -> dict[str, object]:
@@ -310,7 +312,7 @@ class ApiState:
                 # The operator knows whether a board is still playing.
                 self._air_free_at = now
             if message:
-                self._replies.append((now, message))
+                self._replies.append((now, message, ""))
             else:
                 self._next_kind = kind
                 self._next_signal_at = now
@@ -574,27 +576,24 @@ def make_handler(state: ApiState):
                 status = HTTPStatus.TOO_MANY_REQUESTS if unavailable.startswith("Daily") else HTTPStatus.SERVICE_UNAVAILABLE
                 self._send_json({"error": unavailable}, status)
                 return
-            stage, turns, key_given = state.story(session)
+            stage, turns = state.story(session)
             try:
-                if stage == STAGE_BEACON and KEY_WORD in sanitize_message(player_text).split():
-                    reply, stage = AURORA_OPENING, STAGE_AURORA
-                else:
-                    answer = generate_reply(player_text, state.conversation(session), stage, turns, key_given)
-                    reply = answer.text
-                    if answer.trusted:
-                        # The server sends the key itself, so the model cannot leak or change it.
-                        reply, key_given = KEY_LINE, True
+                answer = generate_reply(player_text, state.conversation(session), stage, turns)
             except BaseException as exc:
                 state.release_reply()
                 if not isinstance(exc, ReplyUnavailableError):
                     raise
                 self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return
-            position = state.queue_reply(session, player_text.strip(), reply, stage, key_given)
+            position = state.queue_reply(session, player_text.strip(), answer.text, stage, answer.trusted)
             result: dict[str, object] = {"contact": True, "queued": position}
+            # The key never goes on the air. The page of a visitor LANTERN
+            # trusts gets it here and can then read sealed messages.
+            if stage == STAGE_AURORA or answer.trusted:
+                result["key"] = KEY_WORD
             # Visitors must decode the reply from sound; only operators see it here.
             if self._has_token("ALIVE_WEB_TOKEN"):
-                result["reply"] = reply
+                result["reply"] = answer.text
             self._send_json(result)
 
         def _read_json(self) -> dict[str, object]:

@@ -3,6 +3,7 @@ import '@fontsource/space-mono/latin-700.css';
 import './styles.css';
 import { SignalLevelTracker } from './sensing/signalLevelTracker';
 import { BeaconDecoder } from './sensing/beaconDecoder';
+import { unseal } from './sensing/seal';
 import { mountSignalStrip } from './signalStrip';
 import { encodeRecording } from './audio/recording';
 import { uploadRecording } from './audio/recordingUpload';
@@ -175,6 +176,9 @@ if (debugRefs) {
 }
 // The API keeps each visitor's conversation under this id for this tab.
 let session = sessionStorage.getItem('aliveSession') ?? newSession();
+// The API hands the key to a visitor LANTERN trusts. Only with it does this
+// page read sealed messages; other phones show their scrambled letters.
+let sealKey = sessionStorage.getItem('aliveKey') ?? '';
 
 type Saved = { text: string; at: string };
 
@@ -376,9 +380,10 @@ function showSimulated(samples: Float32Array, rate: number): void {
 
 function receive(input: Float32Array, sampleRate: number): void {
   translationSnapshot = decoder.process(input, sampleRate);
-  for (const reception of decoder.takeCompleted()) {
+  for (const completed of decoder.takeCompleted()) {
+    const reception = opened(completed);
     lastReception = { ...reception, at: new Date() };
-    if (reception.kind === 'intelligent') saveMessage(reception.text);
+    if (reception.kind === 'intelligent' && (!reception.sealed || sealKey)) saveMessage(reception.text);
   }
   render();
 }
@@ -465,7 +470,11 @@ async function sendContactMessage(): Promise<void> {
       throw new Error(failure?.error ?? `HTTP ${response.status}`);
     }
     // Without contact the message goes nowhere. The page says "Sent" either way.
-    const payload = (await response.json()) as { contact?: boolean; queued?: number; reply?: string };
+    const payload = (await response.json()) as { contact?: boolean; queued?: number; reply?: string; key?: string };
+    if (payload.key && payload.key !== sealKey) {
+      sealKey = payload.key;
+      sessionStorage.setItem('aliveKey', sealKey);
+    }
     showNotice('Sent');
     setContactStatus(!payload.contact ? 'no contact: nothing will answer'
       : `queued #${payload.queued ?? '?'}${payload.reply ? `: ${payload.reply}` : ''}`);
@@ -506,6 +515,8 @@ async function resetToFirstState(): Promise<void> {
   const reachedApi = await operatorRequest('POST', '/api/emitter/main/reset');
   saved = [];
   sessionStorage.removeItem('aliveMessages');
+  sessionStorage.removeItem('aliveKey');
+  sealKey = '';
   session = newSession();
   lastReception = null;
   notice = null;
@@ -641,12 +652,21 @@ function clockTime(date: Date): string {
 
 const KIND_LABELS = { noise: 'noise', clock: 'clock', intelligent: 'message' } as const;
 
-function renderReading(live: Reception | null): void {
+// A sealed message in plain text if this page holds the key.
+function opened(reception: Reception): Reception {
+  return reception.sealed && sealKey ? { ...reception, text: unseal(reception.text, sealKey) } : reception;
+}
+
+function renderReading(receiving: Reception | null): void {
+  const live = receiving && opened(receiving);
   const shown = live ?? lastReception;
   const kind = shown?.kind ?? '';
-  const meta = !shown ? '' : live ? `receiving ${KIND_LABELS[live.kind]}`
-    : `${clockTime(lastReception!.at)} · ${KIND_LABELS[shown.kind]}`;
+  const label = !shown ? '' : !shown.sealed ? KIND_LABELS[shown.kind]
+    : sealKey ? 'sealed message · opened with your key' : 'sealed message · no key';
+  const meta = !shown ? '' : live ? `receiving ${label}` : `${clockTime(lastReception!.at)} · ${label}`;
+  const sealed = !shown?.sealed ? '' : sealKey ? 'open' : 'locked';
   if (refs.readingText.dataset.kind !== kind) refs.readingText.dataset.kind = kind;
+  if (refs.readingText.dataset.sealed !== sealed) refs.readingText.dataset.sealed = sealed;
   if (refs.readingText.textContent !== (shown?.text ?? '')) refs.readingText.textContent = shown?.text ?? '';
   refs.readingText.toggleAttribute('data-live', Boolean(live));
   if (refs.readingMeta.textContent !== meta) refs.readingMeta.textContent = meta;

@@ -18,6 +18,8 @@ export type ReceptionKind = 'noise' | 'clock' | 'intelligent';
 export interface Reception {
   kind: ReceptionKind;
   text: string;
+  // A message that opened with a third sync chirp. Its letters need the key.
+  sealed?: true;
 }
 
 export interface TranslationSnapshot {

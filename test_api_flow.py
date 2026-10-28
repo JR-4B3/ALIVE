@@ -8,10 +8,10 @@ from unittest.mock import patch
 import pytest
 
 import emitter
-from reply_engine import AURORA_OPENING, KEY_LINE, STAGE_AURORA, STAGE_BEACON, Reply
+from reply_engine import AURORA_OPENING, KEY_WORD, STAGE_AURORA, STAGE_BEACON, Reply
 from emitter import ApiState, QuietThreadingHTTPServer, make_handler
 from reply_engine import signal_duration_seconds
-from signals import chirp_samples, message_score, noise_score, score_seconds, score_wav
+from signals import ALPHABET, chirp_samples, cipher_alphabet, message_score, seal, noise_score, score_seconds, score_wav
 
 BOARDS = ["70:AF:09:0D:D7:BC", "AC:27:6E:45:B9:4C", "AC:27:6E:45:E5:90", "70:AF:09:0D:AB:24", "AC:27:6E:45:00:01"]
 
@@ -309,41 +309,54 @@ def test_public_visitor_reaches_the_model_only_after_hearing_a_signal(clock):
         stop()
 
 
-def test_lantern_sends_the_key_and_the_key_opens_aurora(clock):
+def test_lantern_unlocks_a_visitor_and_aurora_answers_sealed(clock):
     state = started(ApiState(rng=random.Random(8)), clock)
     environment = {"ALIVE_WEB_TOKEN": "operator-secret", "ALIVE_DEVICE_TOKEN": "device-secret",
                    "ALIVE_WEB_ORIGIN": "https://site.example"}
     base, stop = serve(state, environment)
     calls = []
-    answers = iter([Reply("WHY DO YOU ASK"), Reply("THANK YOU", trusted=True),
-                    Reply("SEND THE WORD"), Reply("WE WERE NEVER ON ANY LIST")])
+    answers = iter([Reply("WHY DO YOU ASK"), Reply("YOU MAY LISTEN NOW", trusted=True),
+                    Reply("WE WERE NEVER ON ANY LIST")])
 
-    def fake_reply(text, history, stage, turns, key_given):
-        calls.append((text, stage, turns, key_given, list(history)))
+    def fake_reply(text, history, stage, turns):
+        calls.append((text, stage, turns, list(history)))
         return next(answers)
 
     def send(message, **extra):
         payload = {"session": "visitor-0002", "message": message, **extra}
         with request(base, "/api/message", method="POST", payload=payload,
                      token="operator-secret") as response:
-            reply = json.load(response)["reply"]
-        run(state, clock, 60)  # Let the board play it so the queue stays short.
-        return reply
+            body = json.load(response)
+        return body, [play for _, _, play in run(state, clock, 90)]
 
     try:
         with patch("emitter.generate_reply", fake_reply):
             heard = run(state, clock, 4)[0][2]["text"]
-            assert send("Who are you?", heard=heard) == "WHY DO YOU ASK"
-            assert send("Are you alright?") == KEY_LINE
-            assert send("What now?") == "SEND THE WORD"
-            assert calls[-1][1:4] == (STAGE_BEACON, 2, True)
-            # The key word opens AURORA without a model call.
-            assert send("vigil!") == AURORA_OPENING
-            assert len(calls) == 3
-            assert send("Where are you?") == "WE WERE NEVER ON ANY LIST"
-            assert calls[-1] == ("Where are you?", STAGE_AURORA, 1, True, [("vigil!", AURORA_OPENING)])
+            body, played = send("Who are you?", heard=heard)
+            assert "key" not in body
+            assert [play["text"] for play in played] == ["WHY DO YOU ASK"]
+            # The key goes to the trusted visitor's page, never on the air.
+            body, played = send("Are you alright?")
+            assert body["key"] == KEY_WORD
+            assert [play["text"] for play in played] == ["YOU MAY LISTEN NOW", AURORA_OPENING]
+            assert [len(play["chirps"]) for play in played] == [len("YOU MAY LISTEN NOW") + 3,
+                                                                  len(AURORA_OPENING) + 4]
+            assert played[1]["chirps"] == message_score(AURORA_OPENING, KEY_WORD)["chirps"]
+            body, played = send("Where are you?")
+            assert body["key"] == KEY_WORD
+            assert played[0]["chirps"] == message_score("WE WERE NEVER ON ANY LIST", KEY_WORD)["chirps"]
+            assert calls[-1] == ("Where are you?", STAGE_AURORA, 0, [])
+            assert calls[1][1:3] == (STAGE_BEACON, 1)
     finally:
         stop()
+
+
+def test_sealed_messages_swap_letters_by_the_keyword_alphabet():
+    assert cipher_alphabet("VIGIL") == "VIGLABCDEFHJKMNOPQRSTUWXYZ"
+    assert seal("THIS IS AURORA", "VIGIL") == "SDER ER VTQNQV"
+    chirps = message_score("HI", "VIGIL")["chirps"]
+    assert chirps[:3] == [[-1, 180], [-1, 180], [-1, 280]]
+    assert [symbol for symbol, _ in chirps[3:-1]] == [ALPHABET.index("D"), ALPHABET.index("E")]
 
 
 def test_full_queue_and_offline_boards_refuse_replies(clock):

@@ -96,16 +96,15 @@ def test_reply_sends_the_conversation_so_far():
     ]
 
 
-def test_only_lantern_can_grant_trust_and_only_once():
-    def answer(stage, key_given=False):
+def test_only_lantern_can_grant_trust():
+    def answer(stage):
         def fake_urlopen(request, timeout):
             return io.BytesIO(json.dumps({"output_text": '{"reply": "YOU CARE", "trusted": true}'}).encode())
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=True):
             with patch("urllib.request.urlopen", fake_urlopen):
-                return generate_reply("Are you alright?", stage=stage, key_given=key_given)
+                return generate_reply("Are you alright?", stage=stage)
 
     assert answer("beacon") == Reply("YOU CARE", trusted=True)
-    assert answer("beacon", key_given=True).trusted is False
     assert answer(STAGE_AURORA).trusted is False
 
 

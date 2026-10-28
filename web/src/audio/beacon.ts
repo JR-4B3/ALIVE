@@ -42,10 +42,12 @@ export function beaconDuration(message: string): number {
 // [symbol, silence after it in ms], as in signals.py on the API.
 export type Chirp = [symbol: number, gapMs: number];
 
-// Two sync chirps, one chirp per character, and a closing sync chirp.
-export function messageChirps(message: string): Chirp[] {
+// Two sync chirps, one chirp per character, and a closing sync chirp. A
+// sealed message has a third opening sync chirp; its text is already sealed.
+export function messageChirps(message: string, sealed = false): Chirp[] {
   const text = message.toUpperCase().replace(/[^A-Z ]/g, '').trim();
-  return [[-1, 180], [-1, 280], ...[...text].map((char): Chirp => [BEACON_ALPHABET.indexOf(char), 180]), [-1, 760]];
+  const open: Chirp[] = sealed ? [[-1, 180], [-1, 180], [-1, 280]] : [[-1, 180], [-1, 280]];
+  return [...open, ...[...text].map((char): Chirp => [BEACON_ALPHABET.indexOf(char), 180]), [-1, 760]];
 }
 
 // Reference rendering of what the ESP32 plays, used by the tests.
