@@ -192,7 +192,11 @@
   display: grid; gap: 12px; width: 100%; max-width: 360px; padding: 20px;
   border: 1px solid var(--ink); background: var(--void);
 }
-.notice-title { margin: 0; font-size: 20px; color: var(--ink); }
+.notice-title {
+  /* "Currently out of order :(" is 25 characters of about .6em each; it
+     fills one line of the box on any phone, up to 22px. */
+  margin: 0; font-size: min(22px, calc((100vw - 96px) / 15.5)); color: var(--ink);
+}
 .notice-text { margin: 0; font-size: 14px; line-height: 1.5; color: var(--dim); }
 .notice-button { justify-self: end; min-width: 88px; min-height: 44px; margin-top: 4px; border-color: var(--ink); }
 

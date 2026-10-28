@@ -77,7 +77,7 @@ app.innerHTML = `
   </div>
   <div id="outOfOrder" class="notice out-of-order" role="alertdialog" aria-modal="true" aria-labelledby="outOfOrderTitle" hidden>
     <div class="notice-box">
-      <p id="outOfOrderTitle" class="notice-title">Currently out of order :(</p>
+      <p id="outOfOrderTitle" class="notice-title">Currently out of order&nbsp;:(</p>
       <p class="notice-text">The station lost contact. This page carries on by itself once the line is back.</p>
     </div>
   </div>`}
