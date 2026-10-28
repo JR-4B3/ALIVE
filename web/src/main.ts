@@ -70,8 +70,8 @@ app.innerHTML = `
   <div id="intro" class="notice" role="dialog" aria-modal="true" aria-labelledby="introTitle" hidden>
     <div class="notice-box">
       <p id="introTitle" class="notice-title">Anybody Listening?</p>
-      <p class="notice-text">Welcome to your first shift at the listening station. You are our newest researcher, and your job is to search for signals from deep space. Turn on recording and explore the room. Your phone translates whatever it picks up. Nobody here has ever found anything, so no pressure.</p>
-      <p class="notice-text">Most of it is noise. If the status at the top ever turns green and reads ALIVE, check twice. Still green? Then answer in the box at the bottom. Nobody will read it, of course, but be nice anyway.</p>
+      <p class="notice-text">Welcome to your first shift at the listening station. Your job is to search for signals from deep space. Turn on recording and explore the room. Nobody here has ever found anything, so no pressure.</p>
+      <p class="notice-text">Most of it is noise. If the status turns green and reads ALIVE, check twice. Still green? Answer below. Nobody will read it, but be nice anyway.</p>
       <button id="introClose" type="button" class="notice-button" disabled>OK</button>
     </div>
   </div>
