@@ -11,7 +11,7 @@ export const FIRST_LETTER_HZ = 18450;
 export const SPACING_HZ = 64;
 // The sweep is narrower than half the spacing, which leaves room for hand-held Doppler.
 const SWEEP_HZ = 24;
-const AMPLITUDE = 6000;
+const AMPLITUDE = 8192;
 
 export function beaconFrequency(symbol: number): number {
   return symbol < 0 ? SYNC_HZ : FIRST_LETTER_HZ + symbol * SPACING_HZ;

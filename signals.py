@@ -85,7 +85,7 @@ _ENVELOPE = [int(32767 * math.sin(math.pi * i / 1024) ** 2) for i in range(1025)
 
 
 @lru_cache(maxsize=None)
-def chirp_samples(symbol: int, amplitude: int = 6000) -> array:
+def chirp_samples(symbol: int, amplitude: int = 8192) -> array:
     frequency = SYNC_HZ if symbol < 0 else FIRST_LETTER_HZ + symbol * SPACING_HZ
     step_delta = 2 * SWEEP_HZ * 2**32 // (CHIRP_FRAMES * RATE)
     step = (frequency + SWEEP_HZ) * 2**32 // RATE
@@ -101,7 +101,7 @@ def chirp_samples(symbol: int, amplitude: int = 6000) -> array:
     return samples
 
 
-def score_wav(score: dict[str, object], amplitude: int = 6000) -> bytes:
+def score_wav(score: dict[str, object], amplitude: int = 8192) -> bytes:
     """The score as a 48 kHz mono WAV file."""
     samples = array("h", bytes(2 * (RATE * int(score["leadMs"]) // 1000)))
     chirps = score["chirps"]

@@ -454,7 +454,7 @@ def test_reset_returns_to_the_first_state(clock):
 def test_computer_chirps_match_the_browser_and_firmware_samples():
     # Values from beaconPulse() in web/src/audio/beacon.ts, which bun test
     # checks against the firmware.
-    expected = [-1, -2408, 5164, -2, 0, -3063, 5164, -4, -1, -312, -5507, -13]
+    expected = [-1, -3287, 7051, -2, 0, -4182, 7051, -5, -1, -425, -7519, -17]
     assert [chirp_samples(symbol)[i] for symbol in (-1, 0, 26) for i in (100, 5000, 8640, 17000)] == expected
     assert len(score_wav(message_score("HI"))) == 44 + 2 * 48 * int(score_seconds(message_score("HI")) * 1000)
 

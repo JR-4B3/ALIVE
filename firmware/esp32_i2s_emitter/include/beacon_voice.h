@@ -10,7 +10,7 @@ constexpr int firstLetterHz = 18450;
 constexpr int spacingHz = 64;
 // The sweep stays under half the spacing, which leaves room for hand-held Doppler.
 constexpr int sweepHz = 24;
-constexpr int32_t amplitude = 6000;
+constexpr int32_t amplitude = 8192;  // 25 percent of full scale
 #include "beacon_tables.h"
 inline int symbolFor(char ch) { return ch == ' ' ? 26 : ch >= 'A' && ch <= 'Z' ? ch - 'A' : -1; }
 inline int frequencyFor(int symbol) {
