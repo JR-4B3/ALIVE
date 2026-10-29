@@ -1,0 +1,77 @@
+{
+  "body": {
+    "valid_cad": true,
+    "watertight_single_part": true
+  },
+  "lid": {
+    "valid_cad": true,
+    "watertight_single_part": true
+  },
+  "carrier": {
+    "valid_cad": true,
+    "watertight_single_part": true
+  },
+  "closed_lid_overlap_mm3": 0.0,
+  "part_overlaps_mm3": {
+    "body/carrier": 0.0,
+    "lid/carrier": 0.0
+  },
+  "reference_overlaps_mm3": {
+    "body/battery_board": 0.0,
+    "lid/battery_board": 0.0,
+    "carrier/battery_board": 0.0,
+    "body/battery_cell": 0.0,
+    "lid/battery_cell": 0.0,
+    "carrier/battery_cell": 0.0,
+    "body/electronics_envelope": 0.0,
+    "lid/electronics_envelope": 0.0,
+    "carrier/electronics_envelope": 0.0,
+    "body/speaker_envelope": 0.0,
+    "lid/speaker_envelope": 0.0,
+    "carrier/speaker_envelope": 0.0,
+    "body/cable_space": 0.0,
+    "lid/cable_space": 0.0,
+    "carrier/cable_space": 0.0,
+    "body/usb_port_envelope": 0.0,
+    "lid/usb_port_envelope": 0.0,
+    "carrier/usb_port_envelope": 0.0,
+    "body/plug_bend_space": 0.0,
+    "lid/plug_bend_space": 0.0,
+    "carrier/plug_bend_space": 0.0,
+    "body/electronics_plug_space": 0.0,
+    "lid/electronics_plug_space": 0.0,
+    "carrier/electronics_plug_space": 0.0
+  },
+  "perfboard_rails_mm": {
+    "board_width": 20,
+    "channel_width": 20.6,
+    "contact_length": 15.0,
+    "lower_lip_thickness": 1.6,
+    "upper_lip_thickness": 1.4,
+    "channel_height": 2.200000000000003,
+    "stop_thickness": 1.6,
+    "closed_end_rail": true,
+    "end_rail_edge_overlap": 0.7,
+    "side_wall_thickness": 1.4,
+    "board_top_faces_lid": true,
+    "assembly_height_increase": 0.8,
+    "clearance_below_lower_lips": 9.999999999999993,
+    "electronics_top_to_lid": 0.10000000000000142,
+    "sampled_connected_assembly_insertion_clear": true,
+    "closed_end_blocks_overtravel": true
+  },
+  "unsqueezed_latches_block_withdrawal": true,
+  "sampled_squeezed_insertion_path_clear": true,
+  "latch_dimensions_mm": {
+    "tongue_width": 3.0,
+    "tongue_thickness": 2.0,
+    "slot_root_y": 36,
+    "slot_end_radius": 0.9,
+    "grip_extension_beyond_case": 0,
+    "nose_straight_length": 3,
+    "nose_sideways_engagement": 1.4,
+    "nose_thickness": 2.2,
+    "release_travel": 1.6
+  },
+  "note": "Review prototype. Tongue flexing, release access, print orientation and fit need a physical test."
+}

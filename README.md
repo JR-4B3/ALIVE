@@ -35,6 +35,8 @@ The API uses only the Python standard library. Python tests require `pytest`.
 
 The ESP32-C3 and MAX98357 connections are shown in [the wiring diagram](docs/alive-esp32-max98357-wiring-usb-left.svg). Connect a 4–8 Ω passive speaker across `SPK+` and `SPK−`, never to ground. Disconnect power before changing wiring. The Wi-Fi firmware is in `firmware/esp32_i2s_emitter/`; copy its `include/secrets.example.h` to the ignored `include/secrets.h` and set the network, API URL, device token, and trusted CA certificate there.
 
+The current [three-part enclosure](hardware/enclosure/README.md) has a side-latch lid and perfboard rails. Its generator, print files and assembly viewer are in `hardware/enclosure/`.
+
 ## Source layout
 
 - `web/src/`: phone receiver and UI.

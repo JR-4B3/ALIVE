@@ -11,3 +11,4 @@ node_modules/
 web/node_modules/
 firmware/**/.pio/
 firmware/**/include/secrets.h
+firmware/**/include/secrets.h.*
