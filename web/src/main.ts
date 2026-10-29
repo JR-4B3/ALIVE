@@ -223,8 +223,10 @@ let noticeTimer = 0;
 // Out of order once the API has been unreachable, or no unit has polled it,
 // for OUT_OF_ORDER_AFTER_MS. Units may still play signals on their own then,
 // but nothing can answer. The debug page never checks, so testing goes on.
+// Only checks while the page is visible count: a phone that locks its screen
+// cancels the check in flight, which is no outage.
 let outOfOrder = false;
-let offlineTimer = 0;
+let failingSince = 0;
 let sending = false;
 let stopSimulation: (() => void) | null = null;
 // The simulated unit's samples also play into the spectrogram, silently.
@@ -299,7 +301,11 @@ render();
 if (!DEBUG_UI) showIntro();
 void checkOnline();
 window.setInterval(() => { if (!document.hidden) void checkOnline(); }, ONLINE_CHECK_MS);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) void checkOnline(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  failingSince = 0;
+  void checkOnline();
+});
 
 async function checkOnline(): Promise<void> {
   let online = true;
@@ -326,14 +332,11 @@ async function checkOnline(): Promise<void> {
     online = false;
   }
   if (online) {
-    window.clearTimeout(offlineTimer);
-    offlineTimer = 0;
+    failingSince = 0;
     setOutOfOrder(false);
-  } else if (!offlineTimer && !outOfOrder) {
-    offlineTimer = window.setTimeout(() => {
-      offlineTimer = 0;
-      setOutOfOrder(true);
-    }, OUT_OF_ORDER_AFTER_MS);
+  } else if (!document.hidden) {
+    if (!failingSince) failingSince = Date.now();
+    else if (Date.now() - failingSince >= OUT_OF_ORDER_AFTER_MS) setOutOfOrder(true);
   }
 }
 
