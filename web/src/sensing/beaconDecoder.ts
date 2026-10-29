@@ -11,8 +11,6 @@ const RAW_END_SECONDS = 2;
 // Allow up to three missed letters at the 540 ms cadence. Still expire before
 // the API's 3 s gap so a missing closing sync cannot absorb the next signal.
 const MESSAGE_END_SECONDS = 2.5;
-// A message sends a letter every 540 ms. Noise chirps come at random gaps.
-const LETTER_SECONDS = .54;
 
 // A single-carrier chirp decoder. No text or reply metadata enters it: what a
 // reception is, it judges from the sound alone.
@@ -184,17 +182,10 @@ export class BeaconDecoder {
   }
 
   // A clock repeats one channel at a period that varies by under 10 percent.
-  // Mixed letters at the message cadence are a message whose opening sync
-  // chirps the phone missed; a few missed letters leave double gaps.
   private rawKind(minimumTicks: number): ReceptionKind {
     const raw = this.raw;
-    const periods = raw.slice(1).map(({ start }, i) => start - raw[i].start).sort((a, b) => a - b);
-    if (raw.length >= 6 && new Set(raw.map(({ symbol }) => symbol)).size > 2) {
-      const steps = (count: number) => periods.filter((period) => Math.abs(period - count * LETTER_SECONDS) < .06).length;
-      const single = steps(1);
-      if (single >= periods.length * .6 && single + steps(2) >= periods.length * .85) return 'intelligent';
-    }
     if (raw.length < minimumTicks || raw.some(({ symbol }) => symbol !== raw[0].symbol)) return 'noise';
+    const periods = raw.slice(1).map(({ start }, i) => start - raw[i].start).sort((a, b) => a - b);
     const median = periods[periods.length >> 1];
     return periods.every((period) => Math.abs(period - median) < median * .1) ? 'clock' : 'noise';
   }
