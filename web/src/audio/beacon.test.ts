@@ -166,3 +166,22 @@ test('a third opening sync chirp marks a sealed message, and only the key opens 
   expect(unseal(sealed, 'VIGIL')).toBe('THIS IS AURORA');
   expect(unseal(sealed, 'LANTERN')).not.toBe('THIS IS AURORA');
 });
+
+test('keeps a framed message classified after two inaudible letters', () => {
+  const text = 'OUR SUPPLY SHIP LOST CONTACT DECADES AGO';
+  for (const rate of [44100, 48000]) {
+    const audio = renderBeacon(text);
+    // Remove PP after OUR SU without changing transmission timing.
+    const start = Math.round((1.33 + 6 * .54) * BEACON_RATE);
+    audio.fill(0, start, start + Math.round(1.08 * BEACON_RATE));
+    const { log } = receptions(resample(join(audio, pause(3)), rate), rate);
+    expect(log).toEqual([{ kind: 'intelligent', text: 'OUR SULY SHIP LOST CONTACT DECADES AGO' }]);
+  }
+});
+
+test('a missing closing sync does not merge the next signal into the message', () => {
+  const chirps = messageChirps('HELLO');
+  chirps.pop();
+  const { log } = receptions(join(renderChirps(chirps), pause(3), clock(4, 1200, 5), pause(3)));
+  expect(log).toEqual([{ kind: 'intelligent', text: 'HELLO' }, { kind: 'clock', text: 'EEEEE' }]);
+});

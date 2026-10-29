@@ -8,6 +8,9 @@ const MIN_ENERGY = .0000015;
 // Unframed chirps further apart than this belong to separate receptions. The
 // slowest clock leaves 1.24 s between chirps; the API leaves 3 s between signals.
 const RAW_END_SECONDS = 2;
+// Allow up to three missed letters at the 540 ms cadence. Still expire before
+// the API's 3 s gap so a missing closing sync cannot absorb the next signal.
+const MESSAGE_END_SECONDS = 2.5;
 
 // A single-carrier chirp decoder. No text or reply metadata enters it: what a
 // reception is, it judges from the sound alone.
@@ -92,7 +95,7 @@ export class BeaconDecoder {
         this.quiet += this.hop / rate;
         if (this.quiet >= .065) this.finishBurst();
       }
-      if (this.locked && time - this.lastLetterAt > 1.4 && this.text) this.finishMessage();
+      if (this.locked && time - this.lastLetterAt > MESSAGE_END_SECONDS) this.finishMessage();
       if (this.raw.length && !this.evidence && time - this.rawEnd > RAW_END_SECONDS) this.finishRaw();
       return;
     }
