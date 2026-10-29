@@ -22,8 +22,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from reply_engine import (AURORA_OPENING, KEY_WORD, STAGE_AURORA, STAGE_BEACON,
-                          ReplyUnavailableError, generate_reply, normalize_reply, sanitize_message)
+from reply_engine import (BEATS, GOODBYE, ReplyUnavailableError, fade, generate_reply,
+                          normalize_reply, open_beats, sanitize_message)
 from signals import clock_score, clock_settings, message_score, noise_score, score_seconds
 
 
@@ -42,10 +42,19 @@ STARTUP_SILENCE_SECONDS = 26.0
 SIGNAL_PAUSE_SECONDS = (6.0, 20.0)
 # Share of unprompted signals that are noise, a clock, or an intelligent beacon.
 SIGNAL_WEIGHTS = {"noise": 0.45, "clock": 0.3, "intelligent": 0.25}
-# What the intelligent board sends when nobody is talking to it.
-# The ship stays unnamed until a visitor reaches it through LANTERN.
-BEACON_LINES = ("IS ANYONE THERE", "WE ARE HERE", "THIS IS LANTERN", "REQUESTING ASSISTANCE",
-                "CAN YOU HEAR US", "ANSWER IF YOU HEAR")
+# What the intelligent board sends when nobody is talking to it. They should
+# not give away yet that humans are sending them.
+BEACON_LINES = ("IS ANYONE THERE", "WHO LISTENS", "ANSWER IF YOU HEAR", "WE ARE HERE", "CAN YOU HEAR",
+                "STILL HERE")
+# The beacon tells one story, shared by every visitor, beat by beat. After the
+# goodbye, its last message, it goes quiet for RECHARGE_SECONDS: the
+# noise and clocks play on, but nothing answers. It then wakes remembering
+# nobody, and its first beacon line waits for QUIET_SIGNALS other signals.
+# After PUSH_AFTER replies that told nothing new, the next one must.
+PUSH_AFTER = 2
+MYSTERY_REPLIES = 2
+RECHARGE_SECONDS = float(os.environ.get("ALIVE_RECHARGE_SECONDS", "300"))
+QUIET_SIGNALS = 2
 # Boards get new random roles this often, unless a conversation is running.
 ROLE_SECONDS = 600
 # A conversation runs from a visitor's message until this long after the last
@@ -121,8 +130,17 @@ class ApiState:
         # The first unprompted signal after a start is a beacon, so a test
         # visit hears an intelligent message quickly.
         self._next_kind = "intelligent"
-        # Queued replies: when, the text, and the key that seals it, or "".
-        self._replies: deque[tuple[float, str, str]] = deque()
+        # Queued replies: when, the text, and whether it is the last message.
+        self._replies: deque[tuple[float, str, bool]] = deque()
+        # The story beats told so far, the replies since one told anything
+        # new, and whether the goodbye is queued or played.
+        self._told: set[int] = set()
+        self._skipped = self._mystery_replies = 0
+        self._ending = False
+        # While the beacon recharges: when the last message ends and when it wakes.
+        self._lost_from = self._lost_until = -math.inf
+        # Unprompted signals still due before the next beacon line.
+        self._quiet_signals = 0
         # Replies whose model call is running; they count against the queue limit.
         self._pending_replies = 0
         # Intelligent texts that went on the air. Repeating one back proves a
@@ -174,23 +192,40 @@ class ApiState:
         if online and "intelligent" not in self._roles.values():
             self._roles[self._rng.choice(online)] = "intelligent"
 
+    def _wake(self, now: float) -> None:
+        if self._lost_until != -math.inf and now >= self._lost_until:
+            self._told = set()
+            self._skipped = self._mystery_replies = 0
+            self._ending = False
+            self._lost_from = self._lost_until = -math.inf
+            self._quiet_signals = QUIET_SIGNALS
+
+    def _lost(self, now: float) -> bool:
+        return self._lost_from <= now < self._lost_until
+
     def _grant(self, board: str, now: float) -> dict[str, object] | None:
+        self._wake(now)
         if now < self._air_free_at:
             return None
         while self._replies and now - self._replies[0][0] > REPLY_EXPIRY_SECONDS:
-            self._replies.popleft()
+            if self._replies.popleft()[2]:
+                # The goodbye never played, but the beacon still recharges.
+                self._lose(now)
         role = self._roles[board]
+        last = False
         if self._replies:
             # Replies wait for the intelligent board; nothing else may take the air.
             if role != "intelligent":
                 return None
-            _, text, sealed_with = self._replies.popleft()
-            score = message_score(text, sealed_with)
+            _, text, last = self._replies.popleft()
+            score = message_score(text)
         elif now >= self._next_signal_at and (self._signal_requested or self._random_signals and not (
                 self._pending_replies or now - self._conversation_at < CONVERSATION_HOLD_SECONDS)):
             # A kind without a board of that role (e.g. a single board) falls
             # to any board that is not dead.
             kind = self._next_kind
+            if kind == "intelligent" and not self._signal_requested and (now < self._lost_until or self._quiet_signals):
+                kind = self._next_kind = self._rng.choice(["noise", "clock"])
             if kind in self._roles.values() and role != kind or role == "dead":
                 return None
             if kind == "intelligent":
@@ -199,16 +234,20 @@ class ApiState:
                 score = clock_score(*self._clocks.setdefault(board, clock_settings(self._rng)))
             else:
                 score = noise_score(self._rng)
+            if kind != "intelligent" and now >= self._lost_until:
+                self._quiet_signals = max(0, self._quiet_signals - 1)
             self._signal_requested = False
             self._next_kind = self._rng.choices(list(SIGNAL_WEIGHTS), list(SIGNAL_WEIGHTS.values()))[0]
         else:
             return None
-        if score["kind"] == "intelligent":
+        if score["kind"] == "intelligent" and not self._ending:
             self._transmitted.append((now, str(score["text"])))
             while now - self._transmitted[0][0] > CONTACT_SECONDS:
                 self._transmitted.popleft()
         self._starting = False
         self._air_free_at = now + DELIVERY_SECONDS + score_seconds(score) + AIR_GAP_SECONDS
+        if last:
+            self._lose(self._air_free_at - AIR_GAP_SECONDS)
         # Every transmission, random or requested, restarts the random pause.
         self._next_signal_at = self._air_free_at + self._rng.uniform(*SIGNAL_PAUSE_SECONDS)
         return score
@@ -244,64 +283,86 @@ class ApiState:
                                        for at, text in self._transmitted)
             return bool(entry["contact"])
 
-    def story(self, session: str) -> tuple[str, int]:
-        """This visitor's stage and their messages in it so far."""
-        with self._lock:
-            entry = self._sessions.get(session, {})
-            return str(entry.get("stage", STAGE_BEACON)), int(entry.get("turns", 0))
-
     def conversation(self, session: str) -> list[tuple[str, str]]:
         with self._lock:
             history = self._sessions.get(session, {}).get("history", [])
             assert isinstance(history, list)
             return list(history)
 
-    def reserve_reply(self, public: bool = False) -> str:
+    def reserve_reply(self, public: bool = False) -> tuple[str, frozenset[int] | None, bool]:
         """Hold a queue place for a reply before the model call. Returns why
-        there is none, or an empty string; then call queue_reply or release_reply."""
+        there is none, or an empty string; the beats told so far, or None once
+        the story is over and nothing answers; and whether the reply must tell
+        something new. With beats, call queue_reply or release_reply next."""
         with self._lock:
             now = time.monotonic()
             if not self._online(now):
-                return "No unit is listening. Try again in a minute."
+                return "No unit is listening. Try again in a minute.", None, False
             if len(self._replies) + self._pending_replies >= REPLY_QUEUE_LIMIT:
-                return "The channel is busy. Try again in a moment."
+                return "The channel is busy. Try again in a moment.", None, False
+            if len(self._told) == len(BEATS):
+                return "", None, False
             if public:
                 # Bound public model usage even when callers bypass the browser UI.
                 if now - self._public_message_window_at >= 86400:
                     self._public_message_window_at = now
                     self._public_message_count = 0
                 if self._public_message_count >= PUBLIC_MESSAGES_PER_DAY:
-                    return "Daily message limit reached"
+                    return "Daily message limit reached", None, False
                 self._public_message_count += 1
             self._pending_replies += 1
-            return ""
+            return "", frozenset(self._told), self._skipped >= PUSH_AFTER
 
     def release_reply(self) -> None:
         with self._lock:
             self._pending_replies = max(0, self._pending_replies - 1)
+            self._end_story(time.monotonic())
 
-    def queue_reply(self, session: str, message: str, reply: str, stage: str = STAGE_BEACON,
-                    unlocked: bool = False) -> int:
+    def queue_reply(self, session: str, message: str, reply: str, told: frozenset[int] = frozenset()) -> int:
         """Queue a reply for the intelligent board and return its place in line.
-        AURORA's replies go out sealed. When LANTERN unlocks a visitor, AURORA's
-        sealed opening follows, and the visitor's history starts afresh."""
+        Told holds the story beats the reply told. The goodbye is the last
+        reply; after it plays, the signal is lost."""
         with self._lock:
             now = time.monotonic()
             self._pending_replies = max(0, self._pending_replies - 1)
-            self._replies.append((now, reply, KEY_WORD if stage == STAGE_AURORA else ""))
-            if unlocked:
-                self._replies.append((now, AURORA_OPENING, KEY_WORD))
+            self._replies.append((now, reply, False))
+            self._skipped = 0 if told - self._told else self._skipped + 1
+            self._told |= told
+            # The mystery of who is calling lasts two replies at most.
+            self._mystery_replies += 1
+            if self._mystery_replies >= MYSTERY_REPLIES:
+                self._told.add(0)
+            self._end_story(now)
             self._conversation_at = now
             if session:
-                entry = self._session(session, now)
-                entry["turns"] = int(entry.get("turns", 0)) + 1
-                history = entry["history"]
+                history = self._session(session, now)["history"]
                 assert isinstance(history, list)
                 history.append((message, reply))
                 del history[:-CONVERSATION_TURNS]
-                if unlocked:
-                    entry.update(stage=STAGE_AURORA, turns=0, history=[])
             return len(self._replies)
+
+    def _end_story(self, now: float) -> None:
+        """Once the story is told and no reply is pending, the newest queued
+        reply is the last one. If it already played, the signal is lost now."""
+        if len(self._told) == len(BEATS) and not self._pending_replies and not self._ending:
+            self._ending = True
+            if self._replies:
+                self._replies[-1] = (*self._replies[-1][:2], True)
+            else:
+                self._lose(now)
+
+    def _lose(self, start: float) -> None:
+        """The beacon forgets every visitor and recharges from start. Their
+        messages go nowhere until a phone decodes it again after the recharge."""
+        self._sessions.clear()
+        self._transmitted.clear()
+        self._conversation_at = -math.inf
+        self._lost_from, self._lost_until = start, start + RECHARGE_SECONDS
+
+    def ending(self) -> bool:
+        """Whether the beacon's last reply is queued or played."""
+        with self._lock:
+            return self._ending
 
     def play_now(self, kind: str = "intelligent", message: str = "") -> dict[str, object]:
         """Operator test: queue a given message, or send a signal of this kind
@@ -312,7 +373,7 @@ class ApiState:
                 # The operator knows whether a board is still playing.
                 self._air_free_at = now
             if message:
-                self._replies.append((now, message, ""))
+                self._replies.append((now, message, False))
             else:
                 self._next_kind = kind
                 self._next_signal_at = now
@@ -335,6 +396,11 @@ class ApiState:
             self._sessions.clear()
             self._transmitted.clear()
             self._conversation_at = self._roles_at = -math.inf
+            self._told = set()
+            self._skipped = self._mystery_replies = 0
+            self._ending = False
+            self._lost_from = self._lost_until = -math.inf
+            self._quiet_signals = 0
             now = time.monotonic()
             self._next_kind = "intelligent"
             self._next_signal_at = now
@@ -351,6 +417,13 @@ class ApiState:
         with self._lock:
             return bool(self._online(time.monotonic()))
 
+    def signal_lost(self) -> bool:
+        """Whether the beacon has said its last message and is recharging."""
+        with self._lock:
+            now = time.monotonic()
+            self._wake(now)
+            return self._lost(now)
+
     def _status(self, now: float) -> dict[str, object]:
         return {
             "deviceOnline": now - self._device_last_seen_at < DEVICE_LEASE_SECONDS,
@@ -360,6 +433,8 @@ class ApiState:
                        for board, seen in sorted(self._board_seen.items())],
             "randomSignals": self._random_signals,
             "queuedReplies": len(self._replies),
+            "storyTold": sorted(self._told),
+            "rechargeInSeconds": max(0.0, round(self._lost_until - now, 1)) if self._lost_until != -math.inf else None,
             "airFreeInSeconds": max(0.0, round(self._air_free_at - now, 1)),
             "nextSignal": self._next_kind,
             "nextSignalInSeconds": (max(0.0, round(self._next_signal_at - now, 1))
@@ -457,7 +532,7 @@ def make_handler(state: ApiState):
                 return
             if parsed.path == "/api/online":
                 # Public, so the visitor page can say when it is out of order.
-                self._send_json({"online": state.online()})
+                self._send_json({"online": state.online(), "signalLost": state.signal_lost()})
                 return
             if parsed.path.startswith("/api/") and not self._authorized("ALIVE_WEB_TOKEN"):
                 return
@@ -571,29 +646,34 @@ def make_handler(state: ApiState):
             if not state.has_contact(session, str(payload.get("heard") or "")):
                 self._send_json({"contact": False})
                 return
-            unavailable = state.reserve_reply(public_action)
+            unavailable, told, push = state.reserve_reply(public_action)
             if unavailable:
                 status = HTTPStatus.TOO_MANY_REQUESTS if unavailable.startswith("Daily") else HTTPStatus.SERVICE_UNAVAILABLE
                 self._send_json({"error": unavailable}, status)
                 return
-            stage, turns = state.story(session)
+            # Once the story is over, the beacon answers nobody.
+            if told is None:
+                self._send_json({"contact": False})
+                return
             try:
-                answer = generate_reply(player_text, state.conversation(session), stage, turns)
+                answer, shared = generate_reply(player_text, state.conversation(session), told, push)
+                # In the goodbye the signal breaks up and loses letters.
+                if open_beats(told) == [GOODBYE]:
+                    answer = fade(answer)
             except BaseException as exc:
                 state.release_reply()
                 if not isinstance(exc, ReplyUnavailableError):
                     raise
                 self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return
-            position = state.queue_reply(session, player_text.strip(), answer.text, stage, answer.trusted)
+            position = state.queue_reply(session, player_text.strip(), answer, shared)
             result: dict[str, object] = {"contact": True, "queued": position}
-            # The key never goes on the air. The page of a visitor LANTERN
-            # trusts gets it here and can then read sealed messages.
-            if stage == STAGE_AURORA or answer.trusted:
-                result["key"] = KEY_WORD
+            # This visitor's reply is the beacon's goodbye.
+            if state.ending():
+                result["last"] = True
             # Visitors must decode the reply from sound; only operators see it here.
             if self._has_token("ALIVE_WEB_TOKEN"):
-                result["reply"] = answer.text
+                result["reply"] = answer
             self._send_json(result)
 
         def _read_json(self) -> dict[str, object]:

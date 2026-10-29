@@ -109,8 +109,6 @@
 }
 .reading-text:empty { display: none; }
 .reading-text[data-kind='intelligent'] { font-weight: 700; color: var(--ink); }
-/* A sealed message without the key: letters arrive, but they make no sense. */
-.reading-text[data-sealed='locked'] { font-weight: 400; color: var(--dim); }
 .reading-text[data-live]::after { content: '\258C'; animation: cursor 1s steps(1, end) infinite; }
 .reading-hint { margin: 0; font-size: 14px; line-height: 1.5; color: var(--dim); }
 .reading-hint:empty { display: none; }
@@ -201,6 +199,28 @@
 }
 .notice-text { margin: 0; font-size: 14px; line-height: 1.5; color: var(--dim); }
 .notice-button { justify-self: end; min-width: 88px; min-height: 44px; margin-top: 4px; border-color: var(--ink); }
+
+/* The beacon's end, in the reading window. The last text shakes, flickers
+   and fades, then SIGNAL LOST flickers in like a failing display. */
+.reading-text[data-lost='losing'] { animation: losing 1.6s steps(2, end) both; }
+.reading-text[data-lost='lost'] { animation: lost-flicker 2.4s steps(1, end) both; }
+@keyframes losing {
+  0% { transform: none; opacity: 1; }
+  12% { transform: translate(-4px, 1px) skewX(-6deg); opacity: .6; }
+  24% { transform: translate(5px, -2px); opacity: 1; letter-spacing: .08em; }
+  36% { transform: translate(-2px, 2px) skewX(8deg); opacity: .3; }
+  50% { transform: translate(3px, 0); opacity: .9; filter: blur(1px); }
+  64% { transform: translate(-1px, -1px); opacity: .2; filter: blur(2px); }
+  80% { transform: none; opacity: .5; letter-spacing: .3em; filter: blur(3px); }
+  100% { transform: none; opacity: 0; letter-spacing: .5em; filter: blur(4px); }
+}
+@keyframes lost-flicker {
+  0% { opacity: 0; } 15% { opacity: 1; } 22% { opacity: .1; } 30% { opacity: 1; }
+  50% { opacity: .2; } 56% { opacity: 1; } 75% { opacity: .5; } 80%, 100% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reading-text[data-lost] { animation: none; }
+}
 
 /* Debug panel, below the visitor layout. While it is open the page scrolls. */
 .debug-panel {

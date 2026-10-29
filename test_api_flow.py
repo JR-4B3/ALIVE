@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 import emitter
-from reply_engine import AURORA_OPENING, KEY_WORD, STAGE_AURORA, STAGE_BEACON, Reply
+from reply_engine import GOODBYE
 from emitter import ApiState, QuietThreadingHTTPServer, make_handler
 from reply_engine import signal_duration_seconds
 from signals import ALPHABET, chirp_samples, cipher_alphabet, message_score, seal, noise_score, score_seconds, score_wav
@@ -153,7 +153,7 @@ def test_no_random_signal_plays_during_a_conversation(clock):
     state = started(ApiState(rng=random.Random(8)), clock)
     run(state, clock, 30)
     # While the model call runs, the air stays free for its reply.
-    assert state.reserve_reply() == ""
+    assert state.reserve_reply()[0] == ""
     assert run(state, clock, 20) == []
     state.queue_reply("visitor-0001", "who are you", "WE ARE LANTERN")
     played = run(state, clock, emitter.CONVERSATION_HOLD_SECONDS - 10)
@@ -280,7 +280,7 @@ def test_public_visitor_reaches_the_model_only_after_hearing_a_signal(clock):
 
     def fake_reply(text, history, *story):
         replies.append((text, history))
-        return Reply("WE ARE LANTERN")
+        return "WHO LISTENS", frozenset()
 
     try:
         with patch("emitter.generate_reply", fake_reply):
@@ -302,51 +302,63 @@ def test_public_visitor_reaches_the_model_only_after_hearing_a_signal(clock):
             with request(base, "/api/message", method="POST",
                          payload={"session": "visitor-0001", "message": "Who?"}) as response:
                 assert json.load(response)["contact"] is True
-            assert replies[-1] == ("Who?", [("Are you there?", "WE ARE LANTERN")])
+            assert replies[-1] == ("Who?", [("Are you there?", "WHO LISTENS")])
             assert http_error(lambda: request(base, "/api/emitter/main/play", method="POST"))[0] == 401
             assert http_error(lambda: request(base, "/api/emitter/main/current"))[0] == 401
     finally:
         stop()
 
 
-def test_lantern_unlocks_a_visitor_and_aurora_answers_sealed(clock):
+def test_the_shared_story_ends_only_after_every_beat_and_then_recharges(clock):
     state = started(ApiState(rng=random.Random(8)), clock)
     environment = {"ALIVE_WEB_TOKEN": "operator-secret", "ALIVE_DEVICE_TOKEN": "device-secret",
                    "ALIVE_WEB_ORIGIN": "https://site.example"}
     base, stop = serve(state, environment)
     calls = []
-    answers = iter([Reply("WHY DO YOU ASK"), Reply("YOU MAY LISTEN NOW", trusted=True),
-                    Reply("WE WERE NEVER ON ANY LIST")])
+    # Small talk tells nothing; then the beats come in the visitors' order.
+    shares = iter([set(), set(), set(), {0}, {4}, {1, 2}, set(), {3, 5}, {GOODBYE}])
 
-    def fake_reply(text, history, stage, turns):
-        calls.append((text, stage, turns, list(history)))
-        return next(answers)
+    def fake_reply(text, history, told, push):
+        calls.append((set(told), push))
+        return f"REPLY {len(calls)}", frozenset(next(shares))
 
-    def send(message, **extra):
-        payload = {"session": "visitor-0002", "message": message, **extra}
+    def send(session, message, **extra):
+        payload = {"session": session, "message": message, **extra}
         with request(base, "/api/message", method="POST", payload=payload,
                      token="operator-secret") as response:
             body = json.load(response)
-        return body, [play for _, _, play in run(state, clock, 90)]
+        return body, [play for _, _, play in run(state, clock, 60)]
+
+    def lost():
+        with request(base, "/api/online") as response:
+            return json.load(response)["signalLost"]
 
     try:
-        with patch("emitter.generate_reply", fake_reply):
+        with patch("emitter.generate_reply", fake_reply), patch("emitter.fade", lambda text: text):
             heard = run(state, clock, 4)[0][2]["text"]
-            body, played = send("Who are you?", heard=heard)
-            assert "key" not in body
-            assert [play["text"] for play in played] == ["WHY DO YOU ASK"]
-            # The key goes to the trusted visitor's page, never on the air.
-            body, played = send("Are you alright?")
-            assert body["key"] == KEY_WORD
-            assert [play["text"] for play in played] == ["YOU MAY LISTEN NOW", AURORA_OPENING]
-            assert [len(play["chirps"]) for play in played] == [len("YOU MAY LISTEN NOW") + 3,
-                                                                  len(AURORA_OPENING) + 4]
-            assert played[1]["chirps"] == message_score(AURORA_OPENING, KEY_WORD)["chirps"]
-            body, played = send("Where are you?")
-            assert body["key"] == KEY_WORD
-            assert played[0]["chirps"] == message_score("WE WERE NEVER ON ANY LIST", KEY_WORD)["chirps"]
-            assert calls[-1] == ("Where are you?", STAGE_AURORA, 0, [])
-            assert calls[1][1:3] == (STAGE_BEACON, 1)
+            # Two visitors share the beacon and so its story.
+            for turn in range(8):
+                assert send(f"visitor-000{turn % 2}", "hello", heard=heard)[0]["contact"] is True
+            # After two replies that told nothing new, the next must.
+            assert [push for _, push in calls[:4]] == [False, False, True, True]
+            assert calls[7][0] == {0, 1, 2, 4}
+            assert not lost()
+            body, played = send("visitor-0001", "hello", heard=heard)
+            # The goodbye is the last message, and its visitor's page knows.
+            assert body["last"] is True
+            assert [play["text"] for play in played if play["kind"] == "intelligent"][-1] == "REPLY 9"
+            # The beacon forgets everyone, answers nobody, and only noise and
+            # clocks play while it recharges.
+            assert lost()
+            assert send("visitor-0001", "are you there", heard="REPLY 9")[0] == {"contact": False}
+            quiet = run(state, clock, emitter.RECHARGE_SECONDS - 120)
+            assert quiet and all(play["kind"] != "intelligent" for _, _, play in quiet)
+            clock.now += 120
+            assert not lost()
+            # Its first line after waking waits for other signals.
+            woke = [play["kind"] for _, _, play in run(state, clock, 600)]
+            assert woke.index("intelligent") >= emitter.QUIET_SIGNALS
+            assert state.status()["storyTold"] == []
     finally:
         stop()
 
@@ -361,16 +373,16 @@ def test_sealed_messages_swap_letters_by_the_keyword_alphabet():
 
 def test_full_queue_and_offline_boards_refuse_replies(clock):
     state = ApiState()
-    assert state.reserve_reply().startswith("No unit")
+    assert state.reserve_reply()[0].startswith("No unit")
     poll(state, BOARDS[0])
     # Places are held while the model runs, so a burst cannot overfill the queue.
     for _ in range(emitter.REPLY_QUEUE_LIMIT):
-        assert state.reserve_reply() == ""
-    assert state.reserve_reply().startswith("The channel is busy")
+        assert state.reserve_reply()[0] == ""
+    assert state.reserve_reply()[0].startswith("The channel is busy")
     state.release_reply()
-    assert state.reserve_reply() == ""
+    assert state.reserve_reply()[0] == ""
     state.queue_reply("", "hi", "HELLO")
-    assert state.reserve_reply().startswith("The channel is busy")
+    assert state.reserve_reply()[0].startswith("The channel is busy")
 
 
 def test_only_model_calls_count_against_the_daily_limit(clock):
@@ -380,12 +392,12 @@ def test_only_model_calls_count_against_the_daily_limit(clock):
         for _ in range(5):
             assert state.throttle_public_message("") == 0
             clock.now += emitter.SESSION_MESSAGE_SECONDS
-        assert state.reserve_reply(public=True) == ""
+        assert state.reserve_reply(public=True)[0] == ""
         state.release_reply()
-        assert state.reserve_reply(public=True) == "Daily message limit reached"
+        assert state.reserve_reply(public=True)[0] == "Daily message limit reached"
         clock.now += 86400
         poll(state, BOARDS[0])
-        assert state.reserve_reply(public=True) == ""
+        assert state.reserve_reply(public=True)[0] == ""
 
 
 def test_a_restarted_api_waits_for_boards_that_may_still_be_playing(clock):
@@ -549,9 +561,9 @@ def test_visitors_can_see_whether_the_installation_works_without_a_token(clock):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
             url = f"http://127.0.0.1:{server.server_port}/api/online"
-            assert json.load(urllib.request.urlopen(url, timeout=2)) == {"online": False}
+            assert json.load(urllib.request.urlopen(url, timeout=2)) == {"online": False, "signalLost": False}
             state.device_command("AC:27:6E:45:B9:4C", "1000", "1")
-            assert json.load(urllib.request.urlopen(url, timeout=2)) == {"online": True}
+            assert json.load(urllib.request.urlopen(url, timeout=2)) == {"online": True, "signalLost": False}
         finally:
             server.shutdown()
             server.server_close()

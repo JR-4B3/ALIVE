@@ -3,7 +3,6 @@ import '@fontsource/space-mono/latin-700.css';
 import './styles.css';
 import { SignalLevelTracker } from './sensing/signalLevelTracker';
 import { BeaconDecoder } from './sensing/beaconDecoder';
-import { unseal } from './sensing/seal';
 import { mountSignalStrip } from './signalStrip';
 import { encodeRecording } from './audio/recording';
 import { uploadRecording } from './audio/recordingUpload';
@@ -17,7 +16,8 @@ declare const __PUBLISHED_API__: string;
 const DEBUG_UI = __DEBUG_UI__;
 const SAVED_LIMIT = 50;
 const NOTICE_MS = 5000;
-const ONLINE_CHECK_MS = 30000;
+// Often enough that "signal lost" shows soon after the beacon's last message.
+const ONLINE_CHECK_MS = 10000;
 // eduroam at the venue drops for a few seconds now and then. Visitors see
 // the out-of-order notice only once the API has been away this long.
 const OUT_OF_ORDER_AFTER_MS = 60000;
@@ -82,6 +82,13 @@ app.innerHTML = `
       <p class="notice-text">The station lost contact. This page carries on by itself once the line is back.</p>
     </div>
   </div>`}
+  <div id="lostNotice" class="notice" role="alertdialog" aria-modal="true" aria-labelledby="lostTitle" hidden>
+    <div class="notice-box">
+      <p id="lostTitle" class="notice-title">That was the end</p>
+      <p class="notice-text">AURORA's signal is gone. You may have been the last to hear it.</p>
+      <button id="listenAgain" type="button" class="notice-button">Listen again</button>
+    </div>
+  </div>
   ${DEBUG_UI ? `
   <section id="debugPanel" class="debug-panel" aria-label="Debug" hidden>
     <div id="micDiagnostics" class="debug-line">MIC OFF</div>
@@ -117,6 +124,7 @@ app.innerHTML = `
       <input id="apiToken" type="password" autocomplete="off" placeholder="paste operator token">
     </label>
     <button id="showStatus" type="button" class="debug-button">show board roles</button>
+    <button id="showLostScene" type="button" class="debug-button">show the signal-lost scene</button>
     <button id="resetAll" type="button" class="debug-button">reset to the first state</button>
     <pre id="resetStatus" class="debug-line" role="status"></pre>
   </section>` : ''}
@@ -138,6 +146,8 @@ const refs = {
   prompt: requiredElement<HTMLInputElement>('#prompt'),
   send: requiredElement<HTMLButtonElement>('#send'),
   main: requiredElement<HTMLElement>('#app > main'),
+  lostNotice: requiredElement<HTMLDivElement>('#lostNotice'),
+  listenAgain: requiredElement<HTMLButtonElement>('#listenAgain'),
   outOfOrder: DEBUG_UI ? null : requiredElement<HTMLDivElement>('#outOfOrder'),
   intro: DEBUG_UI ? null : requiredElement<HTMLDivElement>('#intro'),
   introClose: DEBUG_UI ? null : requiredElement<HTMLButtonElement>('#introClose')
@@ -157,6 +167,7 @@ const debugRefs = DEBUG_UI ? {
   apiToken: requiredElement<HTMLInputElement>('#apiToken'),
   showStatus: requiredElement<HTMLButtonElement>('#showStatus'),
   resetAll: requiredElement<HTMLButtonElement>('#resetAll'),
+  showLostScene: requiredElement<HTMLButtonElement>('#showLostScene'),
   resetStatus: requiredElement<HTMLPreElement>('#resetStatus'),
   contactStatus: requiredElement<HTMLDivElement>('#contactStatus'),
   recordDiagnostic: requiredElement<HTMLInputElement>('#recordDiagnostic'),
@@ -176,9 +187,18 @@ if (debugRefs) {
 }
 // The API keeps each visitor's conversation under this id for this tab.
 let session = sessionStorage.getItem('aliveSession') ?? newSession();
-// The API hands the key to a visitor LANTERN trusts. Only with it does this
-// page read sealed messages; other phones show their scrambled letters.
-let sealKey = sessionStorage.getItem('aliveKey') ?? '';
+// A visitor's first signals should be noise and clocks, not the beacon. Until
+// this tab has heard WARM_UP_SIGNALS of those, a message shows as noise.
+const WARM_UP_SIGNALS = 2;
+let warmUp = Number(sessionStorage.getItem('aliveWarmUp') ?? 0);
+// The beacon said its last message and recharges; nothing answers meanwhile.
+let signalLost = false;
+// The API said this visitor's reply is the beacon's goodbye. Once the phone
+// decodes it, the visitor's next message plays the signal-lost scene in the
+// reading window: 'losing', then 'lost'.
+let goodbyeDue = false;
+let heardLast = false;
+let lostScene: '' | 'losing' | 'lost' = '';
 
 type Saved = { text: string; at: string };
 
@@ -223,6 +243,17 @@ refs.clear.addEventListener('click', () => {
 refs.savedToggle.addEventListener('click', () => {
   setSavedOpen(refs.saved.hidden);
 });
+// After the signal-lost scene, any tap shows that the story is over, except
+// on the saved messages, which visitors may still read.
+document.addEventListener('click', (event) => {
+  if (lostScene !== 'lost' || !refs.lostNotice.hidden) return;
+  if ((event.target as Element).closest('#saved, #savedToggle, #debugPanel, #debugToggle')) return;
+  event.preventDefault();
+  event.stopPropagation();
+  refs.lostNotice.hidden = false;
+  refs.listenAgain.focus();
+}, true);
+refs.listenAgain.addEventListener('click', listenAgain);
 refs.contactForm.addEventListener('submit', (event) => {
   event.preventDefault();
   void sendContactMessage();
@@ -242,6 +273,18 @@ debugRefs?.randomSignals.addEventListener('change', () => {
 debugRefs?.showStatus.addEventListener('click', () => {
   void operatorRequest('GET', '/api/status');
 });
+// Plays the end as if the beacon's goodbye had just arrived and the visitor
+// answered it. The API is not told; "reset to the first state" undoes it.
+debugRefs?.showLostScene.addEventListener('click', () => {
+  setDebugOpen(false, false);
+  window.scrollTo({ top: 0 });
+  lostScene = '';
+  refs.lostNotice.hidden = true;
+  lastReception = { kind: 'intelligent', text: 'THIS IS GOODBYE REMEMBER AURORA', at: new Date() };
+  heardLast = true;
+  render();
+  window.setTimeout(playLostScene, 1500);
+});
 debugRefs?.resetAll.addEventListener('click', () => {
   void resetToFirstState();
 });
@@ -252,18 +295,30 @@ if (debugRefs) {
 
 renderSaved();
 render();
-if (!DEBUG_UI) {
-  showIntro();
-  void checkOnline();
-  window.setInterval(() => { if (!document.hidden) void checkOnline(); }, ONLINE_CHECK_MS);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) void checkOnline(); });
-}
+// The debug page checks too, for "signal lost", but never goes out of order.
+if (!DEBUG_UI) showIntro();
+void checkOnline();
+window.setInterval(() => { if (!document.hidden) void checkOnline(); }, ONLINE_CHECK_MS);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void checkOnline(); });
 
 async function checkOnline(): Promise<void> {
   let online = true;
   try {
     const response = await fetch(`${requestApiBase()}/api/online`, { signal: AbortSignal.timeout(10000) });
-    if (response.ok) online = ((await response.json()) as { online?: boolean }).online !== false;
+    if (response.ok) {
+      const body = (await response.json()) as { online?: boolean; signalLost?: boolean };
+      online = body.online !== false;
+      if (signalLost !== (body.signalLost === true)) {
+        signalLost = body.signalLost === true;
+        // The beacon woke up: its next story starts afresh.
+        if (!signalLost) {
+          heardLast = goodbyeDue = false;
+          lostScene = '';
+          refs.lostNotice.hidden = true;
+        }
+        render();
+      }
+    }
     // An API without this endpoint answers 401 or 404; only a gateway error
     // means it is down.
     else online = response.status < 500;
@@ -381,9 +436,18 @@ function showSimulated(samples: Float32Array, rate: number): void {
 function receive(input: Float32Array, sampleRate: number): void {
   translationSnapshot = decoder.process(input, sampleRate);
   for (const completed of decoder.takeCompleted()) {
-    const reception = opened(completed);
+    const reception = disguised(completed);
+    if (completed.kind !== 'intelligent' && warmUp < WARM_UP_SIGNALS) {
+      sessionStorage.setItem('aliveWarmUp', String(++warmUp));
+    }
     lastReception = { ...reception, at: new Date() };
-    if (reception.kind === 'intelligent' && (!reception.sealed || sealKey)) saveMessage(reception.text);
+    if (reception.kind === 'intelligent') {
+      saveMessage(reception.text);
+      if (goodbyeDue) {
+        goodbyeDue = false;
+        heardLast = true;
+      }
+    }
   }
   render();
 }
@@ -453,6 +517,7 @@ async function stopMicrophone(): Promise<void> {
 async function sendContactMessage(): Promise<void> {
   const message = refs.prompt.value.trim();
   if (!message || sending || outOfOrder) return;
+  playLostScene();
   refs.prompt.value = '';
   sending = true;
   renderCompose();
@@ -470,11 +535,8 @@ async function sendContactMessage(): Promise<void> {
       throw new Error(failure?.error ?? `HTTP ${response.status}`);
     }
     // Without contact the message goes nowhere. The page says "Sent" either way.
-    const payload = (await response.json()) as { contact?: boolean; queued?: number; reply?: string; key?: string };
-    if (payload.key && payload.key !== sealKey) {
-      sealKey = payload.key;
-      sessionStorage.setItem('aliveKey', sealKey);
-    }
+    const payload = (await response.json()) as { contact?: boolean; queued?: number; reply?: string; last?: boolean };
+    if (payload.last) goodbyeDue = true;
     showNotice('Sent');
     setContactStatus(!payload.contact ? 'no contact: nothing will answer'
       : `queued #${payload.queued ?? '?'}${payload.reply ? `: ${payload.reply}` : ''}`);
@@ -515,8 +577,10 @@ async function resetToFirstState(): Promise<void> {
   const reachedApi = await operatorRequest('POST', '/api/emitter/main/reset');
   saved = [];
   sessionStorage.removeItem('aliveMessages');
-  sessionStorage.removeItem('aliveKey');
-  sealKey = '';
+  sessionStorage.removeItem('aliveWarmUp');
+  warmUp = 0;
+  heardLast = goodbyeDue = false;
+  lostScene = '';
   session = newSession();
   lastReception = null;
   notice = null;
@@ -652,25 +716,61 @@ function clockTime(date: Date): string {
 
 const KIND_LABELS = { noise: 'noise', clock: 'clock', intelligent: 'message' } as const;
 
-// A sealed message in plain text if this page holds the key.
-function opened(reception: Reception): Reception {
-  return reception.sealed && sealKey ? { ...reception, text: unseal(reception.text, sealKey) } : reception;
+// The beacon's end, after the visitor answers its last message: the text in
+// the reading window breaks up, then SIGNAL LOST flickers in and stays until
+// the next reception. A phone that missed the last message but heard the
+// beacon before gets it too.
+function playLostScene(): void {
+  if (lostScene || !(heardLast || signalLost && saved.length)) return;
+  lostScene = 'losing';
+  navigator.vibrate?.([80, 60, 80, 60, 400]);
+  render();
+  window.setTimeout(() => {
+    lostScene = 'lost';
+    lastReception = null;
+    render();
+  }, 1600);
+}
+
+// A fresh start for this visitor: no saved messages and a new session. The
+// beacon itself comes back only after its recharge.
+function listenAgain(): void {
+  refs.lostNotice.hidden = true;
+  saved = [];
+  sessionStorage.removeItem('aliveMessages');
+  session = newSession();
+  heardLast = goodbyeDue = false;
+  lostScene = '';
+  lastReception = null;
+  renderSaved();
+  render();
+}
+
+// Before the warm-up, a message passes for noise: its letters, run together
+// and shifted so they read as nothing.
+function disguised(reception: Reception): Reception {
+  if (reception.kind !== 'intelligent' || warmUp >= WARM_UP_SIGNALS) return reception;
+  const letters = [...reception.text.replace(/ /g, '')];
+  return { kind: 'noise', text: letters.map((char, i) =>
+    String.fromCharCode(65 + (char.charCodeAt(0) - 65 + 7 + i * 11) % 26)).join('') };
 }
 
 function renderReading(receiving: Reception | null): void {
-  const live = receiving && opened(receiving);
+  const live = receiving && disguised(receiving);
   const shown = live ?? lastReception;
   const kind = shown?.kind ?? '';
-  const label = !shown ? '' : !shown.sealed ? KIND_LABELS[shown.kind]
-    : sealKey ? 'sealed message · opened with your key' : 'sealed message · no key';
-  const meta = !shown ? '' : live ? `receiving ${label}` : `${clockTime(lastReception!.at)} · ${label}`;
-  const sealed = !shown?.sealed ? '' : sealKey ? 'open' : 'locked';
+  const label = shown ? KIND_LABELS[shown.kind] : '';
+  const lost = !shown && lostScene === 'lost';
+  const meta = lost ? 'first contact logged' : !shown ? ''
+    : live ? `receiving ${label}` : `${clockTime(lastReception!.at)} · ${label}`;
+  const scene = live ? '' : lostScene === 'losing' ? 'losing' : lost ? 'lost' : '';
+  if (refs.readingText.dataset.lost !== scene) refs.readingText.dataset.lost = scene;
   if (refs.readingText.dataset.kind !== kind) refs.readingText.dataset.kind = kind;
-  if (refs.readingText.dataset.sealed !== sealed) refs.readingText.dataset.sealed = sealed;
-  if (refs.readingText.textContent !== (shown?.text ?? '')) refs.readingText.textContent = shown?.text ?? '';
+  const text = lost ? 'SIGNAL LOST' : shown?.text ?? '';
+  if (refs.readingText.textContent !== text) refs.readingText.textContent = text;
   refs.readingText.toggleAttribute('data-live', Boolean(live));
   if (refs.readingMeta.textContent !== meta) refs.readingMeta.textContent = meta;
-  const hint = shown ? '' : listening() ? 'Listening. Signals appear here as they arrive.'
+  const hint = shown || lost ? '' : listening() ? 'Listening. Signals appear here as they arrive.'
     : micError || 'Turn on recording and explore the room.';
   if (refs.readingHint.textContent !== hint) refs.readingHint.textContent = hint;
 }
@@ -682,8 +782,11 @@ function render(): void {
   refs.mic.title = micActive ? 'Disable microphone' : 'Enable microphone';
   renderReading(translationSnapshot.live);
   if (notice && performance.now() >= notice.until) notice = null;
-  const state = notice?.text ?? (listening() ? translationSnapshot.title : 'Microphone off');
-  const verdict = translationSnapshot.verdict;
+  // Visitors who heard the beacon learn that it is gone; newcomers just find nothing.
+  const lost = lostScene === 'lost' && !translationSnapshot.live && !notice;
+  const state = lost ? 'Signal lost' : notice?.text ?? (listening() ? translationSnapshot.title : 'Microphone off');
+  const verdict = lost ? 'FIRST CONTACT LOGGED'
+    : translationSnapshot.verdict === 'ALIVE' && warmUp < WARM_UP_SIGNALS ? 'NOISE' : translationSnapshot.verdict;
   const key = `${state}/${verdict}`;
   if (refs.translationState.dataset.state !== key) {
     refs.translationState.dataset.state = key;
