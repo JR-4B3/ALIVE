@@ -187,10 +187,9 @@ if (debugRefs) {
 }
 // The API keeps each visitor's conversation under this id for this tab.
 let session = sessionStorage.getItem('aliveSession') ?? newSession();
-// A visitor's first signals should be noise and clocks, not the beacon. Until
-// this tab has heard WARM_UP_SIGNALS of those, a message shows as noise.
-const WARM_UP_SIGNALS = 2;
-let warmUp = Number(sessionStorage.getItem('aliveWarmUp') ?? 0);
+// A message stays on screen this long while noise and clocks arrive, so the
+// visitor can read it and answer.
+const MESSAGE_HOLD_MS = 20000;
 // The beacon said its last message and recharges; nothing answers meanwhile.
 let signalLost = false;
 // The API said this visitor's reply is the beacon's goodbye. Once the phone
@@ -438,12 +437,8 @@ function showSimulated(samples: Float32Array, rate: number): void {
 
 function receive(input: Float32Array, sampleRate: number): void {
   translationSnapshot = decoder.process(input, sampleRate);
-  for (const completed of decoder.takeCompleted()) {
-    const reception = disguised(completed);
-    if (completed.kind !== 'intelligent' && warmUp < WARM_UP_SIGNALS) {
-      sessionStorage.setItem('aliveWarmUp', String(++warmUp));
-    }
-    lastReception = { ...reception, at: new Date() };
+  for (const reception of decoder.takeCompleted()) {
+    if (reception.kind === 'intelligent' || !holdingMessage()) lastReception = { ...reception, at: new Date() };
     if (reception.kind === 'intelligent') {
       saveMessage(reception.text);
       if (goodbyeDue) {
@@ -580,8 +575,6 @@ async function resetToFirstState(): Promise<void> {
   const reachedApi = await operatorRequest('POST', '/api/emitter/main/reset');
   saved = [];
   sessionStorage.removeItem('aliveMessages');
-  sessionStorage.removeItem('aliveWarmUp');
-  warmUp = 0;
   heardLast = goodbyeDue = false;
   lostScene = '';
   session = newSession();
@@ -613,7 +606,6 @@ async function operatorRequest(method: 'GET' | 'POST', path: string, body?: obje
     debugRefs.resetStatus.textContent = JSON.stringify(payload, null, 1);
     return true;
   } catch (error) {
-    cancelRecording();
     debugRefs.resetStatus.textContent = error instanceof Error ? error.message : 'Request failed';
     return false;
   }
@@ -749,17 +741,12 @@ function listenAgain(): void {
   render();
 }
 
-// Before the warm-up, a message passes for noise: its letters, run together
-// and shifted so they read as nothing.
-function disguised(reception: Reception): Reception {
-  if (reception.kind !== 'intelligent' || warmUp >= WARM_UP_SIGNALS) return reception;
-  const letters = [...reception.text.replace(/ /g, '')];
-  return { kind: 'noise', text: letters.map((char, i) =>
-    String.fromCharCode(65 + (char.charCodeAt(0) - 65 + 7 + i * 11) % 26)).join('') };
+function holdingMessage(): boolean {
+  return lastReception?.kind === 'intelligent' && Date.now() - lastReception.at.getTime() < MESSAGE_HOLD_MS;
 }
 
 function renderReading(receiving: Reception | null): void {
-  const live = receiving && disguised(receiving);
+  const live = receiving?.kind === 'intelligent' || !holdingMessage() ? receiving : null;
   const shown = live ?? lastReception;
   const kind = shown?.kind ?? '';
   const label = shown ? KIND_LABELS[shown.kind] : '';
@@ -788,8 +775,7 @@ function render(): void {
   // Visitors who heard the beacon learn that it is gone; newcomers just find nothing.
   const lost = lostScene === 'lost' && !translationSnapshot.live && !notice;
   const state = lost ? 'Signal lost' : notice?.text ?? (listening() ? translationSnapshot.title : 'Microphone off');
-  const verdict = lost ? 'FIRST CONTACT LOGGED'
-    : translationSnapshot.verdict === 'ALIVE' && warmUp < WARM_UP_SIGNALS ? 'NOISE' : translationSnapshot.verdict;
+  const verdict = lost ? 'FIRST CONTACT LOGGED' : holdingMessage() ? 'ALIVE' : translationSnapshot.verdict;
   const key = `${state}/${verdict}`;
   if (refs.translationState.dataset.state !== key) {
     refs.translationState.dataset.state = key;

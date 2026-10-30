@@ -13,6 +13,11 @@ const RAW_END_SECONDS = 2;
 const MESSAGE_END_SECONDS = 2.5;
 // A message sends a letter every 540 ms. Noise chirps come at random gaps.
 const LETTER_SECONDS = .54;
+// A message's first letter starts this long after its last opening sync chirp.
+const SYNC_TO_LETTER_SECONDS = .64;
+// Whether a span is a whole number of letters at the message cadence.
+const atCadence = (seconds: number) =>
+  Math.abs(seconds - Math.round(seconds / LETTER_SECONDS) * LETTER_SECONDS) < .06;
 
 // A single-carrier chirp decoder. No text or reply metadata enters it: what a
 // reception is, it judges from the sound alone.
@@ -37,6 +42,8 @@ export class BeaconDecoder {
   // Unframed chirps in progress: their symbols and start times.
   private raw: { symbol: number; start: number }[] = [];
   private rawEnd = 0;
+  // Once unframed chirps earned being a message, they stay one.
+  private rawMessage = false;
   private lastKind: ReceptionKind | null = null;
   private completed: Reception[] = [];
   private pair = '--';
@@ -46,7 +53,7 @@ export class BeaconDecoder {
     this.fill = this.processed = this.evidence = this.quiet = this.peak = 0;
     this.votes.clear(); this.firstSync = null; this.locked = this.sealed = false;
     this.text = this.finalText = ''; this.lastLetterAt = this.lastLetterStartAt = -Infinity;
-    this.raw = []; this.rawEnd = 0; this.lastKind = null; this.completed = [];
+    this.raw = []; this.rawEnd = 0; this.rawMessage = false; this.lastKind = null; this.completed = [];
     this.pair = '--'; this.stream = reason;
     return this.snapshot();
   }
@@ -98,7 +105,8 @@ export class BeaconDecoder {
         if (this.quiet >= .065) this.finishBurst();
       }
       if (this.locked && time - this.lastLetterAt > MESSAGE_END_SECONDS) this.finishMessage();
-      if (this.raw.length && !this.evidence && time - this.rawEnd > RAW_END_SECONDS) this.finishRaw();
+      if (this.raw.length && !this.evidence &&
+        time - this.rawEnd > (this.rawMessage ? MESSAGE_END_SECONDS : RAW_END_SECONDS)) this.finishRaw();
       return;
     }
     if (!this.evidence) this.burstStart = time - this.frame.length / rate;
@@ -138,6 +146,10 @@ export class BeaconDecoder {
           if (this.raw.length) this.finishRaw();
           this.locked = true; this.sealed = false; this.text = ''; this.firstSync = null; this.lastLetterStartAt = -Infinity;
           this.lastLetterAt = this.burstEnd; this.stream = 'ultrasound signal acquired';
+        } else if (this.raw.length && atCadence(this.burstStart - this.raw.at(-1)!.start)) {
+          // A closing sync chirp in time with the letters: the opening pair was missed.
+          this.rawMessage = true; this.firstSync = null;
+          this.finishRaw();
         } else this.firstSync = this.burstStart;
         this.pair = `${SYNC_HZ} Hz`;
       } else if (this.locked) {
@@ -148,7 +160,14 @@ export class BeaconDecoder {
           this.stream = this.text;
         }
       } else if (this.burstStart - (this.raw.at(-1)?.start ?? -Infinity) > .36) {
+        // One surviving opening sync chirp with a first letter in time with it
+        // frames a message, however short.
+        if (!this.raw.length && this.firstSync !== null && this.burstStart - this.firstSync < MESSAGE_END_SECONDS &&
+          atCadence(this.burstStart - this.firstSync - SYNC_TO_LETTER_SECONDS)) {
+          this.rawMessage = true; this.firstSync = null;
+        }
         this.raw.push({ symbol: winner, start: this.burstStart });
+        this.rawMessage ||= this.rawAtCadence();
         this.rawEnd = this.burstEnd;
         this.pair = `${beaconFrequency(winner)} Hz`;
         this.stream = this.rawText();
@@ -170,8 +189,8 @@ export class BeaconDecoder {
 
   private finishRaw(): void {
     // A lone chirp is too little to log; it is most likely a stray sound.
-    if (this.raw.length > 1) this.complete({ kind: this.rawKind(4), text: this.rawText() });
-    this.raw = [];
+    if (this.raw.length > 1 || this.rawMessage) this.complete({ kind: this.rawKind(4), text: this.rawText() });
+    this.raw = []; this.rawMessage = false;
   }
 
   private complete(reception: Reception): void {
@@ -183,18 +202,27 @@ export class BeaconDecoder {
     return this.raw.map(({ symbol }) => BEACON_ALPHABET[symbol]).join('');
   }
 
-  // A clock repeats one channel at a period that varies by under 10 percent.
+  private rawPeriods(): number[] {
+    return this.raw.slice(1).map(({ start }, i) => start - this.raw[i].start).sort((a, b) => a - b);
+  }
+
   // Mixed letters at the message cadence are a message whose opening sync
-  // chirps the phone missed; a few missed letters leave double gaps.
+  // chirps the phone missed; a few missed letters leave double gaps. The API
+  // keeps noise off these gaps (noise_score in signals.py).
+  private rawAtCadence(): boolean {
+    if (this.raw.length < 4 || new Set(this.raw.map(({ symbol }) => symbol)).size < 3) return false;
+    const periods = this.rawPeriods();
+    const steps = (count: number) => periods.filter((period) => Math.abs(period - count * LETTER_SECONDS) < .06).length;
+    const single = steps(1);
+    return single >= periods.length * .6 && single + steps(2) >= periods.length * .85;
+  }
+
+  // A clock repeats one channel at a period that varies by under 10 percent.
   private rawKind(minimumTicks: number): ReceptionKind {
+    if (this.rawMessage) return 'intelligent';
     const raw = this.raw;
-    const periods = raw.slice(1).map(({ start }, i) => start - raw[i].start).sort((a, b) => a - b);
-    if (raw.length >= 6 && new Set(raw.map(({ symbol }) => symbol)).size > 2) {
-      const steps = (count: number) => periods.filter((period) => Math.abs(period - count * LETTER_SECONDS) < .06).length;
-      const single = steps(1);
-      if (single >= periods.length * .6 && single + steps(2) >= periods.length * .85) return 'intelligent';
-    }
     if (raw.length < minimumTicks || raw.some(({ symbol }) => symbol !== raw[0].symbol)) return 'noise';
+    const periods = this.rawPeriods();
     const median = periods[periods.length >> 1];
     return periods.every((period) => Math.abs(period - median) < median * .1) ? 'clock' : 'noise';
   }

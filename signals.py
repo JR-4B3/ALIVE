@@ -22,6 +22,9 @@ ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ "
 # The phone needs 65 ms of silence between chirps, measured with its 85 ms
 # analysis window, so a gap shorter than 150 ms merges two chirps into one.
 MIN_GAP_MS = 180
+# Noise gaps stay clear of the ones between letters, 180 ms or 720 ms with a
+# letter missed, so a phone cannot take noise for a message whose sync it missed.
+NOISE_GAPS_MS = (*range(300, 600), *range(840, 1000))
 
 
 def message_score(text: str, sealed_with: str = "") -> dict[str, object]:
@@ -50,7 +53,7 @@ def seal(text: str, key: str) -> str:
 
 def noise_score(rng: random.Random) -> dict[str, object]:
     """A few chirps on random channels at uneven intervals."""
-    chirps = [[rng.randrange(len(ALPHABET)), rng.randint(MIN_GAP_MS, 900)]
+    chirps = [[rng.randrange(len(ALPHABET)), rng.choice(NOISE_GAPS_MS)]
               for _ in range(rng.randint(3, 10))]
     return {"kind": "noise", "leadMs": 0, "chirps": chirps}
 

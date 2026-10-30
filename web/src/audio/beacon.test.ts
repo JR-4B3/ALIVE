@@ -113,10 +113,10 @@ test('one channel at an uneven pace is noise, not a clock', () => {
   expect(log).toEqual([{ kind: 'noise', text: 'FFFF' }]);
 });
 
-test('unframed chirps never count as a message', () => {
-  const { log, kinds } = receptions(join(renderChirps([[7, 180], [4, 180], [11, 180], [11, 180], [14, 180]]), pause(3)));
+test('three unframed letters do not count as a message', () => {
+  const { log, kinds } = receptions(join(renderChirps([[24, 180], [4, 180], [18, 180]]), pause(3)));
   expect(kinds.has('intelligent')).toBe(false);
-  expect(log).toEqual([{ kind: 'noise', text: 'HELLO' }]);
+  expect(log).toEqual([{ kind: 'noise', text: 'YES' }]);
 });
 
 test('decodes a 40-character reply', () => {
@@ -182,11 +182,44 @@ test('a message whose opening sync chirps were missed still counts as a message'
 test('random noise of many chirps stays noise', () => {
   let seed = 7;
   const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  // The gaps of noise_score in signals.py.
+  const gap = () => random() < .65 ? 300 + Math.floor(random() * 300) : 840 + Math.floor(random() * 160);
   for (let run = 0; run < 40; run++) {
-    const chirps = Array.from({ length: 10 }, (): Chirp => [Math.floor(random() * 27), 180 + Math.floor(random() * 721)]);
-    const { log } = receptions(join(renderChirps(chirps), pause(3)));
+    const chirps = Array.from({ length: 10 }, (): Chirp => [Math.floor(random() * 27), gap()]);
+    const { log, kinds } = receptions(join(renderChirps(chirps), pause(3)));
     expect(log.map(({ kind }) => kind)).toEqual(['noise']);
+    expect(kinds.has('intelligent')).toBe(false);
   }
+});
+
+// A message as a phone hears it. Chirp 0 and 1 open it, the last one closes it.
+function heard(text: string, lost: number[]): Float32Array {
+  const chirps = messageChirps(text), audio = renderChirps(chirps);
+  let startMs = 0;
+  chirps.forEach(([, gapMs], index) => {
+    const start = Math.round(startMs / 1000 * BEACON_RATE);
+    if (lost.includes(index)) audio.fill(0, start, start + Math.round(.36 * BEACON_RATE));
+    startMs += 360 + gapMs;
+  });
+  return audio;
+}
+
+test('one surviving sync chirp makes even a short reply a message', () => {
+  for (const lost of [[0], [1], [0, 1], [0, 5], [1, 5]]) {
+    const { log } = receptions(join(pause(.2), heard('YES', lost), pause(3)));
+    expect(log).toEqual([{ kind: 'intelligent', text: 'YES' }]);
+  }
+});
+
+test('letters at the cadence are a message without any sync chirp', () => {
+  const { log } = receptions(join(pause(.2), heard('HELLO', [0, 1, 7]), pause(3)));
+  expect(log).toEqual([{ kind: 'intelligent', text: 'HELLO' }]);
+});
+
+test('a reception that became a message stays one when more letters are lost', () => {
+  const { log, kinds } = receptions(join(pause(.2), heard('WE HEAR Y', [0, 1, 8, 9, 11]), pause(3)));
+  expect(log).toEqual([{ kind: 'intelligent', text: 'WE HEAY' }]);
+  expect([...kinds]).toEqual(['noise', 'intelligent']);
 });
 
 test('keeps a framed message classified after two inaudible letters', () => {

@@ -1,11 +1,12 @@
 type UploadRequest = (url: string, init: RequestInit) => Promise<Pick<Response, 'ok' | 'status'>>;
 
-// The caller keeps a local WAV link throughout this optional upload.
+// The caller keeps a local WAV link throughout this optional upload. Without a
+// token only the debug host can take it: its proxy on this origin adds the token.
 export async function uploadRecording(
   wav: ArrayBuffer, api: string, message: string, headers: Record<string, string>,
-  request: UploadRequest = fetch
+  request: UploadRequest = fetch, pageOrigin = globalThis.location?.origin
 ): Promise<string> {
-  if (!headers.authorization) return 'Recording ready on this device.';
+  if (!headers.authorization && api !== pageOrigin) return 'Recording ready on this device.';
   const controller = new AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), 15000);
   try {

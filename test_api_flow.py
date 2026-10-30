@@ -71,7 +71,10 @@ def test_message_score_matches_the_reply_duration():
 def test_noise_chirps_stay_apart_so_a_phone_hears_each_one():
     rng = random.Random(4)
     for _ in range(100):
-        assert all(gap >= 180 and 0 <= symbol < 27 for symbol, gap in noise_score(rng)["chirps"])
+        chirps = noise_score(rng)["chirps"]
+        assert all(gap >= 180 and 0 <= symbol < 27 for symbol, gap in chirps)
+        # The phone's message cadence test allows 60 ms around these gaps.
+        assert not any(abs(gap - 180) <= 60 or abs(gap - 720) <= 60 for _, gap in chirps)
 
 
 def test_only_one_board_is_ever_on_the_air(clock):
@@ -156,11 +159,11 @@ def test_no_random_signal_plays_during_a_conversation(clock):
     assert state.reserve_reply()[0] == ""
     assert run(state, clock, 20) == []
     state.queue_reply("visitor-0001", "who are you", "WE ARE LANTERN")
-    played = run(state, clock, emitter.CONVERSATION_HOLD_SECONDS - 10)
+    played = run(state, clock, emitter.CONVERSATION_HOLD_SECONDS - 1)
     assert [play.get("text") for _, _, play in played] == ["WE ARE LANTERN"]
     # An operator's request still plays, and random signals return afterwards.
     state.play_now("noise")
-    assert [play["kind"] for _, _, play in run(state, clock, 4)] == ["noise"]
+    assert [play["kind"] for _, _, play in run(state, clock, 10)] == ["noise"]
     assert run(state, clock, 60)
 
 
@@ -334,7 +337,8 @@ def test_the_shared_story_ends_only_after_every_beat_and_then_recharges(clock):
             return json.load(response)["signalLost"]
 
     try:
-        with patch("emitter.generate_reply", fake_reply), patch("emitter.fade", lambda text: text):
+        with (patch("emitter.generate_reply", fake_reply), patch("emitter.fade", lambda text: text),
+              patch("emitter.RECHARGE_SECONDS", 300)):
             heard = run(state, clock, 4)[0][2]["text"]
             # Two visitors share the beacon and so its story.
             for turn in range(8):

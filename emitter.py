@@ -42,9 +42,7 @@ STARTUP_SILENCE_SECONDS = 26.0
 SIGNAL_PAUSE_SECONDS = (2.0, 8.0)
 # Share of unprompted signals that are noise, a clock, or an intelligent beacon.
 SIGNAL_WEIGHTS = {"noise": 0.45, "clock": 0.3, "intelligent": 0.25}
-# At most this many other signals between two beacons. Phones show their first
-# messages as noise until they heard two other signals (WARM_UP_SIGNALS in
-# web/src/main.ts), so with two every visitor reads a beacon within five signals.
+# At most this many other signals between two beacons.
 MAX_SIGNALS_BETWEEN_BEACONS = 2
 # What the intelligent board sends when nobody is talking to it. They should
 # not give away yet that humans are sending them.
@@ -57,14 +55,15 @@ BEACON_LINES = ("IS ANYONE THERE", "WHO LISTENS", "ANSWER IF YOU HEAR", "WE ARE 
 # After PUSH_AFTER replies that told nothing new, the next one must.
 PUSH_AFTER = 2
 MYSTERY_REPLIES = 2
-RECHARGE_SECONDS = float(os.environ.get("ALIVE_RECHARGE_SECONDS", "300"))
+RECHARGE_SECONDS = float(os.environ.get("ALIVE_RECHARGE_SECONDS", "60"))
 QUIET_SIGNALS = 2
 # Boards get new random roles this often, unless a conversation is running.
 ROLE_SECONDS = 600
 # A conversation runs from a visitor's message until this long after the last
 # reply was queued. Meanwhile roles stay and no random signal plays, so the
-# next thing the visitor hears is the reply.
-CONVERSATION_HOLD_SECONDS = 180
+# next thing the visitor hears is the reply. Newcomers wait this long too, so
+# keep it short: phones hold a message on screen after random signals resume.
+CONVERSATION_HOLD_SECONDS = 15
 # A visitor keeps contact this long after their phone decoded a message.
 CONTACT_SECONDS = 1800
 # How closely the text a phone decoded must match a transmission (0 to 1).

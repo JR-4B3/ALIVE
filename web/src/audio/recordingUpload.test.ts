@@ -7,6 +7,12 @@ test('keeps recordings local without an operator token', async () => {
   expect(result).toBe('Recording ready on this device.');
 });
 
+test('uploads without a token through the same-origin debug host', async () => {
+  const result = await uploadRecording(new ArrayBuffer(8), 'https://debug.invalid:8443', 'ABC', {},
+    async () => ({ ok: true, status: 200 }), 'https://debug.invalid:8443');
+  expect(result).toBe('Recording also saved to the API server.');
+});
+
 for (const status of [401, 502]) {
   test(`retains the local recording when upload returns HTTP ${status}`, async () => {
     const wav = new Uint8Array([1, 2, 3]).buffer;
