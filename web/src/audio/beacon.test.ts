@@ -167,6 +167,28 @@ test('a third opening sync chirp marks a sealed message, and only the key opens 
   expect(unseal(sealed, 'LANTERN')).not.toBe('THIS IS AURORA');
 });
 
+test('a message whose opening sync chirps were missed still counts as a message', () => {
+  const chirps = messageChirps('IS ANYONE THERE').slice(2);
+  const audio = renderChirps(chirps);
+  // Two letters lost on the way, without changing the timing.
+  for (const index of [6, 10]) {
+    const start = Math.round((index * .54) * BEACON_RATE);
+    audio.fill(0, start, start + Math.round(.36 * BEACON_RATE));
+  }
+  const { log } = receptions(join(pause(.2), audio, pause(3)));
+  expect(log).toEqual([{ kind: 'intelligent', text: 'IS ANYNE HERE' }]);
+});
+
+test('random noise of many chirps stays noise', () => {
+  let seed = 7;
+  const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let run = 0; run < 40; run++) {
+    const chirps = Array.from({ length: 10 }, (): Chirp => [Math.floor(random() * 27), 180 + Math.floor(random() * 721)]);
+    const { log } = receptions(join(renderChirps(chirps), pause(3)));
+    expect(log.map(({ kind }) => kind)).toEqual(['noise']);
+  }
+});
+
 test('keeps a framed message classified after two inaudible letters', () => {
   const text = 'OUR SUPPLY SHIP LOST CONTACT DECADES AGO';
   for (const rate of [44100, 48000]) {
