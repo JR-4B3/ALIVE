@@ -39,9 +39,13 @@ DELIVERY_SECONDS = 4.0
 # waits out the longest signal before granting a new one.
 STARTUP_SILENCE_SECONDS = 26.0
 # Random pause before the next unprompted signal.
-SIGNAL_PAUSE_SECONDS = (6.0, 20.0)
+SIGNAL_PAUSE_SECONDS = (2.0, 8.0)
 # Share of unprompted signals that are noise, a clock, or an intelligent beacon.
 SIGNAL_WEIGHTS = {"noise": 0.45, "clock": 0.3, "intelligent": 0.25}
+# At most this many other signals between two beacons. Phones show their first
+# messages as noise until they heard two other signals (WARM_UP_SIGNALS in
+# web/src/main.ts), so with two every visitor reads a beacon within five signals.
+MAX_SIGNALS_BETWEEN_BEACONS = 2
 # What the intelligent board sends when nobody is talking to it. They should
 # not give away yet that humans are sending them.
 BEACON_LINES = ("IS ANYONE THERE", "WHO LISTENS", "ANSWER IF YOU HEAR", "WE ARE HERE", "CAN YOU HEAR",
@@ -130,6 +134,7 @@ class ApiState:
         # The first unprompted signal after a start is a beacon, so a test
         # visit hears an intelligent message quickly.
         self._next_kind = "intelligent"
+        self._since_beacon = 0
         # Queued replies: when, the text, and whether it is the last message.
         self._replies: deque[tuple[float, str, bool]] = deque()
         # The story beats told so far, the replies since one told anything
@@ -237,7 +242,9 @@ class ApiState:
             if kind != "intelligent" and now >= self._lost_until:
                 self._quiet_signals = max(0, self._quiet_signals - 1)
             self._signal_requested = False
-            self._next_kind = self._rng.choices(list(SIGNAL_WEIGHTS), list(SIGNAL_WEIGHTS.values()))[0]
+            self._since_beacon = 0 if kind == "intelligent" else self._since_beacon + 1
+            self._next_kind = ("intelligent" if self._since_beacon >= MAX_SIGNALS_BETWEEN_BEACONS else
+                               self._rng.choices(list(SIGNAL_WEIGHTS), list(SIGNAL_WEIGHTS.values()))[0])
         else:
             return None
         if score["kind"] == "intelligent" and not self._ending:

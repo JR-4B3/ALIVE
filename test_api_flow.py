@@ -428,6 +428,13 @@ def test_manual_mode_plays_only_requested_signals_right_away(clock):
     assert run(state, clock, 120) == []
 
 
+def test_a_beacon_comes_at_least_every_third_signal(clock):
+    state = started(ApiState(rng=random.Random(3)), clock)
+    kinds = "".join(play["kind"][0] for _, _, play in run(state, clock, 1800))
+    assert len(kinds) > 40
+    assert "nnn" not in kinds.replace("c", "n")
+
+
 def test_a_requested_signal_restarts_the_random_pause(clock):
     state = started(ApiState(rng=random.Random(9)), clock)
     first = run(state, clock, 2)[0][2]
