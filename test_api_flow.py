@@ -176,6 +176,16 @@ def test_old_replies_expire_when_no_board_plays_them(clock):
     assert all(play.get("text") != "OLD" for _, _, play in played)
 
 
+def test_a_phone_may_hear_only_part_of_a_transmission():
+    match = emitter.heard_matches
+    assert match("IS ANYNE THERE", "IS ANYONE THERE")
+    assert match("ISAN", "IS ANYONE THERE")
+    assert match("ISAQ", "IS ANYONE THERE")
+    assert match("NO", "NO")
+    assert not match("IS", "IS ANYONE THERE")
+    assert not match("QXZ", "IS ANYONE THERE")
+
+
 def test_contact_needs_a_decoded_transmission(clock):
     state = started(ApiState(rng=random.Random(8)), clock)
     assert not state.has_contact("visitor-0001", "IS ANYONE THERE")

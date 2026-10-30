@@ -68,6 +68,9 @@ CONVERSATION_HOLD_SECONDS = 15
 CONTACT_SECONDS = 1800
 # How closely the text a phone decoded must match a transmission (0 to 1).
 HEARD_MATCH = 0.6
+# A fragment counts when this share of its letters came, in order, from a
+# transmission. Phones may lose most of a message and still label it one.
+HEARD_FRAGMENT_MATCH = 0.75
 CONVERSATION_TURNS = 6
 REPLY_QUEUE_LIMIT = 3
 REPLY_EXPIRY_SECONDS = 120
@@ -99,6 +102,18 @@ def save_receiver_capture(data: bytes, message: str) -> str:
     metadata.write_text(json.dumps({"message": sanitize_message(message)[:40], "sampleRate": rate,
                                     "seconds": frames / rate}), encoding="utf-8")
     return name
+
+
+def heard_matches(heard: str, text: str) -> bool:
+    """Whether a phone's decoded text can be this transmission: all of it, a
+    close match, or a fragment of at least three characters."""
+    if heard == text:
+        return True
+    if len(heard) < 3:
+        return False
+    matcher = SequenceMatcher(None, heard, text, autojunk=False)
+    return (matcher.ratio() >= HEARD_MATCH or
+            sum(block.size for block in matcher.get_matching_blocks()) >= len(heard) * HEARD_FRAGMENT_MATCH)
 
 
 class ApiState:
@@ -283,9 +298,8 @@ class ApiState:
         with self._lock:
             now = time.monotonic()
             entry = self._session(session, now) if session else {"contact": False}
-            if not entry["contact"] and len(heard) >= 3:
-                entry["contact"] = any(now - at < CONTACT_SECONDS and
-                                       SequenceMatcher(None, heard, text).ratio() >= HEARD_MATCH
+            if not entry["contact"] and heard:
+                entry["contact"] = any(now - at < CONTACT_SECONDS and heard_matches(heard, text)
                                        for at, text in self._transmitted)
             return bool(entry["contact"])
 

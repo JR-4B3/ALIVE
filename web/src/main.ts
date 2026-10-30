@@ -493,7 +493,7 @@ async function startMicrophone(): Promise<void> {
 }
 
 async function stopMicrophone(): Promise<void> {
-  cancelRecording();
+  void saveRecording();
   signalStrip.stop();
   processor?.disconnect();
   sourceNode?.disconnect();
