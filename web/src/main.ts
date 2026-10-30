@@ -220,9 +220,10 @@ let lastReception: (Reception & { at: Date }) | null = null;
 let saved = loadSaved();
 let notice: { text: string; until: number } | null = null;
 let noticeTimer = 0;
-// Out of order once the API has been unreachable, or no unit has polled it,
-// for OUT_OF_ORDER_AFTER_MS. Units may still play signals on their own then,
-// but nothing can answer. The debug page never checks, so testing goes on.
+// Out of order once the API has been unreachable for OUT_OF_ORDER_AFTER_MS.
+// A unit dropping off Wi-Fi does not count: units play signals on their own
+// then, so the room still has something to find. The debug page never checks,
+// so testing goes on.
 // Only checks while the page is visible count: a phone that locks its screen
 // cancels the check in flight, which is no outage.
 let outOfOrder = false;
@@ -312,8 +313,7 @@ async function checkOnline(): Promise<void> {
   try {
     const response = await fetch(`${requestApiBase()}/api/online`, { signal: AbortSignal.timeout(10000) });
     if (response.ok) {
-      const body = (await response.json()) as { online?: boolean; signalLost?: boolean };
-      online = body.online !== false;
+      const body = (await response.json()) as { signalLost?: boolean };
       if (signalLost !== (body.signalLost === true)) {
         signalLost = body.signalLost === true;
         // The beacon woke up: its next story starts afresh.

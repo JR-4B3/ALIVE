@@ -108,7 +108,7 @@ A board joins the first listed network it can see. Each poll reports the network
 
 Visitors' phones use mobile data and never join these networks.
 
-When eduroam drops, the boards lose the API after a minute and play signals on their own (see [How the units behave](#how-the-units-behave)). The visitor page checks every 30 seconds whether the API answers and at least one board polls it. When either has failed for a minute, a notice reading "Currently out of order :(" covers the page. Visitors cannot close it, and it disappears once the API answers and a board polls it again. The page also checks again right after a message fails to send. The debug page never shows the notice, so testing continues while the API is down.
+When eduroam drops, the boards lose the API after a minute and play signals on their own (see [How the units behave](#how-the-units-behave)). The visitor page checks every 10 seconds whether the API answers. When it has not answered for a minute, a notice reading "Currently out of order :(" covers the page. Visitors cannot close it, and it disappears once the API answers again. Boards dropping off Wi-Fi do not trigger the notice, because they keep playing signals on their own. The page also checks again right after a message fails to send. The debug page never shows the notice, so testing continues while the API is down.
 
 ## Measure battery runtime
 
